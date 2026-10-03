@@ -23,6 +23,7 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/integrations"
 	"github.com/basecamp/once-campfire-go/internal/jobs"
 	"github.com/basecamp/once-campfire-go/internal/rails"
+	"github.com/basecamp/once-campfire-go/internal/richtext"
 	"github.com/basecamp/once-campfire-go/internal/storage"
 	"github.com/basecamp/once-campfire-go/internal/useragent"
 	"golang.org/x/crypto/bcrypt"
@@ -397,6 +398,11 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 			p.MessagesHTML = template.HTML("\x00campfire-" + rand.Text() + "\x00")
 		} else {
 			p.Messages, err = s.messageViews(r.Context(), raw)
+			if err == nil && name == "edit-message" {
+				for i := range p.Messages {
+					p.Messages[i].Editable, _ = richtext.Editable(p.Messages[i].Body, s.richContext(r.Context()))
+				}
+			}
 		}
 		if err != nil {
 			s.fail(w, err)
@@ -405,6 +411,16 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	}
 	if name == "search" {
 		p.ReturnRoom, _ = s.lastRoom(r, p.User.ID)
+	}
+	if name == "room" && recorded != nil {
+		shell, marker, err := s.roomShell(p)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		writeRecorded(w, status, shell, marker, *recorded)
+		return
 	}
 	sidebarKey := ""
 	if name == "sidebar" {

@@ -1,0 +1,3 @@
+PASS: Rust-issued login accepted by Go; Go-issued login accepted by Rust.
+PASS: Go-written text message and FTS entry rendered and searched by Rust.
+Original seed was not modified. This is interoperability coverage, not full application parity.

@@ -204,13 +204,16 @@ func (s *Server) messageCreated(message database.Message, room database.Room) {
 	if s.Push.VAPID == nil {
 		return
 	}
-	rich := s.richText(ctx, message.Body)
-	subscriptions, err := s.DB.PushRecipients(ctx, room.ID, message.CreatorID, rich.Mentioned)
+	mentions := s.mentionedIDs(ctx, message.Body)
+	subscriptions, err := s.DB.PushRecipients(ctx, room.ID, message.CreatorID, mentions)
 	if err != nil {
 		slog.Error("push recipients failed", "error", err)
 		return
 	}
-	body := rich.Plain
+	if len(subscriptions) == 0 {
+		return
+	}
+	body := s.plainText(ctx, message.Body)
 	if attachment, err := s.Storage.Attached(ctx, "Message", message.ID, "attachment"); err == nil && attachment.ID != 0 && strings.TrimSpace(body) == "" {
 		body = attachment.Filename
 	}

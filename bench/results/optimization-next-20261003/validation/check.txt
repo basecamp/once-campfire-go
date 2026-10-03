@@ -1,0 +1,27 @@
+Compiled 315 assets and 89 imports
+?   	github.com/basecamp/once-campfire-go/assets	[no test files]
+?   	github.com/basecamp/once-campfire-go/cmd/campfire	[no test files]
+ok  	github.com/basecamp/once-campfire-go/internal/cable	1.039s
+ok  	github.com/basecamp/once-campfire-go/internal/database	1.099s
+ok  	github.com/basecamp/once-campfire-go/internal/front	1.052s
+?   	github.com/basecamp/once-campfire-go/internal/html	[no test files]
+ok  	github.com/basecamp/once-campfire-go/internal/httpcompat	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/integrations	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/jobs	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/qrcode	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/rails	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/richtext	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/storage	1.629s
+ok  	github.com/basecamp/once-campfire-go/internal/useragent	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/web	2.386s
+ok  	github.com/basecamp/once-campfire-go/internal/zstd	(cached)
+ok  	github.com/coder/websocket	(cached)
+?   	github.com/coder/websocket/internal/bpool	[no test files]
+?   	github.com/coder/websocket/internal/errd	[no test files]
+?   	github.com/coder/websocket/internal/test	[no test files]
+?   	github.com/coder/websocket/internal/test/assert	[no test files]
+?   	github.com/coder/websocket/internal/test/wstest	[no test files]
+?   	github.com/coder/websocket/internal/test/xrand	[no test files]
+?   	github.com/coder/websocket/internal/util	[no test files]
+ok  	github.com/coder/websocket/internal/xsync	(cached)
+ok  	github.com/coder/websocket/wsjson	(cached) [no tests to run]

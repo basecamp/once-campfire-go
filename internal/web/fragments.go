@@ -12,11 +12,12 @@ import (
 )
 
 type fragmentEntry struct {
-	key     string
-	html    template.HTML
-	bytes   int
-	digest  [32]byte
-	payload []byte
+	key                         string
+	html                        template.HTML
+	bytes                       int
+	digest                      [32]byte
+	payload                     []byte
+	messageMarker, loadedMarker string
 }
 type fragmentCache struct {
 	mu           sync.Mutex
@@ -46,22 +47,27 @@ func (c *fragmentCache) entry(key string) (fragmentEntry, bool) {
 // Like the reference's MemoryStore, retain the first rendered value for a version,
 // charge 240 bytes per entry, reject oversized entries, and prune to 75% capacity.
 func (c *fragmentCache) put(key string, html template.HTML) template.HTML {
+	return c.putEntry(fragmentEntry{key: key, html: html}).html
+}
+func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
+	key, html := entry.key, entry.html
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e, ok := c.entries[key]; ok {
 		c.order.MoveToFront(e)
-		return e.Value.(fragmentEntry).html
+		return e.Value.(fragmentEntry)
 	}
-	size := len(key) + len(html) + 240
+	size := len(key) + len(html) + len(entry.messageMarker) + len(entry.loadedMarker) + 240
 	var payload []byte
 	if strings.HasPrefix(key, "message-list/") {
 		payload = []byte(html)
 		size += len(payload)
 	}
 	if size > c.limit/4 {
-		return html
+		return entry
 	}
-	c.entries[key] = c.order.PushFront(fragmentEntry{key: key, html: html, bytes: size, digest: sha256.Sum256([]byte(html)), payload: payload})
+	entry.bytes, entry.digest, entry.payload = size, sha256.Sum256([]byte(html)), payload
+	c.entries[key] = c.order.PushFront(entry)
 	c.bytes += size
 	if c.bytes > c.limit {
 		for c.bytes > c.limit*3/4 {
@@ -72,7 +78,7 @@ func (c *fragmentCache) put(key string, html template.HTML) template.HTML {
 			c.order.Remove(e)
 		}
 	}
-	return html
+	return entry
 }
 func messageCacheKey(message database.Message) string {
 	return "message/" + database.Stamp(message.UpdatedAt) + "/" + strconv.FormatInt(message.ID, 10)
