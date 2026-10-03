@@ -110,13 +110,43 @@ func PlainText(body string, ctx Context) (string, error) {
 	return chomp(plain(root)), nil
 }
 
+type outputFields uint8
+
+const (
+	displayOutput outputFields = 1 << iota
+	editableOutput
+	bodyOutput
+	mentionsOutput
+)
+
 func Process(body string, ctx Context) (Result, error) {
+	return process(body, ctx, displayOutput|editableOutput|bodyOutput|mentionsOutput)
+}
+
+// Display renders message HTML and plain text without computing editor markup,
+// API body HTML or mention recipients that the message template never reads.
+func Display(body string, ctx Context) (Result, error) {
+	return process(body, ctx, displayOutput)
+}
+func Editable(body string, ctx Context) (string, error) { return editable(body, ctx) }
+func MentionIDs(body string, ctx Context) ([]int64, error) {
+	result, err := process(body, ctx, mentionsOutput)
+	if err == nil {
+		err = result.Errors["mentioned"]
+	}
+	return result.Mentioned, err
+}
+
+func process(body string, ctx Context, fields outputFields) (Result, error) {
 	result := Result{Mentioned: []int64{}, Errors: map[string]error{}}
 	var err error
-	result.Editable, err = editable(body, ctx)
-	if err != nil {
-		result.Errors["editable"] = err
+	if fields&editableOutput != 0 {
+		result.Editable, err = editable(body, ctx)
+		if err != nil {
+			result.Errors["editable"] = err
+		}
 	}
+
 	root, err := load(body)
 	if err != nil {
 		for _, field := range []string{"plain", "body_html", "filtered", "mentioned"} {
@@ -124,66 +154,78 @@ func Process(body string, ctx Context) (Result, error) {
 		}
 		return result, nil
 	}
-	plainRoot := clone(root)
-	if err = replaceAttachments(plainRoot, ctx, true, 0); err != nil {
-		result.Errors["plain"] = err
-	} else {
-		result.Plain = chomp(plain(plainRoot))
-	}
-	rendered := clone(root)
-	if err = replaceAttachments(rendered, ctx, false, 0); err != nil {
-		result.Errors["body_html"] = err
-	} else {
-		galleries(rendered, true)
-		rendered, err = parse(serialize(rendered))
-		if err != nil {
-			return result, err
+	if fields&displayOutput != 0 {
+		plainRoot := clone(root)
+		if err = replaceAttachments(plainRoot, ctx, true, 0); err != nil {
+			result.Errors["plain"] = err
+		} else {
+			result.Plain = chomp(plain(plainRoot))
 		}
-		sanitizeDOM(rendered, "action")
-		result.BodyHTML = "<div class=\"lexxy-content\">\n  " + serialize(rendered) + "\n</div>\n"
 	}
-	filtered := clone(root)
-	if result.Errors["plain"] != nil {
-		result.Errors["filtered"] = result.Errors["plain"]
-	} else {
-		removeSoloEmbed(filtered, ctx, result.Plain)
-		filterTags(filtered)
-		sanitizeDOM(filtered, "filter")
-		filtered, err = parse(strings.Trim(serialize(filtered), "\x00\t\n\v\f\r "))
-		if err != nil {
-			return result, err
-		}
-		result.Filtered = serialize(filtered)
-		if err = replaceAttachments(filtered, ctx, false, 0); err == nil {
-			galleries(filtered, true)
-			filtered, err = parse(serialize(filtered))
+
+	if fields&bodyOutput != 0 {
+		rendered := clone(root)
+		if err = replaceAttachments(rendered, ctx, false, 0); err != nil {
+			result.Errors["body_html"] = err
+		} else {
+			galleries(rendered, true)
+			rendered, err = parse(serialize(rendered))
 			if err != nil {
 				return result, err
 			}
-			sanitizeDOM(filtered, "action")
-			var presentation *xhtml.Node
-			presentation, err = parse("<div class=\"lexxy-content\">\n  " + serialize(filtered) + "\n</div>\n")
-			if err == nil {
-				sanitizeDOM(presentation, "auto")
-				result.Presentation, _ = autoLink(serializePresentation(presentation))
+			sanitizeDOM(rendered, "action")
+			result.BodyHTML = "<div class=\"lexxy-content\">\n  " + serialize(rendered) + "\n</div>\n"
+		}
+	}
+
+	if fields&displayOutput != 0 {
+		filtered := clone(root)
+		if result.Errors["plain"] != nil {
+			result.Errors["filtered"] = result.Errors["plain"]
+		} else {
+			removeSoloEmbed(filtered, ctx, result.Plain)
+			filterTags(filtered)
+			sanitizeDOM(filtered, "filter")
+			filtered, err = parse(strings.Trim(serialize(filtered), "\x00\t\n\v\f\r "))
+			if err != nil {
+				return result, err
+			}
+			result.Filtered = serialize(filtered)
+			if err = replaceAttachments(filtered, ctx, false, 0); err == nil {
+				galleries(filtered, true)
+				filtered, err = parse(serialize(filtered))
+				if err != nil {
+					return result, err
+				}
+				sanitizeDOM(filtered, "action")
+				var presentation *xhtml.Node
+				presentation, err = parse("<div class=\"lexxy-content\">\n  " + serialize(filtered) + "\n</div>\n")
+				if err == nil {
+					sanitizeDOM(presentation, "auto")
+					result.Presentation, _ = autoLink(serializePresentation(presentation))
+				}
 			}
 		}
 	}
-	walk(root, func(n *xhtml.Node) {
-		if n.Data == "action-text-attachment" && ctx.Resolve != nil && attr(n, "sgid") != "" {
-			if user, e := ctx.Resolve(attr(n, "sgid"), true); e == nil && user != nil {
-				found := false
-				for _, id := range result.Mentioned {
-					if id == user.ID {
-						found = true
+
+	if fields&mentionsOutput != 0 {
+		walk(root, func(n *xhtml.Node) {
+			if n.Data == "action-text-attachment" && ctx.Resolve != nil && attr(n, "sgid") != "" {
+				if user, e := ctx.Resolve(attr(n, "sgid"), true); e == nil && user != nil {
+					found := false
+					for _, id := range result.Mentioned {
+						if id == user.ID {
+							found = true
+						}
+					}
+					if !found {
+						result.Mentioned = append(result.Mentioned, user.ID)
 					}
 				}
-				if !found {
-					result.Mentioned = append(result.Mentioned, user.ID)
-				}
 			}
-		}
-	})
+		})
+	}
+
 	return result, nil
 }
 func editable(body string, ctx Context) (string, error) {

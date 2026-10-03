@@ -1,0 +1,84 @@
+2026/10/03 13:23:30 INFO listening address=127.0.0.1:42981 tls=false
+2026/10/03 13:23:30 INFO listening address=[::]:32999 tls=false
+
+Skip to main content
+Ping with
+Joined browser user
+Settings for this Ping
+Notification settings for this Ping
+Search
+
+
+
+
+Attach a file
+Rich text
+Send Message
+New
+Ping
+Ping with
+Joined
+Start a ping with
+Renamed
+All Talk
+Renamed browser room
+My Settings
+Account Settings
+null
+Skip to main content
+All Talk
+Settings for this room
+Notification settings for this room
+Translate
+
+Welcome to Campfire
+To invite people to chat, share the join link below.
+
+Show join link QR code
+Copy join link
+OCTOBER 3, 2026
+Browser User
+1:23 PM
+Message options
+
+Edited in the browser
+
+1:23 PM
+Message options
+
+Reply from the second tab
+
+1:23 PM
+Message options
+
+safe browser text
+
+Browser bot
+1:23 PM
+Message options
+Hello from browser bot
+Search
+
+
+
+
+Attach a file
+Rich text
+Send Message
+New
+Ping
+Ping with
+Joined
+All Talk
+Renamed browser room
+My Settings
+Account Settings
+null
+file:///home/dhh/Work/basecamp/once-campfire-go/bin/check-browser.mjs:150
+  if (errors.length) throw new Error(errors.join("\n"))
+                           ^
+
+Error: AbortError: The user aborted a request.
+    at file:///home/dhh/Work/basecamp/once-campfire-go/bin/check-browser.mjs:150:28
+
+Node.js v26.8.1

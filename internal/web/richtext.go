@@ -78,3 +78,12 @@ func (s *Server) canonicalMessage(ctx context.Context, body string) (string, str
 	plain, _ := richtext.PlainText(body, s.richContext(ctx))
 	return body, plain
 }
+
+func (s *Server) plainText(ctx context.Context, body string) string {
+	plain, _ := richtext.PlainText(body, s.richContext(ctx))
+	return plain
+}
+func (s *Server) mentionedIDs(ctx context.Context, body string) []int64 {
+	ids, _ := richtext.MentionIDs(body, s.richContext(ctx))
+	return ids
+}

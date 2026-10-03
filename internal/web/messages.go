@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/richtext"
 	"github.com/basecamp/once-campfire-go/internal/storage"
 )
 
@@ -94,9 +95,8 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 		views[i].CreatorUpdatedAt = creator.UpdatedAt
 		views[i].Permalink = messagePermalink(ctx, views[i].RoomID, views[i].ID)
 		views[i].RoomName = name
-		result := s.richText(ctx, views[i].Body)
+		result, _ := richtext.Display(views[i].Body, s.richContext(ctx))
 		views[i].HTML = template.HTML(result.Presentation)
-		views[i].Editable = result.Editable
 		views[i].AllEmoji = allEmoji(result.Plain)
 		if sound := soundHTML(result.Plain); sound != "" {
 			views[i].HTML = template.HTML(sound)

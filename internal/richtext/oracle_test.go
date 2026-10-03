@@ -99,6 +99,19 @@ func TestRustOracle(t *testing.T) {
 	matched := map[string]int{}
 	for _, c := range corpus.Cases {
 		result, err := Process(c.Body, Context{Host: c.Host, Resolve: resolve})
+		display, displayErr := Display(c.Body, Context{Host: c.Host, Resolve: resolve})
+		if display.Presentation != result.Presentation || display.Plain != result.Plain {
+			t.Fatalf("%s: focused display differs: %v", c.Name, displayErr)
+		}
+		ids, _ := MentionIDs(c.Body, Context{Host: c.Host, Resolve: resolve})
+		if !reflect.DeepEqual(ids, result.Mentioned) {
+			t.Fatalf("%s: focused mentions differ", c.Name)
+		}
+		edited, _ := Editable(c.Body, Context{Host: c.Host, Resolve: resolve})
+		if edited != result.Editable {
+			t.Fatalf("%s: focused editor differs", c.Name)
+		}
+
 		plain, plainErr := PlainText(c.Body, Context{Host: c.Host, Resolve: resolve})
 		if plain != result.Plain || (plainErr != nil) != (result.Errors["plain"] != nil) {
 			t.Fatalf("%s: focused plain text differs: %q, %v", c.Name, plain, plainErr)

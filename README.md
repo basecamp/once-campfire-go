@@ -99,30 +99,35 @@ Container verification exercises setup, a live SQLite backup, offline restore, a
 
 ## Benchmarks
 
-[The optimized application report](bench/results/application-optimized-20261003/report.md)
-compares HTTP, Action Cable, upload-to-thumbnail, startup and memory with the Rust release
-binary. The [before/after report](bench/results/optimization-20261003/comparison.md) records
-what improved from the original full port.
+The [latest comparison](bench/results/optimization-next-20261003/README.md) measures the
+published Go version, the current Go version, and Rust in three rotating runs. Median
+requests/sec at 16 HTTP clients, with identical seed data and four application CPUs:
 
-Three repetitions, median requests/sec at 16 HTTP clients:
-
-| Workload | Original Go | Optimized Go | Rust | Rust / optimized Go |
+| Workload | Previous Go | Current Go | Change | Rust |
 |---|---:|---:|---:|---:|
-| Room page | 2,483 | 10,629 | 27,900 | 2.62× |
-| Message history | 4,470 | 21,582 | 31,622 | 1.47× |
-| Sidebar | 1,425 | 26,531 | 38,578 | 1.45× |
-| Search | 6,652 | 15,285 | 30,698 | 2.01× |
-| Post message | 3,180 | 4,068 | 7,849 | 1.93× |
+| Room page | 10,175 | 15,218 | +49.6% | 27,535 |
+| Message history | 21,445 | 21,369 | -0.4% | 31,139 |
+| Sidebar | 24,423 | 24,658 | +1.0% | 38,303 |
+| Search | 14,817 | 14,841 | +0.2% | 30,807 |
+| Post message | 4,025 | 5,036 | +25.1% | 7,740 |
 
-Compressed broadcasts to 10,000 clients improved from 3.5 to 21.1 complete messages/sec;
-Rust delivered 39.3. Go startup fell from 203 ms to 30 ms (25 ms polling resolution).
-Upload-to-thumbnail medians were 30.3 ms for Go and 30.1 ms for Rust, with identical bytes.
-Final workload Pss remained higher in Go: 1,023 MiB versus Rust's 408 MiB.
+Room-page p99 latency fell from 5.69 to 4.14 ms; message-write p99 fell from 16.03 to
+12.49 ms. Rust remains 1.81× faster on room pages and 1.54× faster on writes. All nine
+application runs completed with zero HTTP errors, 345,913 acknowledged writes verified
+in both messages and FTS, and nine thumbnails with identical bytes. HTTP memory use was
+essentially unchanged. See the [raw report](bench/results/optimization-next-20261003/application/report.md)
+for ranges, latency, resource measurements and limitations.
 
-All six completed application runs had zero HTTP errors and complete Cable delivery.
-External parallel builds interrupted some attempts; those incomplete repetitions were
-excluded and restarted with unchanged binaries and settings. See the
-[interruption record](bench/results/application-optimized-20261003/CONTENTION.md).
+This focused pass did not remeasure Cable throughput. In the
+[earlier full-workload comparison](bench/results/application-optimized-20261003/report.md),
+compressed broadcasts to 10,000 clients measured 21.1 complete messages/sec for Go and
+39.3 for Rust. Final workload Pss was 1,023 MiB versus 408 MiB. Those measurements include
+large WebSocket workloads and must not be compared directly with the latest HTTP-only
+memory figures. The earlier run had zero HTTP errors and complete Cable delivery;
+[interrupted attempts](bench/results/application-optimized-20261003/CONTENTION.md) were
+excluded and restarted. The [first optimization report](bench/results/optimization-20261003/comparison.md)
+retains the original-port comparison.
+
 These numbers compare these implementations on this workstation, not languages in general.
 
 ```sh
@@ -154,8 +159,9 @@ throughput is not measured. `bench/health` remains available for the much narrow
   already subscribed socket. The composer shows the same deleted-room message.
 - The response cache uses least-recently-used eviction instead of Rust's sampled eviction. The Go
   message-fragment cache is also independently implemented. It retains versioned message lists
-  and sidebar HTML; current membership and permission data are read before cache lookup. Room
-  responses assemble cached message bytes with fresh page HTML and derive validators from part
+  and sidebar HTML; current membership and permission data are read before cache lookup.
+  Room pages also cache their surrounding HTML keyed by fresh page data, inserting the current
+  messages and refresh timestamp on every request. Responses assemble cached message bytes with fresh page HTML and derive validators from part
   lengths and hashes, so ETag values differ from both the original Go implementation and Rust.
 - The default version label and fallback VAPID subject identify `once-campfire-go`. Explicit version,
   VAPID keys and subject settings remain supported.

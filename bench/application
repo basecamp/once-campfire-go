@@ -18,6 +18,8 @@ def main():
     p.add_argument('--rust-root',type=Path,default=ROOT.parent/'once-campfire-rust')
     p.add_argument('--out',type=Path,required=True)
     p.add_argument('--reps',type=int,default=3)
+    p.add_argument('--baseline-go',type=Path,help='optional unchanged Go binary for before/after comparisons')
+    p.add_argument('--routes',nargs='+',choices=['room_show','messages_page','sidebar','search','avatar','static_css','post_message'])
     p.add_argument('--resume',action='store_true',help='resume completed runs with identical binaries and settings')
     p.add_argument('--seconds',type=float,default=5)
     p.add_argument('--concurrency',type=int,nargs='+',default=[1,16,64])
@@ -27,10 +29,12 @@ def main():
     p.add_argument('--upload-reps',type=int,default=5)
     p.add_argument('--server-cpus',default='8-11')
     p.add_argument('--loadgen-cpus',default='12-15')
-    p.add_argument('--apps',nargs='+',default=['rust','go'],choices=['rust','go'])
+    p.add_argument('--apps',nargs='+',default=['rust','go'],choices=['rust','go','go-before'])
     a=p.parse_args(); rust=a.rust_root.resolve(); out=a.out.resolve(); out.mkdir(parents=True,exist_ok=a.resume)
     seed=rust/'parity/.seed/default'; labels=json.loads((seed/'labels.json').read_text())
     binaries={'go':ROOT/'campfire','rust':rust/'target/release/campfire'}
+    if a.baseline_go:binaries['go-before']=a.baseline_go.resolve()
+    if any(app not in binaries for app in a.apps):p.error('go-before requires --baseline-go')
     lg=rust/'target/bench/release/loadgen'
     env={k:v for k,v in os.environ.items() if not k.startswith(('CAMPFIRE_','THRUSTER_')) and k!='TLS_DOMAIN'}
     for line in (rust/'parity/.env.reference').read_text().splitlines():
@@ -48,8 +52,8 @@ def main():
         prior=json.loads((out/'metadata.json').read_text())
         for key in ('binaries','seed_sha256','go_sources_sha256','go_mod_sha256','go_sum_sha256','rust_lock_sha256','loadgen_sha256'):
             if prior[key]!=metadata[key]:raise RuntimeError(f'cannot resume changed {key}')
-        for key,value in prior['settings'].items():
-            if key!='resume' and metadata['settings'].get(key)!=value:raise RuntimeError(f'cannot resume changed setting {key}')
+        for key in prior['settings'].keys() | metadata['settings'].keys():
+            if key!='resume' and metadata['settings'].get(key)!=prior['settings'].get(key):raise RuntimeError(f'cannot resume changed setting {key}')
         prior.setdefault('resumptions',[]).append({'time':metadata['time'],'load_before':metadata['load_before']})
         metadata=prior
         results=json.loads((out/'raw.json').read_text())
@@ -60,7 +64,9 @@ def main():
     (out/'metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
     work=ROOT/'bench/.work'; work.mkdir(exist_ok=True)
     for rep in range(1,a.reps+1):
-      for app in (a.apps if rep%2 else list(reversed(a.apps))):
+      shift=(rep-1)%len(a.apps)
+      order=(a.apps[shift:]+a.apps[:shift]) if len(a.apps)>2 else (a.apps if rep%2 else list(reversed(a.apps)))
+      for app in order:
        if any(r['app']==app and r['rep']==rep for r in results):continue
        with tempfile.TemporaryDirectory(prefix=f'{app}-{rep}-',dir=work) as tmp:
         tmp=Path(tmp); db=tmp/'database.sqlite3'
@@ -97,6 +103,7 @@ def main():
           if scrape['status']!=200 or len(scrape['streams'])!=3:raise RuntimeError(f'incomplete room: {scrape}')
           result['scrape']=scrape
           routes=[('room_show',f'/rooms/{room}'),('messages_page',f'/rooms/{room}/messages?before={labels["messages.busy_060"]}'),('sidebar','/users/me/sidebar'),('search','/searches?q=coffee'),('avatar',f'/users/{labels["avatar_tokens.jason"]}/avatar'),('static_css',scrape['css']),('post_message',None)]
+          if a.routes:routes=[(name,path) for name,path in routes if name in a.routes]
           for name,path in routes:
            opts=dict(cookie=cookie,gzip=0)
            opts.update(dict(path=path) if path else dict(post_room=write_room,csrf=scrape['csrf'] or ''))

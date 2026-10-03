@@ -71,3 +71,14 @@ completed all six application runs: 126 HTTP samples, 36 Cable configurations, 5
 acknowledged HTTP writes checked in both messages and FTS, and 30 identical-byte thumbnails.
 There were zero HTTP errors or incomplete deliveries. Interrupted repetitions affected by
 external builds were excluded and rerun; the report records those interruptions and resumption.
+
+## Further optimizations — 2026-10-03
+
+The [next optimization record](../bench/results/optimization-next-20261003/README.md) covers
+room-page HTML caching, focused rich-text processing and writer statement caching. Formatting,
+vet and race tests pass, along with browser workflows and upgrade interoperability. All 75
+applicable screenshots/accessibility trees in 77 targeted captures match; strict DOM/network
+and the existing deleted-room typing difference remain. An initial navigation AbortError during
+concurrent browser runs is retained in the record; a standalone rerun passed without masking it.
+The focused three-binary benchmark verified 345,913 writes and nine identical-byte thumbnails
+with zero HTTP errors. It did not repeat the full Cable workload or production-container checks.

@@ -1,0 +1,15 @@
+{
+  "baseline_commit": "9042f5eabcbc718c389e09ab35ceea36a4185958",
+  "build_commands": {
+    "go": "bin/build",
+    "go-before": "Published native binary preserved before edits; hash verified",
+    "rust": "Unchanged pinned release binary"
+  },
+  "scripts_sha256": {
+    "bench/application": "6953cfc29bad3ddc6b8e7abdcb4c9013a070c36a9f7e8ad6120f2cf05ff775a4",
+    "bench/report": "282fbf99be19269b622e29ae252c8f84bb0d4950a5fa976081b88b6a284feab2",
+    "bench/upload": "37e43d238f5432ef62fddd792326943db0df981cbf1688d4b7e017ed6b6529c1",
+    "bin/build": "a666aafd13e51a806caf180666337beb63995fee9a168362f17d8461168ab2e7",
+    "bin/check": "33dde1706f182bdd88858f17cf455619b9e26bcf628436a11b9d54e4c4252f7c"
+  }
+}
