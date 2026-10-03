@@ -1,0 +1,2 @@
+2026-10-02T13:23:27.113206Z  INFO campfire::app: open files limit=524288
+Error: Address already in use (os error 98)

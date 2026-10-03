@@ -1,0 +1,7 @@
+Based on github.com/coder/websocket v1.8.15, retaining its MIT license.
+
+Campfire adds prepared.go and prepared_test.go. PreparedMessage shares immutable
+payloads and lazily compressed bytes across server connections negotiating
+permessage-deflate without context takeover. Other connection modes use Write.
+The existing frame writer still handles locking, cancellation and close state.
+No upstream Go source files were changed. Upstream tests run in bin/check.

@@ -1,0 +1,2 @@
+PASS: non-root production container, public listener, setup, live SQLite backup, offline ONCE restore, and restarted application.
+{"image": "once-campfire-go:optimized", "id": "sha256:f868bb55b0669e5c9302dfd47d6bf4ce42f1df813a1976b4a1827318011113b2", "bytes": 241605347}

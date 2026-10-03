@@ -1,0 +1,1 @@
+Validation-only preflight with very short samples and concurrent browser checks; timings are not the final comparison. See application-final-20261002 for the completed comparison.

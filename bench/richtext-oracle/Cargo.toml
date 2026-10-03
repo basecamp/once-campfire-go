@@ -1,0 +1,11 @@
+[package]
+name = "campfire-go-richtext-oracle"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+campfire_richtext = { path = "../../reference/crates/richtext" }
+serde_json = "1"
+serde = "1"

@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Run the pinned Rust load generator against isolated Go and Rust applications."""
+import re
+import argparse, datetime, hashlib, json, os, platform, shutil, socket, sqlite3, statistics, subprocess, tempfile, time, urllib.request
+from pathlib import Path
+ROOT = Path(__file__).resolve().parents[1]
+def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+def port():
+    with socket.socket() as s:
+        s.bind(('127.0.0.1',0)); return s.getsockname()[1]
+def text(*args): return subprocess.check_output(args,text=True).strip()
+def memory(pid):
+    try:
+        return {k:int(v.split()[0]) for k,v in (line.split(':',1) for line in Path(f'/proc/{pid}/smaps_rollup').read_text().splitlines()[1:]) if k in ('Rss','Pss','Private_Dirty')}
+    except FileNotFoundError:return {}
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--rust-root',type=Path,default=ROOT.parent/'once-campfire-rust')
+    p.add_argument('--out',type=Path,required=True)
+    p.add_argument('--reps',type=int,default=3)
+    p.add_argument('--resume',action='store_true',help='resume completed runs with identical binaries and settings')
+    p.add_argument('--seconds',type=float,default=5)
+    p.add_argument('--concurrency',type=int,nargs='+',default=[1,16,64])
+    p.add_argument('--cable-clients',type=int,nargs='*',default=[100,1000,10000])
+    p.add_argument('--deflate',type=int,nargs='+',default=[0,1],choices=[0,1])
+    p.add_argument('--cable-seconds',type=float,default=5)
+    p.add_argument('--upload-reps',type=int,default=5)
+    p.add_argument('--server-cpus',default='8-11')
+    p.add_argument('--loadgen-cpus',default='12-15')
+    p.add_argument('--apps',nargs='+',default=['rust','go'],choices=['rust','go'])
+    a=p.parse_args(); rust=a.rust_root.resolve(); out=a.out.resolve(); out.mkdir(parents=True,exist_ok=a.resume)
+    seed=rust/'parity/.seed/default'; labels=json.loads((seed/'labels.json').read_text())
+    binaries={'go':ROOT/'campfire','rust':rust/'target/release/campfire'}
+    lg=rust/'target/bench/release/loadgen'
+    env={k:v for k,v in os.environ.items() if not k.startswith(('CAMPFIRE_','THRUSTER_')) and k!='TLS_DOMAIN'}
+    for line in (rust/'parity/.env.reference').read_text().splitlines():
+        if line and not line.startswith('#') and '=' in line:
+            k,v=line.split('=',1); env[k]=v
+    env.update(TMPDIR=str(ROOT/'.cache/tmp'),DISABLE_SSL='true',TARGET_BIND='127.0.0.1',GOMAXPROCS='4',TOKIO_WORKER_THREADS='4',RAILS_MAX_THREADS='4')
+    metadata={'time':datetime.datetime.now(datetime.timezone.utc).isoformat(),'host':platform.platform(),'cpu':text('lscpu'),
+        'rust_commit':text('git','-C',str(rust),'rev-parse','HEAD'),'settings':{k:str(v) if isinstance(v,Path) else v for k,v in vars(a).items()},
+        'binaries':{k:{'sha256':digest(v),'bytes':v.stat().st_size} for k,v in binaries.items()},'seed_sha256':digest(seed/'db/production.sqlite3'),
+        'go_version':text('mise','exec','go@1.27.1','--','go','version'),'rust_version':text('mise','exec','rust@1.98.1','--','rustc','--version'),'vips_version':text('pkg-config','--modversion','vips'),'go_mod_sha256':digest(ROOT/'go.mod'),'go_sum_sha256':digest(ROOT/'go.sum'),'rust_lock_sha256':digest(rust/'Cargo.lock'),'loadgen_sha256':digest(lg),'load_before':Path('/proc/loadavg').read_text(),
+        'go_sources_sha256':{str(f.relative_to(ROOT)):digest(f) for folder in ('cmd','internal','assets','third_party') for f in sorted((ROOT/folder).rglob('*')) if f.is_file()},
+        'scope':'Native release binaries; direct HTTP/1.1 application listeners; identity encoding; identical seed and CPU affinity. Media use installed native libraries. Workstation background load recorded.'}
+    results=[]; contracts={}; thumbnail_hash=None
+    if a.resume:
+        prior=json.loads((out/'metadata.json').read_text())
+        for key in ('binaries','seed_sha256','go_sources_sha256','go_mod_sha256','go_sum_sha256','rust_lock_sha256','loadgen_sha256'):
+            if prior[key]!=metadata[key]:raise RuntimeError(f'cannot resume changed {key}')
+        for key,value in prior['settings'].items():
+            if key!='resume' and metadata['settings'].get(key)!=value:raise RuntimeError(f'cannot resume changed setting {key}')
+        prior.setdefault('resumptions',[]).append({'time':metadata['time'],'load_before':metadata['load_before']})
+        metadata=prior
+        results=json.loads((out/'raw.json').read_text())
+        for result in results:
+            for name,body in result.get('bodies',{}).items():
+                value=body['contract'];contracts[name]=[v.encode() for v in value] if isinstance(value,list) else value
+            if 'upload' in result:thumbnail_hash=result['upload']['runs'][0]['thumb_sha256']
+    (out/'metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
+    work=ROOT/'bench/.work'; work.mkdir(exist_ok=True)
+    for rep in range(1,a.reps+1):
+      for app in (a.apps if rep%2 else list(reversed(a.apps))):
+       if any(r['app']==app and r['rep']==rep for r in results):continue
+       with tempfile.TemporaryDirectory(prefix=f'{app}-{rep}-',dir=work) as tmp:
+        tmp=Path(tmp); db=tmp/'database.sqlite3'
+        with sqlite3.connect(f'file:{seed}/db/production.sqlite3?mode=ro',uri=True) as source,sqlite3.connect(db) as dest: source.backup(dest)
+        shutil.copytree(seed/'storage',tmp/'storage-root/files')
+        target,front=port(),port()
+        while target==front:front=port()
+        base=f'http://127.0.0.1:{target}'
+        runenv=env|dict(CAMPFIRE_DATABASE_PATH=str(db),CAMPFIRE_STORAGE_PATH=str(tmp/'storage-root'),CAMPFIRE_FILES_PATH=str(tmp/'storage-root/files'),TARGET_PORT=str(target),HTTP_PORT=str(front))
+        result={'app':app,'rep':rep,'http':[],'cable':[],'load_start':Path('/proc/loadavg').read_text()}
+        with (out/f'{app}-{rep}.log').open('w') as log:
+         started=time.monotonic(); proc=subprocess.Popen(['taskset','-c',a.server_cpus,str(binaries[app]),'server'],cwd=ROOT,env=runenv,stdout=log,stderr=subprocess.STDOUT)
+         try:
+          while True:
+           if proc.poll() is not None:raise RuntimeError(f'{app} exited; see {log.name}')
+           try:
+            with urllib.request.urlopen(base+'/up',timeout=1) as response:
+             assert response.status==200;break
+           except OSError:
+            if time.monotonic()-started>30:raise RuntimeError('startup timeout')
+            time.sleep(.025)
+          result['startup_ms']=round((time.monotonic()-started)*1000,2)
+          result['idle_memory_kib']=memory(proc.pid)
+          def load(command,**opts):
+           args=['taskset','-c',a.loadgen_cpus,str(lg),command,'--base',base]
+           for k,v in opts.items():args+=['--'+k.replace('_','-'),str(v)]
+           with (out/f'{app}-{rep}-loadgen.log').open('a') as err:
+            value=json.loads(subprocess.check_output(args,text=True,stderr=err,timeout=180))
+           if command=='http' and (value['errors'] or set(value['statuses'])!={'200'}):raise RuntimeError(f'{command} failed: {value}')
+           return value
+          cookie=load('login',email=labels['emails.david'],password=labels['passwords.all'])['cookie']
+          room=labels['rooms.watercooler']; write_room=labels['rooms.hq']
+          scrape=load('scrape',cookie=cookie,room=room)
+          if scrape['status']!=200 or len(scrape['streams'])!=3:raise RuntimeError(f'incomplete room: {scrape}')
+          result['scrape']=scrape
+          routes=[('room_show',f'/rooms/{room}'),('messages_page',f'/rooms/{room}/messages?before={labels["messages.busy_060"]}'),('sidebar','/users/me/sidebar'),('search','/searches?q=coffee'),('avatar',f'/users/{labels["avatar_tokens.jason"]}/avatar'),('static_css',scrape['css']),('post_message',None)]
+          for name,path in routes:
+           opts=dict(cookie=cookie,gzip=0)
+           opts.update(dict(path=path) if path else dict(post_room=write_room,csrf=scrape['csrf'] or ''))
+           # Verify representative content before timing, including nonempty message lists.
+           if path:
+            req=urllib.request.Request(base+path,headers={'Cookie':cookie,'Accept-Encoding':'identity'})
+            with urllib.request.urlopen(req) as response:body=response.read()
+            if name in ('room_show','messages_page') and b'data-message-id=' not in body and b'id="message_' not in body:raise RuntimeError(f'{app} empty {name}')
+            result.setdefault('bodies',{})[name]={'bytes':len(body),'sha256':hashlib.sha256(body).hexdigest()}
+            semantic = sorted(set(re.findall(rb'data-message-id="([0-9]+)"',body))) if name in ('room_show','messages_page','search') else sorted(set(re.findall(rb'data-room-id="([0-9]+)"',body))) if name=='sidebar' else hashlib.sha256(body).hexdigest()
+            if not semantic:raise RuntimeError(f'empty workload contract: {name}')
+            if name in contracts and contracts[name]!=semantic:raise RuntimeError(f'{app} {name} differs from the first application response contract')
+            contracts[name]=semantic
+            result['bodies'][name]['contract']= [v.decode() for v in semantic] if isinstance(semantic,list) else semantic
+           before_writes=None
+           if not path:
+            with sqlite3.connect(db) as check:before_writes=check.execute('SELECT count(*) FROM messages WHERE room_id=?',(write_room,)).fetchone()[0]
+           warmup=load('http',conc=4,duration=2,**opts)
+           writes=warmup['ok']
+           for c in a.concurrency:
+            sample=load('http',conc=c,duration=a.seconds,**opts);sample['route']=name;result['http'].append(sample);writes+=sample['ok']
+            print(f'{app} {rep} {name} c={c}: {sample["rps"]} req/s, p99={sample["latency"].get("p99_ms")}ms',flush=True)
+           if before_writes is not None:
+            with sqlite3.connect(db) as check:
+             persisted=check.execute('SELECT count(*) FROM messages WHERE room_id=?',(write_room,)).fetchone()[0]-before_writes
+             indexed=check.execute('SELECT count(*) FROM message_search_index WHERE body MATCH ?',('bench write',)).fetchone()[0]
+            if persisted!=writes or indexed!=writes:raise RuntimeError(f'message/index mismatch: expected {writes}, saved {persisted}, indexed {indexed}')
+            result['write_validation']={'expected':writes,'persisted':persisted,'indexed':indexed}
+          result['http_memory_kib']=memory(proc.pid)
+          for n in a.cable_clients:
+           for compression in a.deflate:
+            sample=load('cable',cookie=cookie,room=room,csrf=scrape['csrf'] or '',streams=','.join(scrape['streams']),clients=n,tput_secs=a.cable_seconds,posters=4,deflate=compression)
+            sample['deflate']=bool(compression);result['cable'].append(sample)
+            (out/f'{app}-{rep}-partial.json').write_text(json.dumps(result,indent=2)+'\n')
+            if sample['ready']!=n or sample['failed'] or sample['throughput']['complete']!=sample['throughput']['posted'] or sample['latency']['complete']!=sample['latency']['messages']:raise RuntimeError(f'incomplete Cable delivery: {sample}')
+            print(f'{app} {rep} Cable {n} deflate={compression}: {sample["throughput"]["delivered_msgs_per_sec"]} messages/s',flush=True)
+          if a.upload_reps:
+           raw=subprocess.check_output(['taskset','-c',a.loadgen_cpus,str(ROOT/'bench/upload'),'--base',base,'--cookie',cookie,'--room',str(write_room),'--file',str(rust/'reference/test/fixtures/files/black_hole.jpg'),'--reps',str(a.upload_reps)],text=True,timeout=180)
+           result['upload']=json.loads(raw)
+           actual_hash=result['upload']['runs'][0]['thumb_sha256']
+           if thumbnail_hash is not None and actual_hash!=thumbnail_hash:raise RuntimeError(f'{app} thumbnail differs from the first application output')
+           thumbnail_hash=actual_hash
+          result['final_memory_kib']=memory(proc.pid)
+          result['load_end']=Path('/proc/loadavg').read_text();results.append(result)
+          (out/f'{app}-{rep}.json').write_text(json.dumps(result,indent=2)+'\n')
+          (out/'raw.json').write_text(json.dumps(results,indent=2)+'\n')
+         finally:
+          proc.terminate()
+          try:proc.wait(timeout=15)
+          except subprocess.TimeoutExpired:proc.kill();proc.wait()
+    subprocess.check_call([str(ROOT/'bench/report'),str(out)])
+    print(out/'report.md')
+if __name__=='__main__':main()

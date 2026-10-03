@@ -1,0 +1,101 @@
+[
+  {
+    "time": "2026-10-03T03:04:08.342440+00:00",
+    "event": "waiting for 20 seconds without external compiler processes",
+    "processes": [
+      [
+        2049385,
+        "clang-tidy"
+      ],
+      [
+        2050093,
+        "clang-tidy"
+      ],
+      [
+        2051142,
+        "clang-tidy"
+      ],
+      [
+        2051314,
+        "clang-tidy"
+      ],
+      [
+        2051776,
+        "clang-tidy"
+      ],
+      [
+        2052307,
+        "clang-tidy"
+      ],
+      [
+        2052435,
+        "clang-tidy"
+      ]
+    ]
+  },
+  {
+    "time": "2026-10-03T03:04:38.619906+00:00",
+    "event": "resuming unchanged benchmark",
+    "processes": []
+  },
+  {
+    "time": "2026-10-03T03:04:48.719489+00:00",
+    "event": "interrupting benchmark due to external compilation",
+    "processes": [
+      [
+        2058099,
+        "clang++"
+      ]
+    ]
+  },
+  {
+    "time": "2026-10-03T03:04:49.001540+00:00",
+    "event": "waiting for 20 seconds without external compiler processes",
+    "processes": [
+      [
+        2058099,
+        "clang++"
+      ]
+    ]
+  },
+  {
+    "time": "2026-10-03T03:05:11.193855+00:00",
+    "event": "resuming unchanged benchmark",
+    "processes": []
+  },
+  {
+    "time": "2026-10-03T03:06:15.764358+00:00",
+    "event": "interrupting benchmark due to external compilation",
+    "processes": [
+      [
+        2069688,
+        "clang++"
+      ]
+    ]
+  },
+  {
+    "time": "2026-10-03T03:06:16.046853+00:00",
+    "event": "waiting for 20 seconds without external compiler processes",
+    "processes": [
+      [
+        2069688,
+        "clang++"
+      ]
+    ]
+  },
+  {
+    "time": "2026-10-03T03:06:52.385856+00:00",
+    "event": "resuming unchanged benchmark",
+    "processes": []
+  },
+  {
+    "time": "2026-10-03T03:07:41.228857+00:00",
+    "event": "waiting for 20 seconds without parallel external compilation (four or more compiler processes)",
+    "processes": []
+  },
+  {
+    "time": "2026-10-03T03:08:01.406072+00:00",
+    "event": "resuming unchanged benchmark",
+    "processes": []
+  }
+]

@@ -1,0 +1,1422 @@
+{
+  "reference": "64f86353021145b63849fb1cd93adeb08f3b8dbb",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/",
+      "endpoint": "welcome#show",
+      "action": "welcome::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/first_run/new(.:format)",
+      "endpoint": "first_runs#new",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/first_run/edit(.:format)",
+      "endpoint": "first_runs#edit",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/first_run(.:format)",
+      "endpoint": "first_runs#show",
+      "action": "first_runs::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/first_run(.:format)",
+      "endpoint": "first_runs#update",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/first_run(.:format)",
+      "endpoint": "first_runs#update",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/first_run(.:format)",
+      "endpoint": "first_runs#destroy",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/first_run(.:format)",
+      "endpoint": "first_runs#create",
+      "action": "first_runs::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/session/transfers/:id(.:format)",
+      "endpoint": "sessions/transfers#show",
+      "action": "sessions::transfers::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/session/transfers/:id(.:format)",
+      "endpoint": "sessions/transfers#update",
+      "action": "sessions::transfers::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/session/transfers/:id(.:format)",
+      "endpoint": "sessions/transfers#update",
+      "action": "sessions::transfers::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/session/new(.:format)",
+      "endpoint": "sessions#new",
+      "action": "sessions::new",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/session/edit(.:format)",
+      "endpoint": "sessions#edit",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/session(.:format)",
+      "endpoint": "sessions#show",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/session(.:format)",
+      "endpoint": "sessions#update",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/session(.:format)",
+      "endpoint": "sessions#update",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/session(.:format)",
+      "endpoint": "sessions#destroy",
+      "action": "sessions::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/session(.:format)",
+      "endpoint": "sessions#create",
+      "action": "sessions::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/account/users(.:format)",
+      "endpoint": "accounts/users#index",
+      "action": "accounts::users::index",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/account/users(.:format)",
+      "endpoint": "accounts/users#create",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/account/users/new(.:format)",
+      "endpoint": "accounts/users#new",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/account/users/:id/edit(.:format)",
+      "endpoint": "accounts/users#edit",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/account/users/:id(.:format)",
+      "endpoint": "accounts/users#show",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/account/users/:id(.:format)",
+      "endpoint": "accounts/users#update",
+      "action": "accounts::users::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/account/users/:id(.:format)",
+      "endpoint": "accounts/users#update",
+      "action": "accounts::users::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/account/users/:id(.:format)",
+      "endpoint": "accounts/users#destroy",
+      "action": "accounts::users::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/account/bots/:bot_id/key(.:format)",
+      "endpoint": "accounts/bots/keys#update",
+      "action": "accounts::bots::keys::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/account/bots/:bot_id/key(.:format)",
+      "endpoint": "accounts/bots/keys#update",
+      "action": "accounts::bots::keys::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/account/bots(.:format)",
+      "endpoint": "accounts/bots#index",
+      "action": "accounts::bots::index",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/account/bots(.:format)",
+      "endpoint": "accounts/bots#create",
+      "action": "accounts::bots::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/account/bots/new(.:format)",
+      "endpoint": "accounts/bots#new",
+      "action": "accounts::bots::new",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/account/bots/:id/edit(.:format)",
+      "endpoint": "accounts/bots#edit",
+      "action": "accounts::bots::edit",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/account/bots/:id(.:format)",
+      "endpoint": "accounts/bots#show",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/account/bots/:id(.:format)",
+      "endpoint": "accounts/bots#update",
+      "action": "accounts::bots::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/account/bots/:id(.:format)",
+      "endpoint": "accounts/bots#update",
+      "action": "accounts::bots::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/account/bots/:id(.:format)",
+      "endpoint": "accounts/bots#destroy",
+      "action": "accounts::bots::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/account/join_code(.:format)",
+      "endpoint": "accounts/join_codes#create",
+      "action": "accounts::join_codes::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/account/logo(.:format)",
+      "endpoint": "accounts/logos#show",
+      "action": "accounts::logos::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/account/logo(.:format)",
+      "endpoint": "accounts/logos#destroy",
+      "action": "accounts::logos::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/account/custom_styles/edit(.:format)",
+      "endpoint": "accounts/custom_styles#edit",
+      "action": "accounts::custom_styles::edit",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/account/custom_styles(.:format)",
+      "endpoint": "accounts/custom_styles#update",
+      "action": "accounts::custom_styles::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/account/custom_styles(.:format)",
+      "endpoint": "accounts/custom_styles#update",
+      "action": "accounts::custom_styles::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/account/new(.:format)",
+      "endpoint": "accounts#new",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/account/edit(.:format)",
+      "endpoint": "accounts#edit",
+      "action": "accounts::edit",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/account(.:format)",
+      "endpoint": "accounts#show",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/account(.:format)",
+      "endpoint": "accounts#update",
+      "action": "accounts::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/account(.:format)",
+      "endpoint": "accounts#update",
+      "action": "accounts::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/account(.:format)",
+      "endpoint": "accounts#destroy",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/account(.:format)",
+      "endpoint": "accounts#create",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/join/:join_code(.:format)",
+      "endpoint": "users#new",
+      "action": "users::new",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/join/:join_code(.:format)",
+      "endpoint": "users#create",
+      "action": "users::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/qr_code/:id(.:format)",
+      "endpoint": "qr_code#show",
+      "action": "qr_code::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/users/:user_id/avatar(.:format)",
+      "endpoint": "users/avatars#show",
+      "action": "users::avatars::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/users/:user_id/avatar(.:format)",
+      "endpoint": "users/avatars#destroy",
+      "action": "users::avatars::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/users/:user_id/ban(.:format)",
+      "endpoint": "users/bans#destroy",
+      "action": "users::bans::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/users/:user_id/ban(.:format)",
+      "endpoint": "users/bans#create",
+      "action": "users::bans::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/users/:user_id/sidebar(.:format)",
+      "endpoint": "users/sidebars#show",
+      "action": "users::sidebars::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/users/:user_id/profile/new(.:format)",
+      "endpoint": "users/profiles#new",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/users/:user_id/profile/edit(.:format)",
+      "endpoint": "users/profiles#edit",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/users/:user_id/profile(.:format)",
+      "endpoint": "users/profiles#show",
+      "action": "users::profiles::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/users/:user_id/profile(.:format)",
+      "endpoint": "users/profiles#update",
+      "action": "users::profiles::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/users/:user_id/profile(.:format)",
+      "endpoint": "users/profiles#update",
+      "action": "users::profiles::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/users/:user_id/profile(.:format)",
+      "endpoint": "users/profiles#destroy",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/users/:user_id/profile(.:format)",
+      "endpoint": "users/profiles#create",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/users/:user_id/push_subscriptions/:push_subscription_id/test_notifications(.:format)",
+      "endpoint": "users/push_subscriptions/test_notifications#create",
+      "action": "users::push_subscriptions::test_notifications::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/users/:user_id/push_subscriptions(.:format)",
+      "endpoint": "users/push_subscriptions#index",
+      "action": "users::push_subscriptions::index",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/users/:user_id/push_subscriptions(.:format)",
+      "endpoint": "users/push_subscriptions#create",
+      "action": "users::push_subscriptions::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/users/:user_id/push_subscriptions/new(.:format)",
+      "endpoint": "users/push_subscriptions#new",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/users/:user_id/push_subscriptions/:id/edit(.:format)",
+      "endpoint": "users/push_subscriptions#edit",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/users/:user_id/push_subscriptions/:id(.:format)",
+      "endpoint": "users/push_subscriptions#show",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/users/:user_id/push_subscriptions/:id(.:format)",
+      "endpoint": "users/push_subscriptions#update",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/users/:user_id/push_subscriptions/:id(.:format)",
+      "endpoint": "users/push_subscriptions#update",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/users/:user_id/push_subscriptions/:id(.:format)",
+      "endpoint": "users/push_subscriptions#destroy",
+      "action": "users::push_subscriptions::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/users/:id(.:format)",
+      "endpoint": "users#show",
+      "action": "users::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/autocompletable/users(.:format)",
+      "endpoint": "autocompletable/users#index",
+      "action": "autocompletable::users::index",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/:room_id/messages(.:format)",
+      "endpoint": "messages#index",
+      "action": "messages::index",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rooms/:room_id/messages(.:format)",
+      "endpoint": "messages#create",
+      "action": "messages::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/:room_id/messages/new(.:format)",
+      "endpoint": "messages#new",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/:room_id/messages/:id/edit(.:format)",
+      "endpoint": "messages#edit",
+      "action": "messages::edit",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/:room_id/messages/:id(.:format)",
+      "endpoint": "messages#show",
+      "action": "messages::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/rooms/:room_id/messages/:id(.:format)",
+      "endpoint": "messages#update",
+      "action": "messages::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/rooms/:room_id/messages/:id(.:format)",
+      "endpoint": "messages#update",
+      "action": "messages::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/rooms/:room_id/messages/:id(.:format)",
+      "endpoint": "messages#destroy",
+      "action": "messages::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rooms/:room_id/:bot_key/messages/:message_id/boosts(.:format)",
+      "endpoint": "messages/boosts/by_bots#create",
+      "action": "messages::boosts::by_bots::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/rooms/:room_id/:bot_key/messages/:message_id/boosts/:id(.:format)",
+      "endpoint": "messages/boosts/by_bots#destroy",
+      "action": "messages::boosts::by_bots::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/:room_id/:bot_key/messages(.:format)",
+      "endpoint": "messages/by_bots#index",
+      "action": "messages::by_bots::index",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rooms/:room_id/:bot_key/messages(.:format)",
+      "endpoint": "messages/by_bots#create",
+      "action": "messages::by_bots::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/rooms/:room_id/:bot_key/messages/:id(.:format)",
+      "endpoint": "messages/by_bots#update",
+      "action": "messages::by_bots::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/rooms/:room_id/:bot_key/messages/:id(.:format)",
+      "endpoint": "messages/by_bots#update",
+      "action": "messages::by_bots::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/rooms/:room_id/:bot_key/messages/:id(.:format)",
+      "endpoint": "messages/by_bots#destroy",
+      "action": "messages::by_bots::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/:room_id/refresh(.:format)",
+      "endpoint": "rooms/refreshes#show",
+      "action": "rooms::refreshes::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/:room_id/settings(.:format)",
+      "endpoint": "rooms/settings#show",
+      "action": "missing_controller",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/:room_id/involvement(.:format)",
+      "endpoint": "rooms/involvements#show",
+      "action": "rooms::involvements::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/rooms/:room_id/involvement(.:format)",
+      "endpoint": "rooms/involvements#update",
+      "action": "rooms::involvements::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/rooms/:room_id/involvement(.:format)",
+      "endpoint": "rooms/involvements#update",
+      "action": "rooms::involvements::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/:room_id/@:message_id(.:format)",
+      "endpoint": "rooms#show",
+      "action": "rooms::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms(.:format)",
+      "endpoint": "rooms#index",
+      "action": "rooms::index",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rooms(.:format)",
+      "endpoint": "rooms#create",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/new(.:format)",
+      "endpoint": "rooms#new",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/:id/edit(.:format)",
+      "endpoint": "rooms#edit",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/:id(.:format)",
+      "endpoint": "rooms#show",
+      "action": "rooms::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/rooms/:id(.:format)",
+      "endpoint": "rooms#update",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/rooms/:id(.:format)",
+      "endpoint": "rooms#update",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/rooms/:id(.:format)",
+      "endpoint": "rooms#destroy",
+      "action": "rooms::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/opens(.:format)",
+      "endpoint": "rooms/opens#index",
+      "action": "rooms::index",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rooms/opens(.:format)",
+      "endpoint": "rooms/opens#create",
+      "action": "rooms::opens::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/opens/new(.:format)",
+      "endpoint": "rooms/opens#new",
+      "action": "rooms::opens::new",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/opens/:id/edit(.:format)",
+      "endpoint": "rooms/opens#edit",
+      "action": "rooms::opens::edit",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/opens/:id(.:format)",
+      "endpoint": "rooms/opens#show",
+      "action": "rooms::opens::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/rooms/opens/:id(.:format)",
+      "endpoint": "rooms/opens#update",
+      "action": "rooms::opens::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/rooms/opens/:id(.:format)",
+      "endpoint": "rooms/opens#update",
+      "action": "rooms::opens::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/rooms/opens/:id(.:format)",
+      "endpoint": "rooms/opens#destroy",
+      "action": "rooms::destroy_without_room",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/closeds(.:format)",
+      "endpoint": "rooms/closeds#index",
+      "action": "rooms::index",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rooms/closeds(.:format)",
+      "endpoint": "rooms/closeds#create",
+      "action": "rooms::closeds::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/closeds/new(.:format)",
+      "endpoint": "rooms/closeds#new",
+      "action": "rooms::closeds::new",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/closeds/:id/edit(.:format)",
+      "endpoint": "rooms/closeds#edit",
+      "action": "rooms::closeds::edit",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/closeds/:id(.:format)",
+      "endpoint": "rooms/closeds#show",
+      "action": "rooms::closeds::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/rooms/closeds/:id(.:format)",
+      "endpoint": "rooms/closeds#update",
+      "action": "rooms::closeds::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/rooms/closeds/:id(.:format)",
+      "endpoint": "rooms/closeds#update",
+      "action": "rooms::closeds::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/rooms/closeds/:id(.:format)",
+      "endpoint": "rooms/closeds#destroy",
+      "action": "rooms::destroy_without_room",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/directs(.:format)",
+      "endpoint": "rooms/directs#index",
+      "action": "rooms::index",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rooms/directs(.:format)",
+      "endpoint": "rooms/directs#create",
+      "action": "rooms::directs::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/directs/new(.:format)",
+      "endpoint": "rooms/directs#new",
+      "action": "rooms::directs::new",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/directs/:id/edit(.:format)",
+      "endpoint": "rooms/directs#edit",
+      "action": "rooms::directs::edit",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rooms/directs/:id(.:format)",
+      "endpoint": "rooms/directs#show",
+      "action": "rooms::directs::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/rooms/directs/:id(.:format)",
+      "endpoint": "rooms/directs#update",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/rooms/directs/:id(.:format)",
+      "endpoint": "rooms/directs#update",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/rooms/directs/:id(.:format)",
+      "endpoint": "rooms/directs#destroy",
+      "action": "rooms::directs::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/messages/:message_id/boosts(.:format)",
+      "endpoint": "messages/boosts#index",
+      "action": "messages::boosts::index",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/messages/:message_id/boosts(.:format)",
+      "endpoint": "messages/boosts#create",
+      "action": "messages::boosts::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/messages/:message_id/boosts/new(.:format)",
+      "endpoint": "messages/boosts#new",
+      "action": "messages::boosts::new",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/messages/:message_id/boosts/:id/edit(.:format)",
+      "endpoint": "messages/boosts#edit",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/messages/:message_id/boosts/:id(.:format)",
+      "endpoint": "messages/boosts#show",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/messages/:message_id/boosts/:id(.:format)",
+      "endpoint": "messages/boosts#update",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/messages/:message_id/boosts/:id(.:format)",
+      "endpoint": "messages/boosts#update",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/messages/:message_id/boosts/:id(.:format)",
+      "endpoint": "messages/boosts#destroy",
+      "action": "messages::boosts::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/messages(.:format)",
+      "endpoint": "messages#index",
+      "action": "messages::index",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/messages(.:format)",
+      "endpoint": "messages#create",
+      "action": "messages::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/messages/new(.:format)",
+      "endpoint": "messages#new",
+      "action": "action_not_found",
+      "status": "reference-error-contract",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/messages/:id/edit(.:format)",
+      "endpoint": "messages#edit",
+      "action": "messages::edit",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/messages/:id(.:format)",
+      "endpoint": "messages#show",
+      "action": "messages::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PATCH",
+      "path": "/messages/:id(.:format)",
+      "endpoint": "messages#update",
+      "action": "messages::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/messages/:id(.:format)",
+      "endpoint": "messages#update",
+      "action": "messages::update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/messages/:id(.:format)",
+      "endpoint": "messages#destroy",
+      "action": "messages::destroy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "DELETE",
+      "path": "/searches/clear(.:format)",
+      "endpoint": "searches#clear",
+      "action": "searches::clear",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/searches(.:format)",
+      "endpoint": "searches#index",
+      "action": "searches::index",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/searches(.:format)",
+      "endpoint": "searches#create",
+      "action": "searches::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/unfurl_link(.:format)",
+      "endpoint": "unfurl_links#create",
+      "action": "unfurl_links::create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/webmanifest(.:format)",
+      "endpoint": "pwa#manifest",
+      "action": "pwa::manifest",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/service-worker(.:format)",
+      "endpoint": "pwa#service_worker",
+      "action": "pwa::service_worker",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/up(.:format)",
+      "endpoint": "rails/health#show",
+      "action": "health::show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/recede_historical_location(.:format)",
+      "endpoint": "turbo/native/navigation#recede",
+      "action": "turbo_native::recede",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/resume_historical_location(.:format)",
+      "endpoint": "turbo/native/navigation#resume",
+      "action": "turbo_native::resume",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/refresh_historical_location(.:format)",
+      "endpoint": "turbo/native/navigation#refresh",
+      "action": "turbo_native::refresh",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rails/action_mailbox/postmark/inbound_emails(.:format)",
+      "endpoint": "action_mailbox/ingresses/postmark/inbound_emails#create",
+      "action": "mailbox::ingress_not_configured",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rails/action_mailbox/relay/inbound_emails(.:format)",
+      "endpoint": "action_mailbox/ingresses/relay/inbound_emails#create",
+      "action": "mailbox::ingress_not_configured",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rails/action_mailbox/sendgrid/inbound_emails(.:format)",
+      "endpoint": "action_mailbox/ingresses/sendgrid/inbound_emails#create",
+      "action": "mailbox::ingress_not_configured",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rails/action_mailbox/mandrill/inbound_emails(.:format)",
+      "endpoint": "action_mailbox/ingresses/mandrill/inbound_emails#health_check",
+      "action": "mailbox::ingress_not_configured",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rails/action_mailbox/mandrill/inbound_emails(.:format)",
+      "endpoint": "action_mailbox/ingresses/mandrill/inbound_emails#create",
+      "action": "mailbox::ingress_not_configured",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rails/action_mailbox/mailgun/inbound_emails/mime(.:format)",
+      "endpoint": "action_mailbox/ingresses/mailgun/inbound_emails#create",
+      "action": "mailbox::ingress_not_configured",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rails/conductor/action_mailbox/inbound_emails(.:format)",
+      "endpoint": "rails/conductor/action_mailbox/inbound_emails#index",
+      "action": "mailbox::conductor",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rails/conductor/action_mailbox/inbound_emails(.:format)",
+      "endpoint": "rails/conductor/action_mailbox/inbound_emails#create",
+      "action": "mailbox::conductor",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rails/conductor/action_mailbox/inbound_emails/new(.:format)",
+      "endpoint": "rails/conductor/action_mailbox/inbound_emails#new",
+      "action": "mailbox::conductor",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rails/conductor/action_mailbox/inbound_emails/:id(.:format)",
+      "endpoint": "rails/conductor/action_mailbox/inbound_emails#show",
+      "action": "mailbox::conductor",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rails/conductor/action_mailbox/inbound_emails/sources/new(.:format)",
+      "endpoint": "rails/conductor/action_mailbox/inbound_emails/sources#new",
+      "action": "mailbox::conductor",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rails/conductor/action_mailbox/inbound_emails/sources(.:format)",
+      "endpoint": "rails/conductor/action_mailbox/inbound_emails/sources#create",
+      "action": "mailbox::conductor",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rails/conductor/action_mailbox/:inbound_email_id/reroute(.:format)",
+      "endpoint": "rails/conductor/action_mailbox/reroutes#create",
+      "action": "mailbox::conductor",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rails/conductor/action_mailbox/:inbound_email_id/incinerate(.:format)",
+      "endpoint": "rails/conductor/action_mailbox/incinerates#create",
+      "action": "mailbox::conductor",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rails/active_storage/blobs/redirect/:signed_id/*filename(.:format)",
+      "endpoint": "active_storage/blobs/redirect#show",
+      "action": "active_storage::blobs_redirect",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rails/active_storage/blobs/proxy/:signed_id/*filename(.:format)",
+      "endpoint": "active_storage/blobs/proxy#show",
+      "action": "active_storage::blobs_proxy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rails/active_storage/blobs/:signed_id/*filename(.:format)",
+      "endpoint": "active_storage/blobs/redirect#show",
+      "action": "active_storage::blobs_redirect",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rails/active_storage/representations/redirect/:signed_blob_id/:variation_key/*filename(.:format)",
+      "endpoint": "active_storage/representations/redirect#show",
+      "action": "active_storage::representations_redirect",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rails/active_storage/representations/proxy/:signed_blob_id/:variation_key/*filename(.:format)",
+      "endpoint": "active_storage/representations/proxy#show",
+      "action": "active_storage::representations_proxy",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rails/active_storage/representations/:signed_blob_id/:variation_key/*filename(.:format)",
+      "endpoint": "active_storage/representations/redirect#show",
+      "action": "active_storage::representations_redirect",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "GET",
+      "path": "/rails/active_storage/disk/:encoded_key/*filename(.:format)",
+      "endpoint": "active_storage/disk#show",
+      "action": "active_storage::disk_show",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "PUT",
+      "path": "/rails/active_storage/disk/:encoded_token(.:format)",
+      "endpoint": "active_storage/disk#update",
+      "action": "active_storage::disk_update",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    },
+    {
+      "method": "POST",
+      "path": "/rails/active_storage/direct_uploads(.:format)",
+      "endpoint": "active_storage/direct_uploads#create",
+      "action": "active_storage::direct_uploads_create",
+      "status": "implemented",
+      "validation": "route inventory and recognition vectors; behavior covered by package and browser tests"
+    }
+  ],
+  "note": "Coverage describes implementation, not an all-layer parity pass. Screen comparison results are recorded separately."
+}

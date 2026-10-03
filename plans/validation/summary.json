@@ -1,0 +1,74 @@
+{
+  "date": "2026-10-02T19:59:42.429963+00:00",
+  "desktop_cells": 214,
+  "desktop_status": {
+    "fail": 202,
+    "pass": 12
+  },
+  "desktop_layers": {
+    "pixels": {
+      "pass": 198,
+      "fail": 0,
+      "not_applicable": 16
+    },
+    "aria": {
+      "pass": 198,
+      "fail": 0,
+      "not_applicable": 16
+    },
+    "server": {
+      "pass": 21,
+      "fail": 193,
+      "not_applicable": 0
+    },
+    "live": {
+      "pass": 9,
+      "fail": 189,
+      "not_applicable": 16
+    },
+    "network": {
+      "pass": 0,
+      "fail": 198,
+      "not_applicable": 16
+    },
+    "cable": {
+      "pass": 197,
+      "fail": 1,
+      "not_applicable": 16
+    }
+  },
+  "phone_cells": 12,
+  "phone_layers": {
+    "pixels": {
+      "pass": 12,
+      "fail": 0,
+      "not_applicable": 0
+    },
+    "aria": {
+      "pass": 12,
+      "fail": 0,
+      "not_applicable": 0
+    },
+    "server": {
+      "pass": 0,
+      "fail": 12,
+      "not_applicable": 0
+    },
+    "live": {
+      "pass": 0,
+      "fail": 12,
+      "not_applicable": 0
+    },
+    "network": {
+      "pass": 0,
+      "fail": 12,
+      "not_applicable": 0
+    },
+    "cable": {
+      "pass": 12,
+      "fail": 0,
+      "not_applicable": 0
+    }
+  },
+  "note": "The default inventory was followed by five focused captures after correcting thumbnail URL defaults, sidebar classes and remote-disconnect reason. Those five results replace the earlier cells in this aggregate; individual reports and binary hashes are retained. No added masks or allowlists."
+}

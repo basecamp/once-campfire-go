@@ -1,0 +1,925 @@
+--- rust
+
++++ go
+
+@@ -1,787 +1,787 @@
+
+ GET /account/logo?v=20260101160000 → 200
+-  headers: cache-control content-disposition content-encoding content-transfer-encoding content-type etag vary x-rev x-version
++  headers: accept-ranges cache-control content-disposition content-encoding content-type etag referrer-policy vary x-content-type-options x-frame-options x-permitted-cross-domain-policies x-rev x-version x-xss-protection
+   cache-control: max-age=300, public, stale-while-revalidate=604800
+   content-disposition: inline; filename="app-icon.png"; filename*=UTF-8''app-icon.png
+   content-type: image/png
+   vary: accept-encoding
+   body: sha256:d347c43b6c981233
+ GET /assets/@rails--request-3fc8489d.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/_reset-9c3efd7b.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/actioncable.esm-e0ec9819.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/actiontext-7b8d51ea.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/animation-bcdb4bab.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/application-a54c74a7.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/arrow-right-8f3eb40d.svg → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: image/svg+xml
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/autocomplete-9de8c93f.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/avatars-279376ab.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/base-637a0ec8.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/boosts-da4032a8.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/buttons-c7d39fd4.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/campfire-icon-3d9986c5.png → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: image/png
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/code-333ae548.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/colorize-eb391ca0.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/colors-aee62523.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/composer-e490638a.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/application-f004202c.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/auto_submit_controller-ee52d396.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/autocomplete_controller-eaf5b07d.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/badge_dot_controller-e0d733c8.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/boost_delete_controller-29fd1686.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/composer_controller-73c33f9f.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/copy_to_clipboard_controller-a4928c72.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/drop_target_controller-3a205782.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/element_removal_controller-4526910a.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/filter_controller-ca9769d5.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/form_controller-6f3d64db.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/index-594ba2fb.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/lightbox_controller-98fc07ca.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/local_time_controller-7daf3d0c.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/maintain_scroll_controller-1debbbfb.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/messages_controller-3d90944a.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/notifications_controller-746d0662.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/popup_controller-9f8ea824.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/presence_controller-28f14aad.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/pwa_install_controller-3fe3fc5e.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/read_rooms_controller-8245522a.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/refresh_room_controller-4e4b6014.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/reply_controller-278bb9cc.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/rooms_list_controller-64840fcd.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/scroll_into_view_controller-8a0bc733.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/search_results_controller-aab46974.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/sessions_controller-a9fdfe3d.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/soft_keyboard_controller-be1da837.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/sorted_list_controller-9f9ae485.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/sound_controller-d3e5656e.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/toggle_class_controller-b67fa681.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/turbo_frame_controller-9f4f722f.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/turbo_streaming_controller-04b85a80.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/typing_notifications_controller-86906ab9.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/unfurl_controller-4a868f9a.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/upload_preview_controller-9b8b26bb.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/controllers/web_share_controller-f7236b6f.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/download-04029899.svg → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: image/svg+xml
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/email-6c595bc5.svg → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: image/svg+xml
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/embeds-c20d0a3a.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/filters-8a4d63ed.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/flash-a561c1e5.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/globe-8c54d23b.svg → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: image/svg+xml
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/helpers/dom_helpers-0f234176.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/helpers/navigator_helpers-3c9f4c31.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/helpers/string_helpers-40941ba8.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/helpers/timing_helpers-94d95529.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/helpers/turbo_helpers-a3c01462.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/highlight.js/core-4e141f64.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/initializers/autocomplete-ba9abe45.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/initializers/current-3a3b90da.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/initializers/highlight-5bd558f1.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/initializers/index-d2bbfae4.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/initializers/rich_text-f451a05e.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/inputs-9e58a07c.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/languages/bash-13136668.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/languages/css-a7f2e40b.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/languages/diff-94a335fe.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/languages/go-10465864.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/languages/java-95f3a30f.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/languages/javascript-18eb0dd8.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/languages/json-60184e1b.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/languages/python-8f48fd1a.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/languages/ruby-287ccd0f.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/languages/rust-d48f93d8.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/languages/sql-642be05a.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/languages/xml-fa7f1eda.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/layout-ff6ddfc6.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lexxy-2876c58e.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lexxy-a21f41d4.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lexxy-content-0ff2f961.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lexxy-editor-2d5c7ebe.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lexxy-variables-3fef4323.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/autocomplete/autocomplete_handler-becd1e1a.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/autocomplete/base_autocomplete_handler-96e7e419.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/autocomplete/collection-3e251a0e.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/autocomplete/constants-17c2858b.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/autocomplete/custom_elements/suggestion_option-ac7846b3.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/autocomplete/custom_elements/suggestion_select-f0045305.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/autocomplete/helpers-651308b9.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/autocomplete/renderer-5caf6120.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/autocomplete/selection-862705bf.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/autocomplete/suggestion_context-b265ffb4.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/autocomplete/suggestion_controller-10624c40.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/autocomplete/suggestion_results_controller-91405749.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/autocomplete/utils-296fb278.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/cookie-76006835.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/rich_text/campfire_extension-f62f017b.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lib/rich_text/cite_node-b4d2b89a.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lifebuoy-f31f26aa.svg → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: image/svg+xml
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/lightbox-af496d39.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/messages-c5485fef.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/models/client_message-de3c07cf.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/models/file_uploader-09a18428.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/models/message_formatter-f39a0c5d.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/models/message_paginator-b79013e3.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/models/scroll_manager-ed559629.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/models/typing_tracker-42a444a5.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/nav-05e7183a.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/panels-af44ec6d.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/password-0896da4e.svg → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: image/svg+xml
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/remove-0e7a045d.svg → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: image/svg+xml
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/separators-172b3ab8.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/share-bf28da4f.svg → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: image/svg+xml
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/sidebar-0be58db9.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/signup-6e02d591.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/spinner-5a118f25.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/stimulus-loading-1fc53fe7.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/stimulus.min-4b1e420e.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/trix-65afdb1d.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/turbo-a1e3a50a.js → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/javascript
+   vary: accept-encoding
+   body: named by its digest
+ GET /assets/utilities-e2f32466.css → 200
+-  headers: cache-control content-encoding content-type last-modified vary
++  headers: accept-ranges cache-control content-encoding content-type vary
+   cache-control: max-age=2592000, public
+   content-type: text/css
+   vary: accept-encoding
+   body: named by its digest
+ GET /session/new (navigation) → 200
+-  headers: cache-control content-encoding content-type etag link referrer-policy vary x-content-type-options x-frame-options x-permitted-cross-domain-policies x-rev x-version x-xss-protection
++  headers: cache-control content-encoding content-type etag referrer-policy vary x-content-type-options x-frame-options x-permitted-cross-domain-policies x-rev x-version x-xss-protection
+   cache-control: max-age=0, must-revalidate, private
+   content-type: text/html; charset=utf-8
+   vary: accept-encoding
+-  body: sha256:1e79006cec2b3d32
++  body: sha256:8673aa6300534f3f

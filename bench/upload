@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""Measure attachment creation and its actual image representation, never the avatar."""
+import argparse,hashlib,json,statistics,time,urllib.request,urllib.parse,uuid
+from html.parser import HTMLParser
+from pathlib import Path
+class Images(HTMLParser):
+ def __init__(self):super().__init__();self.sources=[]
+ def handle_starttag(self,tag,attrs):
+  if tag=='img':
+   src=dict(attrs).get('src','')
+   if '/rails/active_storage/representations/' in src:self.sources.append(src)
+def main():
+ p=argparse.ArgumentParser(description=__doc__)
+ for key in ['base','cookie','room','file']:p.add_argument('--'+key,required=True)
+ p.add_argument('--reps',type=int,default=5);a=p.parse_args()
+ data=Path(a.file).read_bytes();runs=[]
+ for _ in range(a.reps):
+  boundary='campfire-benchmark-'+uuid.uuid4().hex
+  body=(f'--{boundary}\r\nContent-Disposition: form-data; name="message[client_message_id]"\r\n\r\n{uuid.uuid4()}\r\n--{boundary}\r\nContent-Disposition: form-data; name="message[attachment]"; filename="black_hole.jpg"\r\nContent-Type: image/jpeg\r\n\r\n').encode()+data+f'\r\n--{boundary}--\r\n'.encode()
+  request=urllib.request.Request(f'{a.base}/rooms/{a.room}/messages',data=body,headers={'Cookie':a.cookie,'Content-Type':'multipart/form-data; boundary='+boundary,'Accept':'text/vnd.turbo-stream.html','Accept-Encoding':'identity'})
+  started=time.perf_counter()
+  with urllib.request.urlopen(request,timeout=30) as response:
+   assert response.status==200,response.status
+   html=response.read().decode()
+  posted=time.perf_counter();images=Images();images.feed(html)
+  assert len(images.sources)==1,images.sources
+  request=urllib.request.Request(urllib.parse.urljoin(a.base,images.sources[0]),headers={'Cookie':a.cookie,'Accept-Encoding':'identity'})
+  with urllib.request.urlopen(request,timeout=30) as response:
+   assert response.status==200,response.status
+   content=response.read();content_type=response.headers.get_content_type()
+  elapsed=time.perf_counter()
+  assert content_type in ('image/jpeg','image/png','image/webp'),content_type
+  assert content.startswith((b'\xff\xd8\xff',b'\x89PNG',b'RIFF')),content[:40]
+  runs.append(dict(post_ms=(posted-started)*1000,thumb_ms=(elapsed-posted)*1000,total_ms=(elapsed-started)*1000,thumb_bytes=len(content),thumb_sha256=hashlib.sha256(content).hexdigest(),content_type=content_type,post_status=200,thumb_status=200))
+ assert len({r['thumb_sha256'] for r in runs})==1,'inconsistent media bytes'
+ print(json.dumps(dict(file=Path(a.file).name,bytes=len(data),median_total_ms=statistics.median(r['total_ms'] for r in runs),runs=runs)))
+if __name__=='__main__':main()

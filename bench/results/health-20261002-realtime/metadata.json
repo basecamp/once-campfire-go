@@ -1,0 +1,62 @@
+{
+  "scope": "identical /up handler only; app listeners, identity encoding, no TLS/front cache",
+  "time": "2026-10-02T13:37:31.992830+00:00",
+  "host": "Linux-7.2.5-4-omarchy-x86_64-with-glibc2.44",
+  "cpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  32\nOn-line CPU(s) list:                     0-31\nVendor ID:                               AuthenticAMD\nModel name:                              AMD RYZEN AI MAX+ 395 w/ Radeon 8060S\nCPU family:                              26\nModel:                                   112\nThread(s) per core:                      2\nCore(s) per socket:                      16\nSocket(s):                               1\nStepping:                                0\nMicrocode version:                       0xb70001e\nFrequency boost:                         enabled\nCPU(s) scaling MHz:                      79%\nCPU max MHz:                             5187.5000\nCPU min MHz:                             625.0000\nBogoMIPS:                                5988.45\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good amd_lbr_v2 nopl xtopology nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpuid_fault cpb cat_l3 cdp_l3 hw_pstate ssbd mba perfmon_v2 ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk avx_vnni avx512_bf16 clzero irperf xsaveerptr rdpru wbnoinvd cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif x2avic v_spec_ctrl vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid bus_lock_detect movdiri movdir64b overflow_recov succor smca fsrm avx512_vp2intersect flush_l1d amd_lbr_pmc_freeze\nVirtualization:                          AMD-V\nL1d cache:                               768 KiB (16 instances)\nL1i cache:                               512 KiB (16 instances)\nL2 cache:                                16 MiB (16 instances)\nL3 cache:                                64 MiB (2 instances)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-31\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Mitigation; IBPB on VMEXIT only\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; STIBP always-on; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Mitigation; IBPB on VMEXIT",
+  "rust_commit": "64f86353021145b63849fb1cd93adeb08f3b8dbb",
+  "go_version": "go version go1.27.1 linux/amd64",
+  "rust_version": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "binaries": {
+    "go": {
+      "path": "/home/dhh/Work/basecamp/once-campfire-go/campfire",
+      "sha256": "bb758f46376b8f39a05f9ef08c859004c9b2edb686b5703ba73152c82b6da4fa",
+      "bytes": 18792984
+    },
+    "rust": {
+      "path": "/home/dhh/Work/basecamp/once-campfire-rust/target/release/campfire",
+      "sha256": "efca000f8a97768a4be0e405a46fa2325e31e0fa5cbb12e64ded90b8318e12fa",
+      "bytes": 37538024
+    }
+  },
+  "loadgen_sha256": "be01d87f7758c6e4a78d4287d4b822791bd0485e26a1ec8af81595cfecd09180",
+  "seed_sha256": "433ccdce78759eef0524b2840a512077e52cc8e867f6c095430a8871d47a2e38",
+  "settings": {
+    "rust_root": "/home/dhh/Work/basecamp/once-campfire-rust",
+    "reps": 3,
+    "seconds": 5,
+    "concurrency": [
+      1,
+      16,
+      64
+    ],
+    "server_cpus": "8-11",
+    "loadgen_cpus": "12-15",
+    "out": "/home/dhh/Work/basecamp/once-campfire-go/bench/results/health-20261002-realtime"
+  },
+  "body_sha256": "7e6c9877b2dec7dfadc43e742246d94d515f703dc8e04611320aaca6e26c3af3",
+  "load_before": "0.68 2.78 4.85 2/4290 3294767",
+  "go_sources_sha256": {
+    "cmd/campfire/main.go": "fffcfe9d7d54070648b8be43b07682afee7b7a40eb903aa50bf6c9467bf125cd",
+    "internal/cable/hub.go": "17ddfd0ea9e5b76342f0094c65fa2e961afcd75188e90386c9b05d3280c001e0",
+    "internal/cable/hub_test.go": "e4a4cebf908c360a0b7765ee04128f920421913a7b13a3ae18f765ddef268801",
+    "internal/database/database.go": "5ff32b2240f51472728c78f4bf527946db05c7ab58c9129f837648c1acdea82f",
+    "internal/database/database_test.go": "33f4d874c722785c7ea167b0f539c3c4cfbd5f4562e2e45860fa0b96bc860df1",
+    "internal/database/models.go": "b46fb1201808b30a495cbc0a7b62fffc0d1ebe29b046bd1a1b9a8d9ad75bf1f2",
+    "internal/database/schema.sql": "e5d8c0c39cd6daffedcb270ace6ac7a0b1420e8ae8b4392f50a075a09179824f",
+    "internal/rails/cookies.go": "d98639c3616c14581d7092643ad7061452a92d38a813b927a71e34bfb8c6cde2",
+    "internal/rails/cookies_test.go": "760f077a524b7738239ed5871bad9fddd2c3c3925a2c58b4d60f20e1d0469941",
+    "internal/rails/streams.go": "d0798394db1a04afc36a597f05f2311f92a618d41d106b5502475d8274d1a885",
+    "internal/rails/streams_test.go": "5c3bf9cfac9b4f88ce6ed79d5bf587faa09a9cfb4e8b340cc1b4d9e6ac2ea0bd",
+    "internal/richtext/richtext.go": "a8e2d0bc9a89cd7fdec0f187b2da3171c7cc67bcc47b6a5b6a8ec6073f702c61",
+    "internal/richtext/richtext_test.go": "1cfe3f2285653bcacbde66101ba471b5997cdbd4f0a9eb50de640cbfd4acfc74",
+    "internal/web/server.go": "846e1ac0f0d7e2bf2281b715f2a3226dfa811cb3d0cf503a6854e640410d7d21",
+    "internal/web/server_test.go": "06e4f5ece68ae8f72cf3a004f915eb197d12d16c927c47c8df0de7995b0293e6",
+    "internal/web/templates.go": "b94545da88814e53119599906754cf999adadfb283a3e9a1e5653841e660d94a",
+    "assets/assets.go": "5c88b82f7c0356906fb6a229be6e5b29e38125887af851694d626f9db737105d",
+    "assets/overrides/chat.js": "92207f53517ab940ac02590389da573ba7fdf27e0084d96e7896bfc9220aed19",
+    "go.mod": "f23e4d93a0ea00a785514054e0c2fbfce48991c909de46d458b237d053e54028",
+    "go.sum": "3e02e8e2287f93e3bb8984b9fb20fe119b9b542713cf41774a0fc5ba705db9f1",
+    "bin/build": "1d89937f7f06f827b155fceec4d4b9209eb1d4c15aa36d2b23e6fc51e8de2c0f"
+  },
+  "source_manifest_note": "Recorded after the run; rebuilt executable SHA256 matches the measured executable."
+}

@@ -1,0 +1,63 @@
+{
+  "name": {{ json .Name }},
+  "icons": [
+    {
+      "src": {{ json .Small }},
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": {{ json .Logo }},
+      "type": "image/png",
+      "sizes": "512x512"
+    },
+    {
+      "src": {{ json .Logo }},
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "scope": "/",
+  "description": "A chat app from the makers of Basecamp and HEY.",
+  "categories": ["social", "business", "productivity"],
+  "theme_color": "#ffffff",
+  "background_color": "#ffffff",
+  "shortcuts": [
+    {
+      "name": "New chat room",
+      "description": "Open Campfire and start a new chat room",
+      "url": "rooms/opens/new",
+      "icons": [{ "src": {{ json (image .Origin "add.svg") }}, "sizes": "any" }]
+    },
+    {
+      "name": "My profile",
+      "description": "Open Campfire and view your profile",
+      "url": "/users/me/profile",
+      "icons": [{ "src": {{ json (image .Origin "person.svg") }}, "sizes": "any" }]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": {{ json (image .Origin "screenshots/android-chat.png") }},
+      "sizes": "1080x2400",
+      "form_factor": "narrow",
+      "label": "Campfire is an installable, self-hosted group chat system."
+    },
+    {
+      "src": {{ json (image .Origin "screenshots/android-sidebar.png") }},
+      "sizes": "1080x2400",
+      "form_factor": "narrow",
+      "label": "Easily invite people. Make rooms. @mentions, DMs, and mobile support."
+    },
+    {
+      "src": {{ json (image .Origin "screenshots/android-dark-mode.png") }},
+      "sizes": "1080x2400",
+      "form_factor": "narrow",
+      "label": "Full support for dark mode, customizable to your brand."
+    }
+  ]
+}
+

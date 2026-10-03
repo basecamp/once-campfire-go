@@ -1,0 +1,112 @@
+{
+  "info": {
+    "title": "Parity report",
+    "expected": "expected http://127.0.0.1:59335",
+    "actual": "actual http://127.0.0.1:53221",
+    "startedAt": "2026-10-02T19:49:49.828Z",
+    "durationMs": 8821,
+    "unusedAllowlist": [],
+    "counts": {
+      "pass": 0,
+      "fail": 2,
+      "allowed": 0,
+      "error": 0
+    },
+    "flaky": 0,
+    "masks": {}
+  },
+  "results": [
+    {
+      "state": "account/edit/restricted_room_creation",
+      "cell": "chromium-desktop-light",
+      "status": "fail",
+      "layers": [
+        {
+          "layer": "pixels",
+          "equal": true,
+          "pixels": {
+            "equal": true,
+            "width": 1440,
+            "height": 900
+          }
+        },
+        {
+          "layer": "server",
+          "equal": false,
+          "added": 28,
+          "removed": 28
+        },
+        {
+          "layer": "live",
+          "equal": false,
+          "added": 27,
+          "removed": 27
+        },
+        {
+          "layer": "aria",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        },
+        {
+          "layer": "network",
+          "equal": false,
+          "added": 148,
+          "removed": 148
+        },
+        {
+          "layer": "cable",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        }
+      ]
+    },
+    {
+      "state": "rooms/opens/new/restricted_member",
+      "cell": "chromium-desktop-light",
+      "status": "fail",
+      "layers": [
+        {
+          "layer": "pixels",
+          "equal": true,
+          "pixels": {
+            "equal": true,
+            "width": 1440,
+            "height": 900
+          }
+        },
+        {
+          "layer": "server",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        },
+        {
+          "layer": "live",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        },
+        {
+          "layer": "aria",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        },
+        {
+          "layer": "network",
+          "equal": false,
+          "added": 2,
+          "removed": 4
+        },
+        {
+          "layer": "cable",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        }
+      ]
+    }
+  ]
+}

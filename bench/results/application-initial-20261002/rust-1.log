@@ -1,0 +1,5 @@
+2026-10-02T18:14:11.497341Z  INFO campfire::app: open files limit=524288
+2026-10-02T18:14:11.504550Z  INFO campfire_kit::front: Server started http=:42231
+2026-10-02T18:14:35.757367Z ERROR campfire_kit::ctx: request failed error=Cannot read file /home/dhh/Work/basecamp/once-campfire-go/bench/.work/rust-1-gzb5etzp/storage/files/5n/lq/5nlq52kvmcweobxncp0zy1zvu9bg path="/users/eyJfcmFpbHMiOnsiZGF0YSI6MTQ5MDg3NjU5LCJwdXIiOiJ1c2VyL2F2YXRhciJ9fQ--3717de512c048bb2a011a08236969887ee56ae9f8bd2fb510959b9915f449e17/avatar"
+2026-10-02T18:14:35.757612Z  INFO campfire::app: shutting down
+2026-10-02T18:14:35.757647Z  INFO campfire_kit::front: Server stopped

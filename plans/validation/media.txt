@@ -1,0 +1,1 @@
+ok  	github.com/basecamp/once-campfire-go/internal/storage	2.116s

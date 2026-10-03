@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+mkdir -p .cache/tmp .cache/go-build
+export TMPDIR="$PWD/.cache/tmp" GOCACHE="$PWD/.cache/go-build" CGO_ENABLED=1
+if ! command -v go >/dev/null; then exec mise exec go@1.27.1 -- "$0" "$@"; fi
+python3 bin/build-assets
+go build -tags sqlite_fts5 -trimpath -o campfire ./cmd/campfire

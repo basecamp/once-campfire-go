@@ -1,0 +1,8 @@
+{
+  "seed": "custom_styles",
+  "frozen_time": "2026-03-02T16:00:00Z",
+  "binary_sha256": {
+    "rust": "efca000f8a97768a4be0e405a46fa2325e31e0fa5cbb12e64ded90b8318e12fa",
+    "go": "77e4f6ce2ad9a229b5e390d4a2ff45f91b1374c0cb056ee7a0208f4204b7fac6"
+  }
+}

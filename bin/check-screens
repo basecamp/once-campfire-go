@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Compare the pinned screen inventory using disposable Go and Rust seed copies."""
+import hashlib
+import argparse,json,os,shutil,socket,sqlite3,subprocess,tempfile,time,urllib.request,threading
+from http.server import BaseHTTPRequestHandler,HTTPServer
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[1]
+def port():
+ with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]
+def main():
+ p=argparse.ArgumentParser(description=__doc__)
+ p.add_argument('--rust-root',type=Path,default=ROOT.parent/'once-campfire-rust')
+ p.add_argument('--out',type=Path,required=True)
+ p.add_argument('--only',default='auth/sign_in,auth/join,auth/incompatible_browser,rooms/show/designers,rooms/show/direct,rooms/show/empty,users/profile,users/show/administrator,search/results,account/edit,account/bots,account/custom_styles')
+ p.add_argument('--seed',default='default')
+ p.add_argument('--workers',default='4')
+ p.add_argument('--isolated',default='2')
+ p.add_argument('--viewports',default='desktop')
+ p.add_argument('--schemes',default='light')
+ a=p.parse_args();rust=a.rust_root.resolve();seed=rust/'parity/.seed'/a.seed;out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
+ env=os.environ.copy()
+ for line in (rust/'parity/.env.reference').read_text().splitlines():
+  if line and not line.startswith('#') and '=' in line:k,v=line.split('=',1);env[k]=v
+ labels=json.loads((seed/'labels.json').read_text());frozen=labels.get('clock.now','2024-06-01T12:00:00Z')
+ env.update(TMPDIR=str(ROOT/'.cache/tmp'),DISABLE_SSL='1',HTTP_PORT='0',TARGET_BIND='127.0.0.1',CAMPFIRE_FROZEN_TIME=frozen)
+ processes=[];logs=[];by_port={};folders={}
+ with tempfile.TemporaryDirectory(prefix='screens-',dir=ROOT/'.cache/tmp') as work:
+  try:
+   binaries={}
+   for app,source in [('rust',rust/'target/release/campfire'),('go',ROOT/'campfire')]:
+    destination=Path(work)/(app+'-binary');shutil.copy2(source,destination);binaries[app]=destination
+   (out/'metadata.json').write_text(json.dumps({'seed':a.seed,'frozen_time':frozen,'binary_sha256':{app:hashlib.sha256(binary.read_bytes()).hexdigest() for app,binary in binaries.items()}},indent=2)+'\n')
+   def start(app,target):
+    if target in by_port:
+     old=by_port[target];old.terminate()
+     try:old.wait(timeout=15)
+     except subprocess.TimeoutExpired:old.kill();old.wait()
+     shutil.rmtree(folders[target])
+    binary=binaries[app]
+    folder=Path(work)/f'{app}-{target}';folder.mkdir();folders[target]=folder;db=folder/'database.sqlite3'
+    with sqlite3.connect(f'file:{seed}/db/production.sqlite3?mode=ro',uri=True) as src,sqlite3.connect(db) as dst:src.backup(dst)
+    shutil.copytree(seed/'storage',folder/'files')
+    log=(out/f'{app}.log').open('a');logs.append(log)
+    proc=subprocess.Popen([str(binary),'server'],cwd=ROOT,env=env|dict(TARGET_PORT=str(target),CAMPFIRE_STORAGE_PATH=str(folder),CAMPFIRE_FILES_PATH=str(folder/'files'),CAMPFIRE_DATABASE_PATH=str(db)),stdout=log,stderr=subprocess.STDOUT);processes.append(proc);by_port[target]=proc
+    for _ in range(400):
+     if proc.poll() is not None:raise RuntimeError(f'{app} exited')
+     try:
+      with urllib.request.urlopen(f'http://127.0.0.1:{target}/up') as response:assert response.status==200
+      return
+     except OSError:time.sleep(.025)
+    raise RuntimeError('server did not start')
+   class Reset(BaseHTTPRequestHandler):
+    def log_message(self,*args):pass
+    def do_POST(self):
+     try:
+      target_name,target_port=self.path.strip('/').split('/')
+      if target_name not in ('expected','actual'):raise ValueError('unknown target')
+      start('rust' if target_name=='expected' else 'go',int(target_port))
+      self.send_response(200);self.end_headers()
+     except Exception as error:
+      self.send_response(500);self.end_headers();self.wfile.write(str(error).encode())
+   reset=HTTPServer(('127.0.0.1',0),Reset)
+   threading.Thread(target=reset.serve_forever,daemon=True).start()
+   # Observe rejection immediately, retaining the original promise so text() still
+   # fails the capture. The pinned harness otherwise aborts Node when a response
+   # finishes after its browser context closes, before text() can await it.
+   harness=Path(work)/'harness';shutil.copytree(rust/'parity/capture',harness/'capture')
+   for name in ['node_modules','package.json','screens.yml','allowlist.yml','seeds','.seed']:
+    (harness/name).symlink_to(rust/'parity'/name)
+   network=harness/'capture/network.ts';source=network.read_text()
+   old='page.on("response", (response) => this.pending.push({ key: `${response.request().method()} ${response.url()}`, entry: this.describe(response) }))'
+   new='page.on("response", (response) => { const entry = this.describe(response); entry.catch(() => {}); this.pending.push({ key: `${response.request().method()} ${response.url()}`, entry }) })'
+   assert old in source,'pinned network harness changed'
+   network.write_text(source.replace(old,new))
+   config=harness/'capture/config.ts';source=config.read_text()
+   source=source.replace('path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")',json.dumps(str(rust/'parity')))
+   config.write_text(source)
+   targets={}
+   for app in ('rust','go'):
+    target=port();targets[app]=f'http://127.0.0.1:{target}';start(app,target)
+   args=['node',str(harness/'capture/cli.ts'),'compare','--expected',targets['rust'],'--actual',targets['go'],'--out',str(out),'--only',a.only,'--seed',a.seed,'--time',frozen,'--engines','chromium','--viewports',a.viewports,'--schemes',a.schemes,'--breakpoints','exclude','--workers',a.workers,'--no-allowlist']
+   args += ['--isolated',a.isolated,'--reset',f'curl --silent --show-error --fail -X POST http://127.0.0.1:{reset.server_port}/'+'{target}/{port}']
+   try:return subprocess.call(args,cwd=rust/'parity',env=env)
+   finally:reset.shutdown();reset.server_close()
+  finally:
+   for proc in processes:proc.terminate()
+   for proc in processes:
+    try:proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:proc.kill();proc.wait()
+   for log in logs:log.close()
+if __name__=='__main__':raise SystemExit(main())

@@ -1,0 +1,452 @@
+[
+  {
+    "avg_bytes": 73,
+    "conc": 1,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 0.381,
+      "mean_ms": 0.02,
+      "n": 289963,
+      "p50_ms": 0.016,
+      "p90_ms": 0.017,
+      "p99_ms": 0.023
+    },
+    "ok": 289963,
+    "path": "/up",
+    "rps": 57991.7,
+    "secs": 5.0,
+    "statuses": {
+      "200": 289963
+    },
+    "app": "rust",
+    "rep": 1,
+    "startup_ms": 35.79349000938237,
+    "pss_after_warmup_kib": 42002
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 16,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 1.976,
+      "mean_ms": 0.05,
+      "n": 1719120,
+      "p50_ms": 0.045,
+      "p90_ms": 0.062,
+      "p99_ms": 0.084
+    },
+    "ok": 1719120,
+    "path": "/up",
+    "rps": 343801.8,
+    "secs": 5.0,
+    "statuses": {
+      "200": 1719120
+    },
+    "app": "rust",
+    "rep": 1,
+    "startup_ms": 35.79349000938237,
+    "pss_after_warmup_kib": 42002
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 64,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 30.495,
+      "mean_ms": 0.19,
+      "n": 1699587,
+      "p50_ms": 0.172,
+      "p90_ms": 0.273,
+      "p99_ms": 0.557
+    },
+    "ok": 1699587,
+    "path": "/up",
+    "rps": 339843.1,
+    "secs": 5.0,
+    "statuses": {
+      "200": 1699587
+    },
+    "app": "rust",
+    "rep": 1,
+    "startup_ms": 35.79349000938237,
+    "pss_after_warmup_kib": 42002
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 1,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 0.481,
+      "mean_ms": 0.01,
+      "n": 348463,
+      "p50_ms": 0.013,
+      "p90_ms": 0.015,
+      "p99_ms": 0.022
+    },
+    "ok": 348463,
+    "path": "/up",
+    "rps": 69691.7,
+    "secs": 5.0,
+    "statuses": {
+      "200": 348463
+    },
+    "app": "go",
+    "rep": 1,
+    "startup_ms": 183.32404602551833,
+    "pss_after_warmup_kib": 22682
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 16,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 2.895,
+      "mean_ms": 0.04,
+      "n": 2143751,
+      "p50_ms": 0.03,
+      "p90_ms": 0.062,
+      "p99_ms": 0.138
+    },
+    "ok": 2143751,
+    "path": "/up",
+    "rps": 428722.8,
+    "secs": 5.0,
+    "statuses": {
+      "200": 2143751
+    },
+    "app": "go",
+    "rep": 1,
+    "startup_ms": 183.32404602551833,
+    "pss_after_warmup_kib": 22682
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 64,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 3.171,
+      "mean_ms": 0.14,
+      "n": 2272524,
+      "p50_ms": 0.105,
+      "p90_ms": 0.291,
+      "p99_ms": 0.617
+    },
+    "ok": 2272524,
+    "path": "/up",
+    "rps": 454421.4,
+    "secs": 5.0,
+    "statuses": {
+      "200": 2272524
+    },
+    "app": "go",
+    "rep": 1,
+    "startup_ms": 183.32404602551833,
+    "pss_after_warmup_kib": 22682
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 1,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 0.903,
+      "mean_ms": 0.01,
+      "n": 342996,
+      "p50_ms": 0.013,
+      "p90_ms": 0.015,
+      "p99_ms": 0.023
+    },
+    "ok": 342996,
+    "path": "/up",
+    "rps": 68598.4,
+    "secs": 5.0,
+    "statuses": {
+      "200": 342996
+    },
+    "app": "go",
+    "rep": 2,
+    "startup_ms": 182.4948360444978,
+    "pss_after_warmup_kib": 20863
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 16,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 2.581,
+      "mean_ms": 0.04,
+      "n": 2086661,
+      "p50_ms": 0.031,
+      "p90_ms": 0.064,
+      "p99_ms": 0.144
+    },
+    "ok": 2086661,
+    "path": "/up",
+    "rps": 417305.6,
+    "secs": 5.0,
+    "statuses": {
+      "200": 2086661
+    },
+    "app": "go",
+    "rep": 2,
+    "startup_ms": 182.4948360444978,
+    "pss_after_warmup_kib": 20863
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 64,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 3.279,
+      "mean_ms": 0.14,
+      "n": 2255899,
+      "p50_ms": 0.104,
+      "p90_ms": 0.292,
+      "p99_ms": 0.66
+    },
+    "ok": 2255899,
+    "path": "/up",
+    "rps": 451095.8,
+    "secs": 5.0,
+    "statuses": {
+      "200": 2255899
+    },
+    "app": "go",
+    "rep": 2,
+    "startup_ms": 182.4948360444978,
+    "pss_after_warmup_kib": 20863
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 1,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 0.385,
+      "mean_ms": 0.02,
+      "n": 287030,
+      "p50_ms": 0.016,
+      "p90_ms": 0.017,
+      "p99_ms": 0.024
+    },
+    "ok": 287030,
+    "path": "/up",
+    "rps": 57405.1,
+    "secs": 5.0,
+    "statuses": {
+      "200": 287030
+    },
+    "app": "rust",
+    "rep": 2,
+    "startup_ms": 51.24650604557246,
+    "pss_after_warmup_kib": 41333
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 16,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 1.171,
+      "mean_ms": 0.05,
+      "n": 1715949,
+      "p50_ms": 0.045,
+      "p90_ms": 0.062,
+      "p99_ms": 0.085
+    },
+    "ok": 1715949,
+    "path": "/up",
+    "rps": 343168.3,
+    "secs": 5.0,
+    "statuses": {
+      "200": 1715949
+    },
+    "app": "rust",
+    "rep": 2,
+    "startup_ms": 51.24650604557246,
+    "pss_after_warmup_kib": 41333
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 64,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 2.663,
+      "mean_ms": 0.18,
+      "n": 1795494,
+      "p50_ms": 0.171,
+      "p90_ms": 0.265,
+      "p99_ms": 0.362
+    },
+    "ok": 1795494,
+    "path": "/up",
+    "rps": 359030.1,
+    "secs": 5.0,
+    "statuses": {
+      "200": 1795494
+    },
+    "app": "rust",
+    "rep": 2,
+    "startup_ms": 51.24650604557246,
+    "pss_after_warmup_kib": 41333
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 1,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 0.915,
+      "mean_ms": 0.02,
+      "n": 286982,
+      "p50_ms": 0.016,
+      "p90_ms": 0.017,
+      "p99_ms": 0.024
+    },
+    "ok": 286982,
+    "path": "/up",
+    "rps": 57395.7,
+    "secs": 5.0,
+    "statuses": {
+      "200": 286982
+    },
+    "app": "rust",
+    "rep": 3,
+    "startup_ms": 51.25132901594043,
+    "pss_after_warmup_kib": 41717
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 16,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 1.92,
+      "mean_ms": 0.05,
+      "n": 1704036,
+      "p50_ms": 0.046,
+      "p90_ms": 0.062,
+      "p99_ms": 0.086
+    },
+    "ok": 1704036,
+    "path": "/up",
+    "rps": 340788.5,
+    "secs": 5.0,
+    "statuses": {
+      "200": 1704036
+    },
+    "app": "rust",
+    "rep": 3,
+    "startup_ms": 51.25132901594043,
+    "pss_after_warmup_kib": 41717
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 64,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 2.529,
+      "mean_ms": 0.18,
+      "n": 1793218,
+      "p50_ms": 0.171,
+      "p90_ms": 0.265,
+      "p99_ms": 0.358
+    },
+    "ok": 1793218,
+    "path": "/up",
+    "rps": 358576.0,
+    "secs": 5.0,
+    "statuses": {
+      "200": 1793218
+    },
+    "app": "rust",
+    "rep": 3,
+    "startup_ms": 51.25132901594043,
+    "pss_after_warmup_kib": 41717
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 1,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 2.631,
+      "mean_ms": 0.01,
+      "n": 342646,
+      "p50_ms": 0.013,
+      "p90_ms": 0.015,
+      "p99_ms": 0.022
+    },
+    "ok": 342646,
+    "path": "/up",
+    "rps": 68528.4,
+    "secs": 5.0,
+    "statuses": {
+      "200": 342646
+    },
+    "app": "go",
+    "rep": 3,
+    "startup_ms": 182.77305702213198,
+    "pss_after_warmup_kib": 22464
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 16,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 2.301,
+      "mean_ms": 0.04,
+      "n": 2145599,
+      "p50_ms": 0.03,
+      "p90_ms": 0.062,
+      "p99_ms": 0.137
+    },
+    "ok": 2145599,
+    "path": "/up",
+    "rps": 429091.6,
+    "secs": 5.0,
+    "statuses": {
+      "200": 2145599
+    },
+    "app": "go",
+    "rep": 3,
+    "startup_ms": 182.77305702213198,
+    "pss_after_warmup_kib": 22464
+  },
+  {
+    "avg_bytes": 73,
+    "conc": 64,
+    "errors": 0,
+    "gzip": false,
+    "latency": {
+      "max_ms": 4.075,
+      "mean_ms": 0.14,
+      "n": 2269193,
+      "p50_ms": 0.104,
+      "p90_ms": 0.29,
+      "p99_ms": 0.654
+    },
+    "ok": 2269193,
+    "path": "/up",
+    "rps": 453756.3,
+    "secs": 5.0,
+    "statuses": {
+      "200": 2269193
+    },
+    "app": "go",
+    "rep": 3,
+    "startup_ms": 182.77305702213198,
+    "pss_after_warmup_kib": 22464
+  }
+]

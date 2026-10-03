@@ -1,0 +1,13 @@
+{
+  "build_commands": {
+    "go": "bin/build (go build -tags sqlite_fts5 -trimpath -o campfire ./cmd/campfire)",
+    "rust": "Existing pinned release binary, unchanged from original benchmark"
+  },
+  "scripts_sha256": {
+    "bench/application": "fc186ef0db59ec8debc8daaa3c9c91cd07831e05afc1bc0949cbce4e031d9019",
+    "bench/report": "9ce6591311a031b1ee685e579bbee16bf47efc727cc672d63ee63004dd19135a",
+    "bench/upload": "37e43d238f5432ef62fddd792326943db0df981cbf1688d4b7e017ed6b6529c1",
+    "bin/build": "a666aafd13e51a806caf180666337beb63995fee9a168362f17d8461168ab2e7",
+    "bin/check": "33dde1706f182bdd88858f17cf455619b9e26bcf628436a11b9d54e4c4252f7c"
+  }
+}

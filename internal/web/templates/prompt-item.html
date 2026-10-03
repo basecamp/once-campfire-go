@@ -1,0 +1,12 @@
+{{define "prompt-item"}}<lexxy-prompt-item search="{{.Mention.Name}}" sgid="{{.Mention.SGID}}">
+  <template type="menu">
+    <span class="autocomplete__item flex align-center gap unpad">
+      <a title="{{.Mention.Title}}" class="btn avatar" data-turbo-frame="_top" href="{{.Mention.Path}}"><img aria-hidden="true" src="{{.Mention.Avatar}}" width="48" height="48" /></a>
+      <span class="autocompletable__name">{{.Mention.Name}}</span>
+    </span>
+  </template>
+  <template type="editor">
+    {{.HTML}}
+  </template>
+</lexxy-prompt-item>
+{{end}}

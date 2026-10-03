@@ -1,0 +1,4 @@
+2026-10-02T13:37:32.132628Z  INFO campfire::app: open files limit=524288
+2026-10-02T13:37:32.139140Z  INFO campfire_kit::front: Server started http=:35787
+2026-10-02T13:37:49.166665Z  INFO campfire::app: shutting down
+2026-10-02T13:37:49.166718Z  INFO campfire_kit::front: Server stopped

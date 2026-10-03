@@ -1,0 +1,1 @@
+Aborted before measurement: the Rust baseline failed to bind a port. No samples were collected. The harness was corrected to select ports free on IPv4 and IPv6 and to clear inherited Thruster overrides. See the subsequent validated run.

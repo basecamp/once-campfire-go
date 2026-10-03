@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Compare identical /up bodies. This is not a whole-application benchmark."""
+import argparse
+import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import socket
+import sqlite3
+import statistics
+import subprocess
+import tempfile
+import time
+import urllib.request
+
+ROOT = Path(__file__).resolve().parents[1]
+EXPECTED = b'<!DOCTYPE html><html><body style="background-color: green"></body></html>'
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+def free_port():
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        sock.bind(('::', 0))
+        return sock.getsockname()[1]
+
+def output(*cmd, **kwargs):
+    return subprocess.check_output(cmd, text=True, **kwargs).strip()
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--rust-root', type=Path, default=ROOT.parent / 'once-campfire-rust')
+    parser.add_argument('--reps', type=int, default=3)
+    parser.add_argument('--seconds', type=float, default=5)
+    parser.add_argument('--concurrency', type=int, nargs='+', default=[1,16,64])
+    parser.add_argument('--server-cpus', default='8-11')
+    parser.add_argument('--loadgen-cpus', default='12-15')
+    parser.add_argument('--out', type=Path)
+    args = parser.parse_args()
+    if args.reps < 1 or args.seconds <= 0 or any(n < 1 for n in args.concurrency):
+        parser.error('repetitions, seconds and concurrency must be positive')
+    rust = args.rust_root.resolve()
+    binaries = {'go': ROOT/'campfire', 'rust': rust/'target/release/campfire'}
+    loadgen = rust/'target/bench/release/loadgen'
+    seed = rust/'parity/.seed/default/db/production.sqlite3'
+    for path in [*binaries.values(),loadgen,seed]:
+        if not path.is_file():
+            parser.error(f'missing {path}; build apps, loadgen and the reference seed first')
+    if output('git','-C',str(rust),'rev-parse','HEAD') != output('git','-C',str(ROOT/'reference'),'rev-parse','HEAD'):
+        parser.error('Rust checkout differs from the pinned reference')
+    out = args.out or ROOT/'bench/results'/datetime.datetime.now(datetime.timezone.utc).strftime('health-%Y%m%dT%H%M%SZ')
+    out = out.resolve()
+    out.mkdir(parents=True,exist_ok=False)
+    env = {k:v for k,v in os.environ.items() if not k.startswith(('THRUSTER_', 'CAMPFIRE_')) and k != 'TLS_DOMAIN'}
+    # Only reproducible, test-only configuration from the reference fixture.
+    for line in (rust/'parity/.env.reference').read_text().splitlines():
+        if line and not line.startswith('#') and '=' in line:
+            k,v=line.split('=',1);env[k]=v
+    env.update(DISABLE_SSL='true',TARGET_BIND='127.0.0.1',GOMAXPROCS='4',TOKIO_WORKER_THREADS='4',RAILS_MAX_THREADS='4')
+    metadata = dict(scope='identical /up handler only; app listeners, identity encoding, no TLS/front cache',
+        time=datetime.datetime.now(datetime.timezone.utc).isoformat(),host=platform.platform(),
+        cpu=output('lscpu'),rust_commit=output('git','-C',str(rust),'rev-parse','HEAD'),
+        go_version=output('mise','exec','go@1.27.1','--','go','version'),
+        rust_version=output('mise','exec','rust@1.98.1','--','rustc','--version'),
+        binaries={k:dict(path=str(v),sha256=sha(v),bytes=v.stat().st_size) for k,v in binaries.items()},
+        go_sources_sha256={str(p.relative_to(ROOT)):sha(p) for folder in ('cmd','internal','assets') for p in sorted((ROOT/folder).rglob('*')) if p.is_file()} | {name:sha(ROOT/name) for name in ('go.mod','go.sum','bin/build')},
+        loadgen_sha256=sha(loadgen),seed_sha256=sha(seed),settings=vars(args)|{'rust_root':str(rust),'out':str(out)},
+        body_sha256=hashlib.sha256(EXPECTED).hexdigest(),load_before=Path('/proc/loadavg').read_text().strip())
+    (out/'metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
+    results=[]
+    work=ROOT/'bench/.work';work.mkdir(exist_ok=True)
+    for rep in range(1,args.reps+1):
+        for name in (['rust','go'] if rep%2 else ['go','rust']):
+            with tempfile.TemporaryDirectory(prefix=f'{name}-{rep}-',dir=work) as tmp:
+                path=Path(tmp)/'database.sqlite3'
+                with sqlite3.connect(f'file:{seed}?mode=ro',uri=True) as src,sqlite3.connect(path) as dst: src.backup(dst)
+                port,front=free_port(),free_port()
+                if port==front: front=free_port()
+                runenv=env|dict(CAMPFIRE_DATABASE_PATH=str(path),CAMPFIRE_STORAGE_PATH=str(Path(tmp)/'storage'),TARGET_PORT=str(port),HTTP_PORT=str(front))
+                base=f'http://127.0.0.1:{port}'
+                start=time.monotonic()
+                with (out/f'{name}-{rep}.log').open('w') as log:
+                    proc=subprocess.Popen(['taskset','-c',args.server_cpus,str(binaries[name]),'server'],cwd=ROOT,env=runenv,stdout=log,stderr=subprocess.STDOUT)
+                    try:
+                        deadline=time.monotonic()+30
+                        while True:
+                            if proc.poll() is not None: raise RuntimeError(f'{name} exited: see {log.name}')
+                            try:
+                                request=urllib.request.Request(base+'/up',headers={'Accept-Encoding':'identity'})
+                                with urllib.request.urlopen(request,timeout=1) as response:
+                                    if response.status!=200 or response.read()!=EXPECTED: raise RuntimeError('health response mismatch')
+                                break
+                            except (OSError,TimeoutError):
+                                if time.monotonic()>deadline: raise RuntimeError(f'{name} startup timed out')
+                                time.sleep(.02)
+                        startup_ms=(time.monotonic()-start)*1000
+                        def load(concurrency,seconds):
+                            row=json.loads(output('taskset','-c',args.loadgen_cpus,str(loadgen),'http','--base',base,'--path','/up','--gzip','0','--conc',str(concurrency),'--duration',str(seconds)))
+                            if row['errors'] or set(row['statuses'])!={'200'} or row['avg_bytes']!=len(EXPECTED):
+                                raise RuntimeError(f'invalid benchmark responses: {row}')
+                            return row
+                        load(4,2)
+                        pss=None
+                        for line in Path(f'/proc/{proc.pid}/smaps_rollup').read_text().splitlines():
+                            if line.startswith('Pss:'):pss=int(line.split()[1])
+                        for concurrency in args.concurrency:
+                            row=load(concurrency,args.seconds)
+                            row.update(app=name,rep=rep,startup_ms=startup_ms,pss_after_warmup_kib=pss)
+                            results.append(row)
+                            (out/'raw.json').write_text(json.dumps(results,indent=2)+'\n')
+                            print(f"{name} rep={rep} c={concurrency}: {row['rps']:,.0f} req/s p99={row['latency']['p99_ms']} ms",flush=True)
+                    finally:
+                        proc.terminate()
+                        try:proc.wait(timeout=10)
+                        except subprocess.TimeoutExpired:proc.kill();proc.wait()
+    report=['# Go vs Rust: health endpoint only','',
+        '**This is not an application performance comparison.** The Go port is incomplete. Room pages, messages, search, media and Cable have not passed parity; no speed claim about those workloads follows from this report.','',
+        f"Rust `{metadata['rust_commit']}`, Go 1.27.1. Native release binaries on {platform.node()}, four pinned hardware threads ({args.server_cpus}); load generator on {args.loadgen_cpus}. Each repetition uses a fresh SQLite backup of the same seed. Apps run sequentially in alternating order. Two-second warmup, {args.seconds:g}-second samples, {args.reps} repetitions. HTTP/1.1 keep-alive, identity encoding, direct application listeners. Both bodies are byte-identical ({len(EXPECTED)} bytes), with status 200 and zero transport errors in every sample.",'',
+        '| Clients | Rust req/s, median [min–max] | Go req/s, median [min–max] | Go / Rust | Rust p99 ms, median | Go p99 ms, median |',
+        '|---:|---:|---:|---:|---:|---:|']
+    for concurrency in args.concurrency:
+        groups={name:[r for r in results if r['app']==name and r['conc']==concurrency] for name in binaries}
+        rates={name:[r['rps'] for r in group] for name,group in groups.items()}
+        rate=lambda name:f"{statistics.median(rates[name]):,.0f} [{min(rates[name]):,.0f}–{max(rates[name]):,.0f}]"
+        latency=lambda name:statistics.median(r['latency']['p99_ms'] for r in groups[name])
+        report.append(f"| {concurrency} | {rate('rust')} | {rate('go')} | {statistics.median(rates['go'])/statistics.median(rates['rust']):.2f}× | {latency('rust'):.3f} | {latency('go'):.3f} |")
+    report+=['','Raw samples are in `raw.json`; CPU topology, binary hashes/sizes, toolchains, seed hash, load average and settings are in `metadata.json`. Startup and Pss are recorded for diagnostics only: the apps currently initialize different feature sets, so those values are not comparable as full application footprints. Rust also starts its unused front listener. The load generator validates status and average body length throughout, and the harness checks exact body bytes before every sample group. This is a workstation measurement; background load is not controlled.','']
+    (out/'report.md').write_text('\n'.join(report))
+    print(out/'report.md')
+
+if __name__=='__main__':main()

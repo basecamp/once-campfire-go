@@ -1,0 +1,1 @@
+PASS: ACME challenge validation, certificate issuance, HTTPS serving, and cached restart with the CA offline.

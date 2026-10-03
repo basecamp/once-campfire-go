@@ -1,0 +1,51 @@
+{{define "edit-message"}}{{template "layout-start" .}}{{range .Messages}}
+
+<turbo-frame id="edit_message_{{.ClientID}}">
+  <div class="message__body position-relative" data-controller="scroll-into-view">
+    <div class="message__body-content message__body-content--editing gap">
+      {{if .Attachment}}
+        {{.HTML}}
+
+        <div class="message__edit-btns flex align-center justify-space-between gap full-width pad-block-start-half">
+          <button name="button" type="submit" class="btn btn--negative center margin-block-end" form="delete_form_message_{{.ClientID}}" data-turbo-confirm="Are you sure you want to delete this message?">
+            <img aria-hidden="true" src="{{asset "trash.svg"}}" />
+            <span class="for-screen-reader">Delete message</span>
+</button>        </div>
+      {{else}}
+        <div class="composer--edit composer--rich-text">
+          <form id="form_message_{{.ClientID}}" data-controller="form" data-action="lexxy:file-accept-&gt;form#preventAttachment keydown.esc-&gt;form#cancel keydown.ctrl+enter-&gt;form#submit:prevent keydown.meta+enter-&gt;form#submit:prevent" action="/rooms/{{.RoomID}}/messages/{{.ID}}" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="patch" />
+            <div class="full-width input input--actor min-width fill-white">
+              <lexxy-editor rows="1" class="input lexxy-content" aria-multiline="true" aria-label="Edit message" autofocus="autofocus" permitted-attachment-types="application/vnd.campfire.mention application/vnd.actiontext.opengraph-embed" data-action="lexxy:change-&gt;typing-notifications#start keydown-&gt;composer#submitByKeyboard:capture" data-direct-upload-url="/rails/active_storage/direct_uploads" data-blob-url-template="/rails/active_storage/blobs/redirect/:signed_id/:filename" id="message_body" input="message_body_trix_input_{{.ClientID}}" name="message[body]" value="{{.Editable}}">
+                <lexxy-prompt trigger="@" name="mention" src="/autocompletable/users?room_id={{.RoomID}}" remote-filtering="true" empty-results="No matches"></lexxy-prompt>
+</lexxy-editor>            </div>
+
+            <a data-form-target="cancel" hidden="hidden" href="/rooms/{{.RoomID}}/messages/{{.ID}}">Close editor and discard changes</a>
+
+            <div class="message__edit-btns flex align-center justify-space-between gap full-width pad-block-start-half">
+              <button name="button" type="submit" class="btn btn--reversed">
+                <img aria-hidden="true" src="{{asset "check.svg"}}" />
+                <span class="for-screen-reader">Save changes</span>
+</button>
+              <button name="button" type="submit" class="btn btn--negative" form="delete_form_message_{{.ClientID}}" data-turbo-confirm="Are you sure you want to delete this message?">
+                <img aria-hidden="true" src="{{asset "trash.svg"}}" />
+                <span class="for-screen-reader">Delete message</span>
+</button>            </div>
+</form>        </div>
+      {{end}}
+    </div>
+
+    <div class="message__actions flex flex-wrap">
+      <a class="message__action-btn message__edit-close-btn txt-small btn btn--borderless" href="/rooms/{{.RoomID}}/messages/{{.ID}}">
+        <img class="colorize--black" aria-hidden="true" src="{{asset "remove.svg"}}" />
+        <span class="for-screen-reader">Close editor and discard changes</span>
+</a>    </div>
+
+    <form id="delete_form_message_{{.ClientID}}" data-turbo-frame="edit_message_{{.ClientID}}" action="/rooms/{{.RoomID}}/messages/{{.ID}}" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="delete" /></form>
+  </div>
+</turbo-frame>
+{{end}}{{template "layout-end" .}}{{end}}
+{{define "new-boost"}}{{template "layout-start" .}}{{$user := .User}}{{range .Messages}}<turbo-frame id="new_boost_message_{{.ClientID}}"><div class="boost flex-inline postion--relative max-width fill-white" style="--column-gap: var(--inline-space-half)"><form class="boost__form flex align-center gap expanded" data-controller="form scroll-into-view" data-turbo-frame="boosting_message_{{.ClientID}}" data-action="keydown.esc-&gt;form#cancel" action="/messages/{{.ID}}/boosts" accept-charset="UTF-8" method="post"><label class="boost__form-label flex gap" style="--column-gap: 0.7ch;" role="button" tabindex="0" aria-label="Add a boost"><figure class="avatar boost__avatar flex-item-no-shrink"><a title="{{$user.Name}}" class="btn avatar" data-turbo-frame="_top" href="/users/{{$user.ID}}"><img aria-hidden="true" src="{{avatar $user.ID $user.UpdatedAt}}" width="48" height="48"></a><span class="for-screen-reader">{{$user.Name}}</span></figure><input autofocus="autofocus" autocomplete="off" autocorrect="off" maxlength="16" required="required" pattern="\S+.*" data-boost-form-target="input" class="input input--boost txt-small" size="16" type="text" name="boost[content]"></label><button name="button" type="submit" class="btn btn--reversed"><img aria-hidden="true" src="{{asset "check.svg"}}"><span class="for-screen-reader">Submit</span></button><a data-turbo-frame="boosts_message_{{.ClientID}}" data-form-target="cancel" class="btn btn--negative" href="/messages/{{.ID}}/boosts"><img aria-hidden="true" src="{{asset "minus.svg"}}"><span class="for-screen-reader">Cancel</span></a></form></div></turbo-frame>{{end}}{{template "layout-end" .}}{{end}}
+
+{{define "boosts-index"}}{{template "layout-start" .}}{{range .Messages}}{{template "boosts" .}}{{end}}{{template "layout-end" .}}{{end}}
+
+{{define "room-not-found"}}{{template "layout-start" .}}<turbo-frame id="composer-frame"><span class="composer__input input input--actor shake margin-block-end txt-negative txt-align-center" style="--input-border-color: var(--color-negative)"><span>This room was deleted.</span></span></turbo-frame>{{template "layout-end" .}}{{end}}

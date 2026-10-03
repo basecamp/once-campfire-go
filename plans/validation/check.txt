@@ -1,0 +1,17 @@
+Compiled 315 assets and 89 imports
+?   	github.com/basecamp/once-campfire-go/assets	[no test files]
+?   	github.com/basecamp/once-campfire-go/cmd/campfire	[no test files]
+ok  	github.com/basecamp/once-campfire-go/internal/cable	1.031s
+ok  	github.com/basecamp/once-campfire-go/internal/database	1.093s
+ok  	github.com/basecamp/once-campfire-go/internal/front	1.042s
+?   	github.com/basecamp/once-campfire-go/internal/html	[no test files]
+ok  	github.com/basecamp/once-campfire-go/internal/httpcompat	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/integrations	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/jobs	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/qrcode	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/rails	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/richtext	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/storage	1.643s
+ok  	github.com/basecamp/once-campfire-go/internal/useragent	(cached)
+ok  	github.com/basecamp/once-campfire-go/internal/web	43.359s
+ok  	github.com/basecamp/once-campfire-go/internal/zstd	(cached)

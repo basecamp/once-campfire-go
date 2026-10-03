@@ -1,0 +1,12 @@
+--- rust
+
++++ go
+
+@@ -27,6 +27,4 @@
+
+ {"channel":"TypingNotificationsChannel","room_id":699448326}: confirmed
+   > {"action":"start"}
+   > {"action":"stop"}
+-  < {"action":"start","user":{"id":127326141,"name":"David"}}
+-  < {"action":"stop","user":{"id":127326141,"name":"David"}}
+ {"channel":"UnreadRoomsChannel"}: confirmed

@@ -1,0 +1,24 @@
+--- rust
+
++++ go
+
+@@ -219,7 +219,7 @@
+
+                   </div>
+                 </details>
+                 <label class="flex align-center gap input input--actor txt-large">
+-                  <input autocomplete="username" autofocus="autofocus" class="input" id="email_address" name="email_address" placeholder="Enter your email address" required="required" type="email">
++                  <input autocomplete="username" autofocus="autofocus" class="input" id="email_address" name="email_address" placeholder="Enter your email address" required="required" type="email" value>
+                   <img aria-hidden="true" class="colorize--black" height="24" src="/assets/email-«digest».svg" width="24">
+                 </label>
+               </div>
+@@ -279,7 +279,7 @@
+
+                   </div>
+                 </details>
+                 <label class="flex align-center gap input input--actor txt-large">
+-                  <input autocomplete="current-password" class="input" id="password" maxlength="72" name="password" placeholder="Enter your password" required="required" size="72" type="password">
++                  <input autocomplete="current-password" class="input" id="password" maxlength="72" name="password" placeholder="Enter your password" required="required" type="password">
+                   <img aria-hidden="true" class="colorize--black" height="24" src="/assets/password-«digest».svg" width="24">
+                 </label>
+               </div>

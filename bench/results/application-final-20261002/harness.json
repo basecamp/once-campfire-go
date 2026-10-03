@@ -1,0 +1,63 @@
+{
+  "sha256": {
+    "bench/application": "fc50a47f3ac3a3e435ef53bbba53ed32b7a9f958b55f49521d19389544639b12",
+    "bench/report": "b3b1a926187a2455b471c7aadf39d4918a4e0e032d1381e5232c90a3daaabf60",
+    "bench/upload": "37e43d238f5432ef62fddd792326943db0df981cbf1688d4b7e017ed6b6529c1",
+    "bin/build": "a666aafd13e51a806caf180666337beb63995fee9a168362f17d8461168ab2e7"
+  },
+  "go_build": "CGO_ENABLED=1 go build -tags sqlite_fts5 -trimpath -o campfire ./cmd/campfire",
+  "rust_build": "cargo build --release; release profile lto=fat, codegen-units=1",
+  "native_binary_note": "Native benchmark binary sizes include the symbols emitted by these commands. The production Go image uses -ldflags=-s -w.",
+  "report_sha256_at_measurement": "db9e8eb90f27d6e186567076c2471a6d4f032a0d0b34bdefa375abd7c89ac31b",
+  "report_note": "Presenter updated after measurement to show fractional Cable rates, response sizes and validation totals; runner and upload scripts unchanged.",
+  "archived_logs": {
+    "rust-1.log": {
+      "uncompressed_sha256": "43a23db95fb7f6e7f35a6464fdaf4b1f1d086ca91c9c43878f330507b52bcccf",
+      "bytes": 13635556
+    },
+    "rust-1-loadgen.log": {
+      "uncompressed_sha256": "f05ddeb4e9d06272e254595d7d4f6cd9bf8dc5fa90851457dd763947808be4d3",
+      "bytes": 1488
+    },
+    "go-1.log": {
+      "uncompressed_sha256": "923be0a1472854aa1874869b69bbf336f1f46b3415a20162ff02894737d94a0f",
+      "bytes": 326
+    },
+    "go-1-loadgen.log": {
+      "uncompressed_sha256": "d2ad0232d10b24b4a1f9140fc9e631af3cc136fee74e9b0cebf2ec5ce6b76a3d",
+      "bytes": 1488
+    },
+    "go-2.log": {
+      "uncompressed_sha256": "acbc6a284b5e84b0d43af3855f4a5467e91198cbc88becb3ecd3426270ecf57e",
+      "bytes": 326
+    },
+    "go-2-loadgen.log": {
+      "uncompressed_sha256": "92ea672aa63df79ebc31ea389531c524d9891de8c3dfc76f5f8f1f694e21fec1",
+      "bytes": 1488
+    },
+    "rust-2.log": {
+      "uncompressed_sha256": "b5a704ed3cf4d1cb23cfe6d5153ea033bbc6ad55044c0cd7a26192ffa7f4a235",
+      "bytes": 13531045
+    },
+    "rust-2-loadgen.log": {
+      "uncompressed_sha256": "d431182e945bda177a488fd4003d2150034c6d256da415233457ee110e7b1dcf",
+      "bytes": 1488
+    },
+    "rust-3.log": {
+      "uncompressed_sha256": "a257d9d432cb74a0b27deb9096d0a98e0582b998c94908b97f92627c034cd6a8",
+      "bytes": 13627618
+    },
+    "rust-3-loadgen.log": {
+      "uncompressed_sha256": "d708d3a18afd13b4f5f5183fc400f54d165f697c20bdf54349cc7dd6512488cf",
+      "bytes": 1488
+    },
+    "go-3.log": {
+      "uncompressed_sha256": "6878a69b153bc559dff20b3ff78979518336b60750c35cfab8321cbf395d6ec1",
+      "bytes": 326
+    },
+    "go-3-loadgen.log": {
+      "uncompressed_sha256": "368b4b222125a845515e6ab91d9fe8fbeb7c165da2bc156494a5fcd0fcf94bdc",
+      "bytes": 1488
+    }
+  }
+}

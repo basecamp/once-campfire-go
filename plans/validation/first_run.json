@@ -1,0 +1,215 @@
+{
+  "info": {
+    "title": "Parity report",
+    "expected": "expected http://127.0.0.1:45659",
+    "actual": "actual http://127.0.0.1:41861",
+    "startedAt": "2026-10-02T19:49:03.710Z",
+    "durationMs": 17502,
+    "unusedAllowlist": [],
+    "counts": {
+      "pass": 0,
+      "fail": 4,
+      "allowed": 0,
+      "error": 0
+    },
+    "flaky": 0,
+    "masks": {
+      "auth/first_run/completed": [
+        "«join_code»: #invite_url [value] ~ //join/([^/?#]+)$/",
+        "pixels: #invite_url",
+        "pixels: a[href^='/qr_code/']"
+      ]
+    }
+  },
+  "results": [
+    {
+      "state": "auth/first_run",
+      "cell": "chromium-desktop-light",
+      "status": "fail",
+      "layers": [
+        {
+          "layer": "pixels",
+          "equal": true,
+          "pixels": {
+            "equal": true,
+            "width": 1440,
+            "height": 900
+          }
+        },
+        {
+          "layer": "server",
+          "equal": false,
+          "added": 4,
+          "removed": 4
+        },
+        {
+          "layer": "live",
+          "equal": false,
+          "added": 2,
+          "removed": 2
+        },
+        {
+          "layer": "aria",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        },
+        {
+          "layer": "network",
+          "equal": false,
+          "added": 134,
+          "removed": 134
+        },
+        {
+          "layer": "cable",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        }
+      ]
+    },
+    {
+      "state": "auth/first_run/from_sign_in",
+      "cell": "chromium-desktop-light",
+      "status": "fail",
+      "layers": [
+        {
+          "layer": "pixels",
+          "equal": true,
+          "pixels": {
+            "equal": true,
+            "width": 1440,
+            "height": 900
+          }
+        },
+        {
+          "layer": "server",
+          "equal": false,
+          "added": 4,
+          "removed": 4
+        },
+        {
+          "layer": "live",
+          "equal": false,
+          "added": 2,
+          "removed": 2
+        },
+        {
+          "layer": "aria",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        },
+        {
+          "layer": "network",
+          "equal": false,
+          "added": 135,
+          "removed": 135
+        },
+        {
+          "layer": "cable",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        }
+      ]
+    },
+    {
+      "state": "auth/first_run/filled",
+      "cell": "chromium-desktop-light",
+      "status": "fail",
+      "layers": [
+        {
+          "layer": "pixels",
+          "equal": true,
+          "pixels": {
+            "equal": true,
+            "width": 1440,
+            "height": 900
+          }
+        },
+        {
+          "layer": "server",
+          "equal": false,
+          "added": 4,
+          "removed": 4
+        },
+        {
+          "layer": "live",
+          "equal": false,
+          "added": 2,
+          "removed": 2
+        },
+        {
+          "layer": "aria",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        },
+        {
+          "layer": "network",
+          "equal": false,
+          "added": 134,
+          "removed": 134
+        },
+        {
+          "layer": "cable",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        }
+      ]
+    },
+    {
+      "state": "auth/first_run/completed",
+      "cell": "chromium-desktop-light",
+      "status": "fail",
+      "layers": [
+        {
+          "layer": "pixels",
+          "equal": true,
+          "pixels": {
+            "equal": true,
+            "width": 1440,
+            "height": 900
+          }
+        },
+        {
+          "layer": "server",
+          "equal": false,
+          "added": 4,
+          "removed": 4
+        },
+        {
+          "layer": "live",
+          "equal": false,
+          "added": 4,
+          "removed": 4
+        },
+        {
+          "layer": "aria",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        },
+        {
+          "layer": "network",
+          "equal": false,
+          "added": 166,
+          "removed": 166
+        },
+        {
+          "layer": "cable",
+          "equal": true,
+          "added": 0,
+          "removed": 0
+        }
+      ],
+      "masks": [
+        "«join_code»: #invite_url [value] ~ //join/([^/?#]+)$/",
+        "pixels: #invite_url",
+        "pixels: a[href^='/qr_code/']"
+      ]
+    }
+  ]
+}

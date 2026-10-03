@@ -1,0 +1,9 @@
+/campfire
+/storage/
+/bench/.work/
+
+/.cache/
+
+/assets/generated/
+
+__pycache__/
