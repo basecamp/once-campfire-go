@@ -45,6 +45,7 @@ type Server struct {
 	Secure     bool
 	mux        *router
 	templates  *template.Template
+	renderer   *messageRenderer
 	attemptsMu sync.Mutex
 	attempts   map[string]attempt
 	dummyHash  []byte
@@ -140,7 +141,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 	// Same cost-12 dummy digest as reference/crates/db/src/models/user.rs.
 	// Unknown-user login still pays bcrypt; startup need not create a new hash.
 	hash := []byte("$2a$12$FiKmSp4UhLvSB4Sd/ZUjQunyKP6.NjDRHdr5LnKUVk.BUn4Mq12WS")
-	t, err := parseTemplates(secrets)
+	t, renderer, err := parseTemplates(secrets)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +152,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 			return nil, fmt.Errorf("invalid CAMPFIRE_FRAGMENT_CACHE_MB %q", raw)
 		}
 	}
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, renderer: renderer, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]

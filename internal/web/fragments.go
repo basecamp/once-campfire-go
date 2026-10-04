@@ -112,6 +112,10 @@ func (s *Server) messageItems(ctx context.Context, messages []database.Message) 
 			hydrated[message.ID] = message
 		}
 	}
+	// Render the uncached messages together so their rooms, creators, boosts and
+	// attachments are loaded once for all of them.
+	var render []database.Message
+	var positions []int
 	for i, m := range messages {
 		if views[i].Fragment != "" {
 			continue
@@ -124,12 +128,17 @@ func (s *Server) messageItems(ctx context.Context, messages []database.Message) 
 				continue
 			}
 		}
-
-		rendered, err := s.messageViews(ctx, []database.Message{m})
+		render = append(render, m)
+		positions = append(positions, i)
+	}
+	if len(render) > 0 {
+		rendered, err := s.messageViews(ctx, render)
 		if err != nil {
 			return nil, err
 		}
-		views[i] = rendered[0]
+		for j, i := range positions {
+			views[i] = rendered[j]
+		}
 	}
 	return views, nil
 }

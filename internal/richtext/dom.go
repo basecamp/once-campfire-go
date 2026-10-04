@@ -95,12 +95,14 @@ func inner(n *xhtml.Node, markup string) error {
 
 var voidTags = words("area base br col embed hr img input link meta param source track wbr")
 
-func escapeText(s string) string {
-	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\u00a0", "&nbsp;").Replace(s)
-}
-func escapeAttr(s string) string {
-	return strings.NewReplacer("&", "&amp;", "\"", "&quot;", "\u00a0", "&nbsp;").Replace(s)
-}
+var (
+	textEscaper      = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\u00a0", "&nbsp;")
+	attributeEscaper = strings.NewReplacer("&", "&amp;", "\"", "&quot;", "\u00a0", "&nbsp;")
+	angleEscaper     = strings.NewReplacer("<", "&lt;", ">", "&gt;")
+)
+
+func escapeText(s string) string { return textEscaper.Replace(s) }
+func escapeAttr(s string) string { return attributeEscaper.Replace(s) }
 func serialize(n *xhtml.Node) string {
 	var b strings.Builder
 	serializeTo(&b, n, false, false)
@@ -130,7 +132,7 @@ func serializeTo(b *strings.Builder, n *xhtml.Node, raw, attributeAngles bool) {
 			b.WriteString(`="`)
 			value := escapeAttr(a.Val)
 			if attributeAngles {
-				value = strings.NewReplacer("<", "&lt;", ">", "&gt;").Replace(value)
+				value = angleEscaper.Replace(value)
 			}
 			b.WriteString(value)
 			b.WriteByte('"')
@@ -144,7 +146,9 @@ func serializeTo(b *strings.Builder, n *xhtml.Node, raw, attributeAngles bool) {
 		serializeTo(b, c, n.Namespace == "" && rawTags[n.Data], attributeAngles)
 	}
 	if n.Type == xhtml.ElementNode {
-		b.WriteString("</" + n.Data + ">")
+		b.WriteString("</")
+		b.WriteString(n.Data)
+		b.WriteByte('>')
 	}
 }
 func words(s string) map[string]bool {

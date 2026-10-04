@@ -1302,9 +1302,15 @@ func NewTokenizer(r io.Reader) *Tokenizer {
 //
 // The input is assumed to be UTF-8 encoded.
 func NewTokenizerFragment(r io.Reader, contextTag string) *Tokenizer {
+	// Campfire parses many short message bodies; size the buffer to a known input
+	// (it grows as needed) rather than allocating 4 KiB for each.
+	size := 4096
+	if s, ok := r.(*strings.Reader); ok && s.Len() < size {
+		size = max(s.Len()+1, 64)
+	}
 	z := &Tokenizer{
 		r:         r,
-		buf:       make([]byte, 0, 4096),
+		buf:       make([]byte, 0, size),
 		attrNames: make(map[string]bool),
 	}
 	if contextTag != "" {

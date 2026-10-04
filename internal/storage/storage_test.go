@@ -3,12 +3,14 @@ package storage
 import (
 	"context"
 	"crypto/md5"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -194,5 +196,48 @@ func TestRepresentationURLIncludesDefaultFormat(t *testing.T) {
 	raw, err := variation.MarshalJSON()
 	if err != nil || string(raw) != `{"format":"jpg","resize_to_limit":[1200,800]}` {
 		t.Fatalf("signed transformations: %s, %v", raw, err)
+	}
+}
+
+func TestAttachedManyMatchesAttached(t *testing.T) {
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, "test.sqlite3"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	secrets, err := rails.NewSecrets("attached-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := New(db, secrets, root)
+	ctx := context.Background()
+	blob := func(name string) int64 {
+		b, err := store.Create(ctx, Blob{Filename: name, ByteSize: 1, Checksum: "x"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b.ID
+	}
+	attach := func(record int64, name string, blob int64) {
+		if _, err := db.Write.Exec("INSERT INTO active_storage_attachments(blob_id,record_type,record_id,name,created_at) VALUES (?,'Message',?,?,'2026-01-01 00:00:00.000000')", blob, record, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attach(1, "attachment", blob("one.txt"))
+	attach(2, "attachment", blob("first.txt"))
+	attach(2, "attachment", blob("second.txt"))
+	attach(3, "avatar", blob("other-name.txt"))
+	records := []int64{1, 2, 3, 4}
+	many, err := store.AttachedMany(ctx, "Message", records, "attachment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		one, err := store.Attached(ctx, "Message", record, "attachment")
+		batched, found := many[record]
+		if errors.Is(err, sql.ErrNoRows) != !found || found && !reflect.DeepEqual(batched, one) {
+			t.Fatalf("record %d: %+v %v, Attached %+v %v", record, batched, found, one, err)
+		}
 	}
 }

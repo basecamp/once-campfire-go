@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -229,5 +230,44 @@ func TestRoomMembersByRoomMatchesEachRoom(t *testing.T) {
 	}
 	if len(byRoom[999999]) != 0 {
 		t.Fatal("members for a missing room")
+	}
+}
+
+func TestBoostsByMessageMatchesBoosts(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	owner, err := d.Setup(ctx, "Owner", "owner@test", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	room, err := d.CreateRoom(ctx, owner.ID, "Rooms::Open", "Room", []int64{owner.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var messages []int64
+	for i := range 3 {
+		m, err := d.CreateMessage(ctx, owner.ID, room.ID, "", "body", "body")
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages = append(messages, m.ID)
+		for j := range i * 2 {
+			if _, err := d.CreateBoost(ctx, owner.ID, m.ID, string(rune('a'+j))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	byMessage, err := d.BoostsByMessage(ctx, append(messages, 999999))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range messages {
+		expected, err := d.Boosts(ctx, message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if actual := byMessage[message]; len(actual) != len(expected) || len(expected) > 0 && !reflect.DeepEqual(actual, expected) {
+			t.Fatalf("message %d: %+v, expected %+v", message, actual, expected)
+		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"html/template"
 	"net/mail"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,7 +23,17 @@ type reaction struct{ Character, Title string }
 
 var reactions = []reaction{{"👍", "Thumbs up"}, {"👏", "Clapping"}, {"👋", "Waving hand"}, {"💪", "Muscle"}, {"❤️", "Red heart"}, {"😂", "Face with tears of joy"}, {"🎉", "Party popper"}, {"🔥", "Fire"}}
 
-func parseTemplates(secrets *rails.Secrets) (*template.Template, error) {
+func avatarPath(secrets *rails.Secrets, id int64, updated time.Time) string {
+	path := "/users/" + secrets.SignedID("User", id, "avatar", time.Time{}) + "/avatar"
+	if !updated.IsZero() {
+		path += "?v=" + updated.UTC().Format("20060102150405")
+	}
+	return path
+}
+func epochMillis(t time.Time) string { return strconv.FormatInt(t.UnixMilli(), 10) }
+func isoTime(t time.Time) string     { return t.UTC().Format("2006-01-02T15:04:05.000Z") }
+
+func parseTemplates(secrets *rails.Secrets) (*template.Template, *messageRenderer, error) {
 	var quickBoosts *quickBoostForms
 	t, err := template.New("pages").Funcs(template.FuncMap{
 		"quickBoosts": func(clientID string, id int64) template.HTML { return quickBoosts.render(clientID, id) },
@@ -68,23 +79,22 @@ func parseTemplates(secrets *rails.Secrets) (*template.Template, error) {
 		"stylesheets": func() template.HTML { return assets.Stylesheets },
 		"importmap":   func() template.HTML { return assets.Importmap },
 		"avatar": func(id int64, updated ...time.Time) string {
-			token := secrets.SignedID("User", id, "avatar", time.Time{})
-			path := fmt.Sprintf("/users/%s/avatar", token)
-			if len(updated) > 0 && !updated[0].IsZero() {
-				path += "?v=" + updated[0].UTC().Format("20060102150405")
+			var version time.Time
+			if len(updated) > 0 {
+				version = updated[0]
 			}
-			return path
+			return avatarPath(secrets, id, version)
 		},
 		"versionTime": func(t time.Time) string { return t.UTC().Format("20060102150405") },
-		"epoch":       func(t time.Time) string { return fmt.Sprintf("%d", t.UnixMilli()) },
-		"iso":         func(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000Z") },
+		"epoch":       epochMillis,
+		"iso":         isoTime,
 		"reactions":   func() []reaction { return reactions },
 	}).ParseFS(templateFiles, "templates/*.html")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if quickBoosts, err = compileQuickBoosts(t); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return t, nil
+	return t, newMessageRenderer(secrets, quickBoosts), nil
 }
