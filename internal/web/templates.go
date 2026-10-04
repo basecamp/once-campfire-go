@@ -34,9 +34,10 @@ func epochMillis(t time.Time) string { return strconv.FormatInt(t.UnixMilli(), 1
 func isoTime(t time.Time) string     { return t.UTC().Format("2006-01-02T15:04:05.000Z") }
 
 func parseTemplates(secrets *rails.Secrets) (*template.Template, *messageRenderer, error) {
-	var quickBoosts *quickBoostForms
+	// The renderer's avatar paths are shared with the templates.
+	renderer := newMessageRenderer(secrets)
 	t, err := template.New("pages").Funcs(template.FuncMap{
-		"quickBoosts": func(clientID string, id int64) template.HTML { return quickBoosts.render(clientID, id) },
+		"quickBoosts": func(clientID string, id int64) template.HTML { return renderer.quickBoosts.render(clientID, id) },
 		"helpMailto": func(user database.User) template.HTMLAttr {
 			value := "mailto:" + (&mail.Address{Name: user.Name, Address: user.Email}).String()
 			return template.HTMLAttr(`href="` + template.HTMLEscapeString(value) + `"`)
@@ -83,7 +84,7 @@ func parseTemplates(secrets *rails.Secrets) (*template.Template, *messageRendere
 			if len(updated) > 0 {
 				version = updated[0]
 			}
-			return avatarPath(secrets, id, version)
+			return renderer.avatar(id, version)
 		},
 		"versionTime": func(t time.Time) string { return t.UTC().Format("20060102150405") },
 		"epoch":       epochMillis,
@@ -93,8 +94,8 @@ func parseTemplates(secrets *rails.Secrets) (*template.Template, *messageRendere
 	if err != nil {
 		return nil, nil, err
 	}
-	if quickBoosts, err = compileQuickBoosts(t); err != nil {
+	if renderer.quickBoosts, err = compileQuickBoosts(t); err != nil {
 		return nil, nil, err
 	}
-	return t, newMessageRenderer(secrets, quickBoosts), nil
+	return t, renderer, nil
 }

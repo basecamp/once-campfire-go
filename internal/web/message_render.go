@@ -36,8 +36,8 @@ func (r *messageRenderer) avatar(id int64, updated time.Time) string {
 	return path.(string) + "?v=" + updated.UTC().Format("20060102150405")
 }
 
-func newMessageRenderer(secrets *rails.Secrets, quickBoosts *quickBoostForms) *messageRenderer {
-	r := &messageRenderer{secrets: secrets, quickBoosts: quickBoosts, assets: map[string]string{}}
+func newMessageRenderer(secrets *rails.Secrets) *messageRenderer {
+	r := &messageRenderer{secrets: secrets, assets: map[string]string{}}
 	for _, name := range []string{"menu-dots-horizontal.svg", "boost.svg", "download.svg", "share.svg", "reply.svg", "link.svg", "pencil.svg", "minus.svg"} {
 		r.assets[name] = urlAttribute(assets.Path(name))
 	}
