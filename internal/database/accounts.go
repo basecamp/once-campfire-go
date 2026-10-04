@@ -296,6 +296,33 @@ func (d *DB) RoomMembers(ctx context.Context, room int64) ([]User, error) {
 	return usersRows(rows)
 }
 
+// RoomMembersByRoom is RoomMembers for several rooms in one query, in the same
+// order within each room (its membership index).
+func (d *DB) RoomMembersByRoom(ctx context.Context, rooms []int64) (map[int64][]User, error) {
+	members := make(map[int64][]User, len(rooms))
+	if len(rooms) == 0 {
+		return members, nil
+	}
+	raw, err := json.Marshal(rooms)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := d.Read.QueryContext(ctx, "SELECT m.room_id,"+userColumns+" FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.room_id IN (SELECT value FROM json_each(?)) ORDER BY m.room_id,m.user_id", string(raw))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var room int64
+		var u User
+		if err := rows.Scan(&room, &u.ID, &u.Name, &u.Email, &u.Password, &u.Role, &u.Status, &u.Bio, timestamp{&u.UpdatedAt}, &u.BotToken); err != nil {
+			return nil, err
+		}
+		members[room] = append(members[room], u)
+	}
+	return members, rows.Err()
+}
+
 func (d *DB) DirectPlaceholders(ctx context.Context, user int64) ([]User, error) {
 	rows, err := d.Read.QueryContext(ctx, "SELECT DISTINCT user_id FROM memberships WHERE room_id IN (SELECT r.id FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE r.type='Rooms::Direct' AND m.user_id=?)", user)
 	if err != nil {

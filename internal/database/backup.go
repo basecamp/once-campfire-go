@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/mattn/go-sqlite3"
 )
 
 // Backup writes an online SQLite snapshot beside its destination, then atomically
@@ -41,7 +39,7 @@ func (d *DB) Backup(ctx context.Context, destination string) error {
 	defer dest.Close()
 	err = source.Raw(func(source any) error {
 		return dest.Raw(func(dest any) (result error) {
-			backup, err := dest.(*sqlite3.SQLiteConn).Backup("main", source.(*sqlite3.SQLiteConn), "main")
+			backup, err := sqliteConn(dest).Backup("main", sqliteConn(source), "main")
 			if err != nil {
 				return err
 			}

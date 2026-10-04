@@ -60,6 +60,15 @@ func TestMessageLifecyclePermissionsAndSearch(t *testing.T) {
 		if err != nil || len(hits) != count {
 			t.Fatalf("%s: %v %v", query, hits, err)
 		}
+		references, err := d.SearchReferences(ctx, member.ID, query)
+		if err != nil || len(references) != count {
+			t.Fatalf("%s references: %v %v", query, references, err)
+		}
+		for i, hit := range hits {
+			if r := references[i]; r.ID != hit.ID || r.RoomID != hit.RoomID || !r.UpdatedAt.Equal(hit.UpdatedAt) || !r.CreatedAt.Equal(hit.CreatedAt) || r.CreatorID != 0 {
+				t.Fatalf("%s reference %+v for %+v", query, r, hit)
+			}
+		}
 	}
 	boost, err := d.CreateBoost(ctx, member.ID, message.ID, "👍")
 	if err != nil {
@@ -173,5 +182,52 @@ func TestMessagePaginationAndRefresh(t *testing.T) {
 	created, updated, err := d.RefreshedMessages(ctx, room.ID, start.Add(80*time.Second))
 	if err != nil || len(created) != 4 || len(updated) != 1 || updated[0].ID != all[0].ID {
 		t.Fatalf("refresh: %d %d %v", len(created), len(updated), err)
+	}
+}
+
+func TestRoomMembersByRoomMatchesEachRoom(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	owner, err := d.Setup(ctx, "Owner", "owner@test", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []int64{owner.ID}
+	for _, name := range []string{"Zed", "Amy", "Bob", "Cat"} {
+		u, err := d.CreateUser(ctx, name, name+"@test", "digest", "", 0, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, u.ID)
+	}
+	var rooms []int64
+	for _, members := range [][]int64{{ids[0], ids[3]}, {ids[4], ids[0], ids[1], ids[2]}, {ids[0]}} {
+		room, err := d.CreateRoom(ctx, owner.ID, "Rooms::Direct", "", members)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rooms = append(rooms, room.ID)
+	}
+	byRoom, err := d.RoomMembersByRoom(ctx, append(rooms, 999999))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, room := range rooms {
+		expected, err := d.RoomMembers(ctx, room)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual := byRoom[room]
+		if len(actual) != len(expected) {
+			t.Fatalf("room %d: %v, expected %v", room, actual, expected)
+		}
+		for i := range expected {
+			if actual[i].ID != expected[i].ID || actual[i].Name != expected[i].Name || !actual[i].UpdatedAt.Equal(expected[i].UpdatedAt) {
+				t.Fatalf("room %d member %d: %+v, expected %+v", room, i, actual[i], expected[i])
+			}
+		}
+	}
+	if len(byRoom[999999]) != 0 {
+		t.Fatal("members for a missing room")
 	}
 }

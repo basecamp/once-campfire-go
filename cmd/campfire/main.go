@@ -41,6 +41,14 @@ func run() error {
 		}
 		defer pprof.StopCPUProfile()
 	}
+	if path := os.Getenv("GO_HEAP_PROFILE"); path != "" {
+		defer func() {
+			if file, err := os.Create(path); err == nil {
+				pprof.Lookup("allocs").WriteTo(file, 0)
+				file.Close()
+			}
+		}()
+	}
 
 	command := "server"
 	if len(os.Args) > 1 {

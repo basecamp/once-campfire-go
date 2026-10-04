@@ -328,7 +328,7 @@ func (d *DB) MessagePageReferences(ctx context.Context, room, anchor int64, dire
 		return nil, err
 	}
 	defer rows.Close()
-	var messages []Message
+	messages := make([]Message, 0, 40)
 	for rows.Next() {
 		message := Message{RoomID: room}
 		if err := rows.Scan(&message.ID, timestamp{&message.UpdatedAt}); err != nil {

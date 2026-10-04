@@ -108,7 +108,18 @@ type page struct {
 	Messages                     []messageView
 	Setup                        bool
 	Query                        string
+	// Message rows for pages that render the cached message list, which needs only
+	// their IDs and versions.
+	records []database.Message
 }
+
+func (p page) MessageCount() int {
+	if p.records != nil {
+		return len(p.records)
+	}
+	return len(p.Messages)
+}
+
 type messageView struct {
 	AllEmoji                         bool
 	Fragment                         template.HTML
@@ -386,11 +397,14 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 		p.CustomStyles = template.HTML("<style>" + a.CustomStyles + "</style>")
 	}
 	var recorded *fragmentEntry
-	if len(p.Messages) > 0 {
-		raw := make([]database.Message, len(p.Messages))
+	raw := p.records
+	if raw == nil && len(p.Messages) > 0 {
+		raw = make([]database.Message, len(p.Messages))
 		for i, m := range p.Messages {
 			raw[i] = m.Message
 		}
+	}
+	if len(raw) > 0 {
 		if name == "room" || name == "messages" || name == "search" {
 			var entry fragmentEntry
 			entry, err = s.messageList(r.Context(), raw)
@@ -412,34 +426,33 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	if name == "search" {
 		p.ReturnRoom, _ = s.lastRoom(r, p.User.ID)
 	}
-	if name == "room" && recorded != nil {
-		shell, marker, err := s.roomShell(p)
+	if (name == "room" || name == "search") && recorded != nil {
+		segments, err := s.pageShell(name, p)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		writeRecorded(w, status, shell, marker, *recorded)
+		writeParts(w, status, shellParts(segments, recorded.part(), p.LoadedAt))
 		return
 	}
-	sidebarKey := ""
+	// The sidebar, like the reference's, is a page around its frame; its whole page
+	// data keys the cached HTML.
 	if name == "sidebar" {
-		sidebarKey = sidebarCacheKey(p)
-		if fragment, ok := s.fragments.get(sidebarKey); ok {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(status)
-			w.Write([]byte(fragment))
+		segments, err := s.pageShell(name, p)
+		if err != nil {
+			s.fail(w, err)
 			return
 		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		writeParts(w, status, shellParts(segments, recordedPart{}, p.LoadedAt))
+		return
 	}
 	b := borrowBuffer()
 	defer releaseBuffer(b)
 	if err := s.templates.ExecuteTemplate(b, name, p); err != nil {
 		s.fail(w, err)
 		return
-	}
-	if sidebarKey != "" {
-		s.fragments.put(sidebarKey, template.HTML(b.String()))
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if recorded != nil {
@@ -722,7 +735,7 @@ func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
 		return
 	}
 	s.rememberRoom(w, r, strconv.FormatInt(room.ID, 10))
-	s.render(w, r, "room", 200, page{Invitation: invitation, Stream: s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)), Title: room.Name, User: u, Room: room, Messages: viewMessages(messages)})
+	s.render(w, r, "room", 200, page{Invitation: invitation, Stream: s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)), Title: room.Name, User: u, Room: room, records: messages})
 }
 func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.User) {
 	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
@@ -748,7 +761,7 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.Use
 	if messageFreshness(w, r, messages) {
 		return
 	}
-	s.render(w, r, "messages", 200, page{Messages: viewMessages(messages)})
+	s.render(w, r, "messages", 200, page{records: messages})
 }
 func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u database.User) {
 	if !requireMessage(w, r) {
@@ -848,17 +861,12 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 		s.fail(w, err)
 		return
 	}
-	messages, err := s.DB.Search(r.Context(), u.ID, q)
+	messages, err := s.DB.SearchReferences(r.Context(), u.ID, q)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	rooms, err := s.DB.Rooms(r.Context(), u.ID)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Rooms: rooms, Messages: viewMessages(messages), RecentSearches: recent})
+	s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, records: messages, RecentSearches: recent})
 }
 
 func (s *Server) serveCable(w http.ResponseWriter, r *http.Request, u database.User) {

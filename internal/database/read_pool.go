@@ -37,12 +37,14 @@ func (p *readPool) statement(ctx context.Context, query string) *sql.Stmt {
 	return statement
 }
 func (p *readPool) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	ctx = uncancelled(ctx)
 	if statement := p.statement(ctx, query); statement != nil {
 		return statement.QueryContext(ctx, args...)
 	}
 	return p.DB.QueryContext(ctx, query, args...)
 }
 func (p *readPool) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	ctx = uncancelled(ctx)
 	if statement := p.statement(ctx, query); statement != nil {
 		return statement.QueryRowContext(ctx, args...)
 	}

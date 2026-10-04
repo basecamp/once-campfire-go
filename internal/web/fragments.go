@@ -12,12 +12,12 @@ import (
 )
 
 type fragmentEntry struct {
-	key                         string
-	html                        template.HTML
-	bytes                       int
-	digest                      [32]byte
-	payload                     []byte
-	messageMarker, loadedMarker string
+	key      string
+	html     template.HTML
+	bytes    int
+	digest   [32]byte
+	payload  []byte
+	segments []shellSegment
 }
 type fragmentCache struct {
 	mu           sync.Mutex
@@ -57,7 +57,10 @@ func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
 		c.order.MoveToFront(e)
 		return e.Value.(fragmentEntry)
 	}
-	size := len(key) + len(html) + len(entry.messageMarker) + len(entry.loadedMarker) + 240
+	size := len(key) + len(html) + 240
+	for _, segment := range entry.segments {
+		size += len(segment.part.data)
+	}
 	var payload []byte
 	if strings.HasPrefix(key, "message-list/") {
 		payload = []byte(html)
@@ -81,7 +84,13 @@ func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
 	return entry
 }
 func messageCacheKey(message database.Message) string {
-	return "message/" + database.Stamp(message.UpdatedAt) + "/" + strconv.FormatInt(message.ID, 10)
+	return string(appendMessageCacheKey(nil, message))
+}
+func appendMessageCacheKey(key []byte, message database.Message) []byte {
+	key = append(key, "message/"...)
+	key = database.AppendStamp(key, message.UpdatedAt)
+	key = append(key, '/')
+	return strconv.AppendInt(key, message.ID, 10)
 }
 func (s *Server) messageItems(ctx context.Context, messages []database.Message) ([]messageView, error) {
 	views := viewMessages(messages)

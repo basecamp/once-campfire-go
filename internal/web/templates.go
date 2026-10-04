@@ -23,7 +23,9 @@ type reaction struct{ Character, Title string }
 var reactions = []reaction{{"👍", "Thumbs up"}, {"👏", "Clapping"}, {"👋", "Waving hand"}, {"💪", "Muscle"}, {"❤️", "Red heart"}, {"😂", "Face with tears of joy"}, {"🎉", "Party popper"}, {"🔥", "Fire"}}
 
 func parseTemplates(secrets *rails.Secrets) (*template.Template, error) {
-	return template.New("pages").Funcs(template.FuncMap{
+	var quickBoosts *quickBoostForms
+	t, err := template.New("pages").Funcs(template.FuncMap{
+		"quickBoosts": func(clientID string, id int64) template.HTML { return quickBoosts.render(clientID, id) },
 		"helpMailto": func(user database.User) template.HTMLAttr {
 			value := "mailto:" + (&mail.Address{Name: user.Name, Address: user.Email}).String()
 			return template.HTMLAttr(`href="` + template.HTMLEscapeString(value) + `"`)
@@ -78,4 +80,11 @@ func parseTemplates(secrets *rails.Secrets) (*template.Template, error) {
 		"iso":         func(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000Z") },
 		"reactions":   func() []reaction { return reactions },
 	}).ParseFS(templateFiles, "templates/*.html")
+	if err != nil {
+		return nil, err
+	}
+	if quickBoosts, err = compileQuickBoosts(t); err != nil {
+		return nil, err
+	}
+	return t, nil
 }

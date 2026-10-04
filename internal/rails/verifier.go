@@ -294,10 +294,17 @@ func marshalString(data []byte) (string, bool) {
 	}
 	return string(data[:length]), true
 }
+
+var (
+	acronymBoundary = regexp.MustCompile(`([A-Z]+)([A-Z][a-z])`)
+	wordBoundary    = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+	globalIDPattern = regexp.MustCompile(`gid://campfire/[^/]+/\d+`)
+)
+
 func modelPurpose(model, purpose string) string {
 	model = strings.ReplaceAll(model, "::", "/")
-	model = regexp.MustCompile(`([A-Z]+)([A-Z][a-z])`).ReplaceAllString(model, "${1}_${2}")
-	model = regexp.MustCompile(`([a-z0-9])([A-Z])`).ReplaceAllString(model, "${1}_${2}")
+	model = acronymBoundary.ReplaceAllString(model, "${1}_${2}")
+	model = wordBoundary.ReplaceAllString(model, "${1}_${2}")
 	model = strings.ToLower(strings.ReplaceAll(model, "-", "_"))
 	if strings.TrimSpace(purpose) != "" {
 		model += "/" + purpose
@@ -399,7 +406,7 @@ func UnverifiedUserGID(sgid string) (string, error) {
 		if err != nil {
 			return "", ErrInvalid
 		}
-		gid = regexp.MustCompile(`gid://campfire/[^/]+/\d+`).FindString(string(decoded))
+		gid = globalIDPattern.FindString(string(decoded))
 	}
 	if !strings.HasPrefix(gid, "gid://") {
 		decoded, err := decode64(gid)

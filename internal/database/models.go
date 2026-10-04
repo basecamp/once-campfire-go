@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 )
@@ -276,23 +277,52 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 	}
 	return m, err
 }
-func (d *DB) Search(ctx context.Context, user int64, query string) ([]Message, error) {
+
+const searchJoin = "JOIN message_search_index idx ON idx.rowid=m.id JOIN memberships member ON member.room_id=m.room_id WHERE member.user_id=? AND idx.body MATCH ? ORDER BY m.created_at DESC LIMIT 100"
+
+func searchTerms(query string) string {
 	words := strings.Fields(SearchQuery(query))
-	if len(words) == 0 {
-		return []Message{}, nil
-	}
 	for i, w := range words {
 		words[i] = "\"" + strings.ReplaceAll(w, "\"", "\"\"") + "\""
 	}
-	rows, err := d.Read.QueryContext(ctx, messageSelect+"JOIN message_search_index idx ON idx.rowid=m.id JOIN memberships member ON member.room_id=m.room_id WHERE member.user_id=? AND idx.body MATCH ? ORDER BY m.created_at DESC LIMIT 100", user, strings.Join(words, " "))
+	return strings.Join(words, " ")
+}
+func (d *DB) Search(ctx context.Context, user int64, query string) ([]Message, error) {
+	terms := searchTerms(query)
+	if terms == "" {
+		return []Message{}, nil
+	}
+	rows, err := d.Read.QueryContext(ctx, messageSelect+searchJoin, user, terms)
 	if err != nil {
 		return nil, err
 	}
 	messages, err := scanMessages(rows)
-	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-		messages[i], messages[j] = messages[j], messages[i]
-	}
+	slices.Reverse(messages)
 	return messages, err
+}
+
+// SearchReferences finds the same messages as Search with only the columns that
+// identify their cached fragments; the rest is loaded for fragments not cached.
+func (d *DB) SearchReferences(ctx context.Context, user int64, query string) ([]Message, error) {
+	terms := searchTerms(query)
+	if terms == "" {
+		return []Message{}, nil
+	}
+	rows, err := d.Read.QueryContext(ctx, "SELECT m.id,m.room_id,m.created_at,m.updated_at FROM messages m "+searchJoin, user, terms)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	messages := []Message{}
+	for rows.Next() {
+		var m Message
+		if err := rows.Scan(&m.ID, &m.RoomID, timestamp{&m.CreatedAt}, timestamp{&m.UpdatedAt}); err != nil {
+			return nil, err
+		}
+		messages = append(messages, m)
+	}
+	slices.Reverse(messages)
+	return messages, rows.Err()
 }
 
 // AuthorizedSessions checks a publication's distinct sessions in one snapshot.

@@ -23,7 +23,7 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/storage"
 )
 
-func testApp(t *testing.T) (*Server, *httptest.Server, *http.Cookie, database.User) {
+func testApp(t testing.TB) (*Server, *httptest.Server, *http.Cookie, database.User) {
 	t.Helper()
 	root := t.TempDir()
 	db, err := database.Open(filepath.Join(root, "test.sqlite3"), 4)
