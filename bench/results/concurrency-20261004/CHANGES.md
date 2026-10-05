@@ -67,9 +67,15 @@ back; a panic rolls back and is raised in the caller.
 
 - Post message: ≈5,080 → ≈6,115 req/s (+20%), p99 11.2 → 8.5 ms; writer CPU use
   rose from ≈155% to ≈170% of the two CPUs.
+- A caller whose context ends while its transaction is still queued withdraws it and gets the
+  context's error, as waiting for the pooled writer connection was cancellable before; once a
+  transaction has started, the caller waits for its outcome, so a committed write is never
+  reported as failed. `Close` runs once and returns the same result to every caller.
 - Tests: `TestAPanickingWriteRollsBackAndLeavesTheWriterUsable` (ports of
   `a_panicking_write_rolls_back` and `a_panicking_write_leaves_the_writer_usable`),
-  `TestAFailingWriteRollsBack`, `TestConcurrentWritesAllCommit`, `TestAWriteAfterCloseFails`.
+  `TestAFailingWriteRollsBack`, `TestConcurrentWritesAllCommit`, `TestAWriteAfterCloseFails`,
+  `TestAQueuedWriteIsWithdrawnWhenItsCallerGivesUp`, `TestAStartedWriteReportsItsOutcome`,
+  `TestCloseIsIdempotent`.
 
 ## 4. Search page shell cache; no unused rooms query (`room_shell.go`, `server.go`)
 
@@ -117,6 +123,15 @@ serialized mode; as in the reference (`SQLITE_OPEN_NO_MUTEX`) they now don't, si
 connection is used by one goroutine at a time (11.0 µs for the same queries).
 
 - Sidebar: 13,179 → 15,781 req/s (137 → 119 µs CPU/req).
+- **Not equivalent to the reference.** Only the no-mutex mode matches Rust. Rust keeps
+  SQLite's default file temp store: its connection setup sets no `temp_store`, and its
+  bundled SQLite (libsqlite3-sys) sets `SQLITE_TEMP_STORE` only for SQLCipher and Android
+  builds. Rust therefore still pays the temp-B-tree cost on the same queries (about 20 vs
+  6 µs each, measured with Python's SQLite on the seed). In the benchmark this setting
+  benefits Go only: it accounts for about 20 of the 21 µs saved on the sidebar's two
+  placeholder queries, most of the sidebar's 13,179 → 15,781 req/s. Sidebar and search
+  comparisons with Rust include it. The same pragma would apply to the reference
+  unchanged.
 - Batching the sidebar's per-direct-room member queries into one (same order, from the
   same index) was within run-to-run noise. Test: `TestRoomMembersByRoomMatchesEachRoom`.
 

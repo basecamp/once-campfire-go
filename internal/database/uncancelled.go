@@ -14,7 +14,8 @@ import (
 // and result set. Stripping cancellation where the database is entered avoids those
 // hand-offs, notably on the single writer, where every statement of every write
 // waited for one. As with the reference's read queue, a read waits for a connection
-// even if its caller stops waiting; waiting for the writer remains cancellable.
+// even if its caller stops waiting; a write can be withdrawn until it starts
+// (DB.Transaction).
 func uncancelled(ctx context.Context) context.Context {
 	if ctx.Done() == nil {
 		return ctx

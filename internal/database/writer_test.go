@@ -156,3 +156,70 @@ func TestAReadGivenUpWhileItWaitsStillRuns(t *testing.T) {
 		t.Fatal("the abandoned read never ran")
 	}
 }
+
+func TestCloseIsIdempotent(t *testing.T) {
+	d, err := Open(filepath.Join(t.TempDir(), "test.sqlite3"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, 4)
+	for i := range errs {
+		wg.Go(func() { errs[i] = d.Close() })
+	}
+	wg.Wait()
+	for _, err := range append(errs, d.Close()) {
+		if err != errs[0] {
+			t.Fatalf("close errors differ: %v", errs)
+		}
+	}
+}
+
+// A caller that gives up while its write is still queued withdraws it.
+func TestAQueuedWriteIsWithdrawnWhenItsCallerGivesUp(t *testing.T) {
+	d := thingsDB(t)
+	release, started := make(chan struct{}), make(chan struct{})
+	busy := make(chan error, 1)
+	go func() {
+		busy <- d.Transaction(context.Background(), func(tx *sql.Tx) error {
+			close(started)
+			<-release
+			return insertThing(1)(tx)
+		})
+	}()
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	begun := time.Now()
+	if err := d.Transaction(ctx, insertThing(2)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("withdrawn write: %v", err)
+	}
+	if waited := time.Since(begun); waited > 5*time.Second {
+		t.Fatalf("waited %v behind the busy writer", waited)
+	}
+	close(release)
+	if err := <-busy; err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Transaction(context.Background(), insertThing(3)); err != nil {
+		t.Fatal(err)
+	}
+	if ids := things(t, d); ids != "1,3" {
+		t.Fatalf("things %q: the withdrawn write ran", ids)
+	}
+}
+
+// Once a write starts, its caller gets its outcome even if it stops waiting.
+func TestAStartedWriteReportsItsOutcome(t *testing.T) {
+	d := thingsDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := d.Transaction(ctx, func(tx *sql.Tx) error {
+		cancel()
+		return insertThing(4)(tx)
+	}); err != nil {
+		t.Fatalf("committed write reported %v", err)
+	}
+	if ids := things(t, d); ids != "4" {
+		t.Fatalf("things %q", ids)
+	}
+}

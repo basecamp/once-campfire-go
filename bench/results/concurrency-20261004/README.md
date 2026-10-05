@@ -90,6 +90,9 @@ Rust slightly more to send.
   `RAILS_MAX_THREADS=2` (two SQLite readers each); the reference load generator on CPUs 2–3.
   Identity encoding, 2-second warmups, 5-second samples, three rotating repetitions.
   `bench/application` gained `--workers` so these counts follow the CPU set.
+- One SQLite setting differs: Go keeps temporary B-trees in memory (`temp_store=MEMORY`);
+  Rust uses SQLite's default file temp store. This favors Go on queries that sort or
+  de-duplicate small results, chiefly the sidebar (see change 7 in CHANGES.md).
 - Response contracts (message/room IDs), write persistence and FTS indexing, complete Cable
   delivery and thumbnail bytes are checked on every run.
 - After every change, the room, history, sidebar and search responses of the new Go binary

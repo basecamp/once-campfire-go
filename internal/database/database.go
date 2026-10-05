@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -30,10 +31,12 @@ type DB struct {
 	Write               *sql.DB
 	Now                 func() time.Time
 	checkpoints         *checkpointer
-	writes              chan writeJob
+	writes              chan *writeJob
 	writer              sync.RWMutex // held for writing once closed
 	closed              bool
 	writerDone          chan struct{}
+	closeOnce           sync.Once
+	closeErr            error
 }
 
 // Transactions run in order on one writer goroutine, as on the reference's writer
@@ -44,10 +47,18 @@ const writeQueue = 256
 var ErrClosed = errors.New("database closed")
 
 type writeJob struct {
-	ctx  context.Context
-	fn   func(*sql.Tx) error
-	done chan writeResult
+	ctx   context.Context
+	fn    func(*sql.Tx) error
+	done  chan writeResult
+	state atomic.Int32 // jobQueued, then jobStarted or jobAbandoned
 }
+
+const (
+	jobQueued = iota
+	jobStarted
+	jobAbandoned
+)
+
 type writeResult struct {
 	err      error
 	panicked any
@@ -121,7 +132,7 @@ func Open(path string, readers int) (*DB, error) {
 		}
 		now = func() time.Time { return frozen }
 	}
-	d := &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, Now: now, checkpoints: checkpoints, writes: make(chan writeJob, writeQueue), writerDone: make(chan struct{})}
+	d := &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, Now: now, checkpoints: checkpoints, writes: make(chan *writeJob, writeQueue), writerDone: make(chan struct{})}
 	go d.runWrites()
 	return d, nil
 }
@@ -129,15 +140,15 @@ func Open(path string, readers int) (*DB, error) {
 // Queued transactions finish first; the checkpointer stops after the writer, whose
 // commits wake it.
 func (d *DB) Close() error {
-	d.writer.Lock()
-	if !d.closed {
+	d.closeOnce.Do(func() {
+		d.writer.Lock()
 		d.closed = true
 		close(d.writes)
-	}
-	d.writer.Unlock()
-	<-d.writerDone
-	err := errors.Join(d.Read.Close(), d.Write.Close())
-	return errors.Join(err, d.checkpoints.close())
+		d.writer.Unlock()
+		<-d.writerDone
+		d.closeErr = errors.Join(d.Read.Close(), d.Write.Close(), d.checkpoints.close())
+	})
+	return d.closeErr
 }
 func Stamp(t time.Time) string { return string(AppendStamp(nil, t)) }
 
@@ -217,8 +228,12 @@ func parseStamp(raw string) (time.Time, bool) {
 
 // Transaction runs fn in an immediate transaction on the writer goroutine, after the
 // transactions queued before it. A panic in fn is raised again in the caller.
+//
+// Waiting is cancellable until the transaction starts: a caller whose ctx ends while
+// its transaction is still queued withdraws it and gets ctx's error. Once started, the
+// caller waits for the outcome, so a committed write is never reported as failed.
 func (d *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {
-	job := writeJob{ctx: ctx, fn: fn, done: make(chan writeResult, 1)}
+	job := &writeJob{ctx: ctx, fn: fn, done: make(chan writeResult, 1)}
 	d.writer.RLock()
 	if d.closed {
 		d.writer.RUnlock()
@@ -231,7 +246,15 @@ func (d *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {
 		return ctx.Err()
 	}
 	d.writer.RUnlock()
-	result := <-job.done
+	var result writeResult
+	select {
+	case result = <-job.done:
+	case <-ctx.Done():
+		if job.state.CompareAndSwap(jobQueued, jobAbandoned) {
+			return ctx.Err()
+		}
+		result = <-job.done
+	}
 	if result.panicked != nil {
 		panic(result.panicked)
 	}
@@ -240,10 +263,12 @@ func (d *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {
 func (d *DB) runWrites() {
 	defer close(d.writerDone)
 	for job := range d.writes {
-		job.done <- d.run(job)
+		if job.state.CompareAndSwap(jobQueued, jobStarted) {
+			job.done <- d.run(job)
+		}
 	}
 }
-func (d *DB) run(job writeJob) (result writeResult) {
+func (d *DB) run(job *writeJob) (result writeResult) {
 	defer func() {
 		if p := recover(); p != nil {
 			result.panicked = p
