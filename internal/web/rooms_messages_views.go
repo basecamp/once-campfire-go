@@ -142,8 +142,11 @@ func (s *Server) setMessage(r *http.Request, room *database.ReferenceRoom) (data
 
 // rememberLastRoomVisited is remember_last_room_visited: the last_room cookie, which the rest of
 // the request reads back as cookies[:last_room] does (the layout's last_room_visited).
-func rememberLastRoomVisited(s *Server, w http.ResponseWriter, r *http.Request, id int64) {
+func (s *Server) rememberLastRoomVisited(w http.ResponseWriter, r *http.Request, id int64) {
 	value := strconv.FormatInt(id, 10)
+	if c, err := r.Cookie("last_room"); err == nil && c.Value == value {
+		return
+	}
 	s.rememberRoom(w, r, value)
 	cookies := []string{"last_room=" + value}
 	for _, c := range r.Cookies() {
@@ -197,20 +200,20 @@ func (s *Server) roomShow(w http.ResponseWriter, r *http.Request, u database.Use
 	if !ok {
 		return
 	}
-	rememberLastRoomVisited(s, w, r, room.ID)
+	s.rememberLastRoomVisited(w, r, room.ID)
 	ctx := r.Context()
 	var anchor database.ReferenceMessage
-	found := false
+	anchored := false
 	if id, ok := paramID(r, "message_id"); ok {
 		var err error
-		if anchor, found, err = s.DB.MessageFindByID(ctx, id); err != nil {
+		if anchor, anchored, err = s.DB.MessageFindByID(ctx, id); err != nil {
 			s.fail(w, err)
 			return
 		}
 	}
 	var messages []database.ReferenceMessage
 	var err error
-	if found && anchor.RoomID == room.ID {
+	if anchored && anchor.RoomID == room.ID {
 		messages, err = s.DB.MessagePageAround(ctx, room.ID, anchor)
 	} else {
 		messages, err = s.DB.MessageLastPage(ctx, room.ID)
@@ -340,8 +343,8 @@ func (s *Server) messagesIndex(w http.ResponseWriter, r *http.Request, u databas
 	})
 }
 
-// messageParams is params.require(:message).permit(:body, :attachment, :client_message_id): false
-// (a 400) without message params.
+// messageParams is what create_with_attachment! and update! receive:
+// params.require(:message).permit(:body, :attachment, :client_message_id).
 type messageParams struct {
 	body, clientMessageID *string
 	// The attachment's param: message[attachment], or the bot API's attachment.
@@ -350,6 +353,7 @@ type messageParams struct {
 	attachmentGiven, attachmentInvalid bool
 }
 
+// messageParamsOf is MessagesController#message_params, once requireParams has passed.
 func messageParamsOf(r *http.Request) messageParams {
 	var p messageParams
 	text := func(key string) *string {
