@@ -1,0 +1,44 @@
+# Area B (users, sidebar): every page a GET reaches, signed in as David. Pages with absolute URLs
+# (transfer links, avatar URLs) are requested with one Host so both servers print the same URLs.
+/users/me/sidebar
+/users/me/sidebar | Turbo-Frame: user_sidebar
+/users/{users.david}/sidebar
+/users/me/profile
+/users/me/profile | Turbo-Frame: user_profile
+/users/me/push_subscriptions
+/users/me/push_subscriptions | Turbo-Frame: push_subscriptions
+/users/{users.david} | Host: campfire.test
+/users/{users.jason} | Host: campfire.test
+/users/{users.jason} | Turbo-Frame: user | Host: campfire.test
+/users/{users.kevin} | Host: campfire.test
+/users/{users.jz} | Host: campfire.test
+/users/{users.bender} | Host: campfire.test
+/users/{users.deploy_bot} | Host: campfire.test
+/users/{users.old_bot} | Host: campfire.test
+/users/{users.mallory} | Host: campfire.test
+/users/{users.rita} | Host: campfire.test
+/users/{users.loner} | Host: campfire.test
+/users/999999999
+/users/me
+# users/new: signed in, require_unauthenticated_access redirects to the root.
+/join/{join_codes.signal}
+/join/wrong-code
+# Signed out (the Cookie header replaces the session's).
+/join/{join_codes.signal} | Cookie: none=1
+/join/{join_codes.signal} | Cookie: none=1 | Turbo-Frame: signup
+/join/wrong-code | Cookie: none=1
+/autocompletable/users
+/autocompletable/users?query=a
+/autocompletable/users?filter=j
+/autocompletable/users?room_id={rooms.watercooler}
+/autocompletable/users?room_id={rooms.designers}&query=a
+/autocompletable/users?room_id={rooms.david_and_jason}
+/autocompletable/users?room_id={rooms.pets}
+/autocompletable/users?room_id=999999999
+/autocompletable/users?page=2
+/autocompletable/users.json | Host: campfire.test
+/autocompletable/users.json?query=a | Host: campfire.test
+/autocompletable/users.json?filter=j | Host: campfire.test
+/autocompletable/users.json?room_id={rooms.watercooler} | Host: campfire.test
+/autocompletable/users.json?room_id={rooms.hq}&query=d | Host: campfire.test
+/autocompletable/users.json?page=2 | Host: campfire.test

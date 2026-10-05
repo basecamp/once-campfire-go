@@ -1,3 +1,46 @@
-{% comment %}reference/crates/views/templates/users/show.html; TODO: body{% endcomment %}
-{% func (p *UsersShow) Nav() %}{% endfunc %}
-{% func (p *UsersShow) Content() %}{% endfunc %}
+{% comment %}reference/crates/views/templates/users/show.html{% endcomment %}
+{% func (p *UsersShow) Nav() %}  <div class="flex-item-justify-start">
+    {%s= string(LinkBack(p.Ctx)) %}
+  </div>
+
+  <div class="flex align-center gap flex-item-justify-end">
+{% if p.Ctx.IsCurrentUser(p.User.ID) %}      {% code BeginCapture(qw422016) %}
+        {%s= string(ImageTag(p.Ctx, "pencil.svg", NewAttrs().AriaHidden())) %}
+        <span class="for-screen-reader">Edit my profile</span>
+{% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture1, RouteUserProfile(), NewAttrs().Class("btn"))) %}{% endif %}  </div>
+{% endfunc %}
+{% func (p *UsersShow) Content() %}{% code user := &p.User %}<section class="panel txt-align-center">
+  <div class="flex flex-column gap {% if user.Banned() %}banned{% endif %}">
+    <div class="avatar txt-xx-large center" style="background: white">
+      {%s= string(ImageTag(p.Ctx, user.AvatarPath, NewAttrs().Alt("Profile avatar").Class("avatar"))) %}
+    </div>
+
+{% if user.Bot() %}      <div class="pad-double--inline push--inline push--block-start">
+{% if user.Active() %}          {%s= string(ButtonToDirectRoomWith(p.Ctx, user.ID)) %}
+{% else %}          <div>{%s user.Name %} is no longer on this account</div>
+{% endif %}      </div>
+{% else %}{% if !user.Deactivated() %}        <div class="flex flex-column gap" style="--row-gap: calc(var(--block-space) / 3)">
+          <h1 class="txt-x-large txt-tight-lines margin-none">{%s user.Name %}</h1>
+{% if p.Ctx.CanAdminister() %}            <div>{%s= string(MailTo(user.EmailAddressOrDefault())) %}</div>
+{% endif %}          <div>{%s user.BioOrDefault() %}</div>
+        </div>
+
+{% if user.Active() %}          <div class="pad-inline-double margin-inline margin-block-start">
+            {% code BeginCapture(qw422016) %}
+              {%s= string(ImageTag(p.Ctx, "messages.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Ping "+user.Name))) %}
+{% code capture1 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture1, RoomsDirectsWithUser(user.ID), NewAttrs().Class("btn btn--reversed full-width txt-large"))) %}          </div>
+
+{% if p.Ctx.CanAdminister() %}            <hr class="margin-block-start borderless">
+
+            {%= UsersProfilesTransfer(p.Ctx, user, p.TransferID) %}
+{% endif %}{% endif %}
+{% if p.Ctx.CanAdminister() && !p.Ctx.IsCurrentUser(user.ID) %}          <div class="margin-block-start">
+            {%= UsersBanButton(p.Ctx, user) %}
+          </div>
+{% endif %}{% else %}        <div>
+          <h1 class="txt-x-large margin-none">{%s user.Name %}</h1>
+          <div>{%s user.Name %} is no longer on this account</div>
+        </div>
+{% endif %}{% endif %}  </div>
+</section>
+{% endfunc %}

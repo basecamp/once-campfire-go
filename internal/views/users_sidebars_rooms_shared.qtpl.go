@@ -15,6 +15,16 @@ var (
 )
 
 func StreamUsersSidebarsRoomsShared(qw422016 *qt422016.Writer, room *SidebarRoom) {
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+  <span class="overflow-ellipsis">`)
+	qw422016.E().S(room.Name)
+	qw422016.N().S(`</span>
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(LinkToRoom(capture1, room.ID, NewAttrs().ID(DomID(room.ParamKey, room.ID, "list")).Data("sorted_list_name", room.Name).Style("--column-gap: 0.5em").Class(room.ClassNames()))))
 }
 
 func WriteUsersSidebarsRoomsShared(qq422016 qtio422016.Writer, room *SidebarRoom) {

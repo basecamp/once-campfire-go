@@ -1,2 +1,13 @@
-{% comment %}reference/crates/views/templates/autocompletable/users/_prompt_item.html; TODO: body{% endcomment %}
-{% func AutocompletableUsersPromptItem(ctx *ViewContext, user *MentionUser) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/autocompletable/users/_prompt_item.html{% endcomment %}
+{% func AutocompletableUsersPromptItem(ctx *ViewContext, user *MentionUser) %}<lexxy-prompt-item search="{%s user.Name %}" sgid="{%s user.AttachableSgid %}">
+  <template type="menu">
+    <span class="autocomplete__item flex align-center gap unpad">
+      {%s= string(AvatarTag(ctx, user.Avatar(), NewAttrs())) %}
+      <span class="autocompletable__name">{%s user.Name %}</span>
+    </span>
+  </template>
+  <template type="editor">
+    {%= UsersMention(ctx, user) %}
+  </template>
+</lexxy-prompt-item>
+{% endfunc %}

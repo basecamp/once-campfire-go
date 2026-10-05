@@ -1,2 +1,13 @@
-{% comment %}reference/crates/views/templates/users/profiles/_membership.html; TODO: body{% endcomment %}
-{% func UsersProfilesMembership(ctx *ViewContext, membership *ProfileMembership) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/users/profiles/_membership.html{% endcomment %}
+{% func UsersProfilesMembership(ctx *ViewContext, membership *ProfileMembership) %}<li class="flex align-center gap margin-none min-width membership-item">
+  {% code BeginCapture(qw422016) %}
+    <strong>{%s membership.RoomDisplayName %}</strong>
+{% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture1, RouteRoom(membership.RoomID), NewAttrs().Class("overflow-ellipsis fill-shade txt-primary txt-undecorated"))) %}
+  <hr class="separator" aria-hidden="true">
+
+  <span class="txt-small">
+    {% code BeginCapture(qw422016) %}
+      {%s= string(ButtonToChangeInvolvement(ctx, membership.InvolvementRoom(), membership.Involvement)) %}
+{% code capture2 := EndCapture(qw422016) %}{%s= string(TurboFrameTag(capture2, DomID(membership.RoomParamKey, membership.RoomID, "involvement"), NewAttrs())) %}  </span>
+</li>
+{% endfunc %}

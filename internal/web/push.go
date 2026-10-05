@@ -46,7 +46,7 @@ func (s *Server) initJobs() {
 		}
 	}
 	s.Push = integrations.NewPushSender(vapid)
-	s.mux.HandleFunc("GET /users/{user}/push_subscriptions", s.auth(s.pushSubscriptions))
+	s.mux.HandleFunc("GET /users/{user_id}/push_subscriptions", s.auth(s.usersPushSubscriptionsIndex))
 	s.mux.HandleFunc("POST /users/{user}/push_subscriptions", s.auth(s.pushSubscriptions))
 	s.mux.HandleFunc("DELETE /users/{user}/push_subscriptions/{subscription}", s.auth(s.deletePushSubscription))
 	s.mux.HandleFunc("POST /users/{user}/push_subscriptions"+"/{subscription}/test_notifications", s.auth(s.testPushNotification))

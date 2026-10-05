@@ -32,6 +32,36 @@ func (p *UsersProfilesShow) Head() string {
 }
 
 func (p *UsersProfilesShow) StreamNav(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`  <div class="flex-item-justify-start">
+    `)
+	qw422016.N().S(string(LinkBack(p.Ctx)))
+	qw422016.N().S(`
+  </div>
+
+  <div class="flex-item-justify-end">
+`)
+	form := FormWith(RouteSession()).Method("delete").Data("controller", "sessions")
+
+	qw422016.N().S(`    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      `)
+	qw422016.N().S(string(HiddenFieldTag("push_subscription_endpoint", nil, NewAttrs().Data("sessions_target", "pushSubscriptionEndpoint"))))
+	qw422016.N().S(`
+
+      <button class="btn" data-action="sessions#logout:prevent">
+        `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "logout.svg", NewAttrs().AriaHidden())))
+	qw422016.N().S(`
+        <span class="for-screen-reader">Log out</span>
+      </button>
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(FormWithBlock(capture1, form)))
+	qw422016.N().S(`  </div>
+`)
 }
 
 func (p *UsersProfilesShow) WriteNav(qq422016 qtio422016.Writer) {
@@ -49,6 +79,175 @@ func (p *UsersProfilesShow) Nav() string {
 }
 
 func (p *UsersProfilesShow) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`<section class="panel flex flex-column gap" style="view-transition-name: avatar-`)
+	qw422016.N().DL(p.User.ID)
+	qw422016.N().S(`">
+  `)
+	StreamPwaInstallInstructions(qw422016, p.Ctx)
+	qw422016.N().S(`
+
+  <div class="align-center center avatar__form gap" data-controller="upload-preview">
+`)
+	form := p.ProfileForm().Class("txt-medium")
+
+	qw422016.N().S(`    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      <label class="btn input--file">
+        `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "camera.svg", NewAttrs().AriaHidden().Size(20))))
+	qw422016.N().S(`
+        `)
+	qw422016.N().S(string(form.FileField("avatar", NewAttrs().ID("file").Class("input").Accept("image/*").Data("upload_preview_target", "input").Data("action", "upload-preview#previewImage change->form#submit"))))
+	qw422016.N().S(`
+        <span class="for-screen-reader">Upload avatar</span>
+      </label>
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(FormWithBlock(capture1, form)))
+	qw422016.N().S(`
+`)
+	form = p.ProfileForm()
+
+	qw422016.N().S(`    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      <label class="btn avatar input--file txt-xx-large">
+        `)
+	qw422016.N().S(string(ImageTag(p.Ctx, p.User.AvatarPath, NewAttrs().AriaHidden().Size(300).Data("upload_preview_target", "image"))))
+	qw422016.N().S(`
+        `)
+	qw422016.N().S(string(form.FileField("avatar", NewAttrs().ID("file").Class("input").Accept("image/*").Data("upload_preview_target", "input").Data("action", "upload-preview#previewImage change->form#submit"))))
+	qw422016.N().S(`
+        <span class="for-screen-reader">Avatar</span>
+      </label>
+`)
+	capture2 := EndCapture(qw422016)
+
+	qw422016.N().S(string(FormWithBlock(capture2, form)))
+	qw422016.N().S(`
+`)
+	if p.AvatarAttached {
+		qw422016.N().S(`      `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+        `)
+		qw422016.N().S(string(ImageTag(p.Ctx, "minus.svg", NewAttrs().AriaHidden().Size(20))))
+		qw422016.N().S(`
+        <span class="for-screen-reader">Delete avatar</span>
+`)
+		capture3 := EndCapture(qw422016)
+
+		qw422016.N().S(string(ButtonToBlock(capture3, RouteUserAvatar(p.User.ID), NewAttrs().Method("delete").Class("btn btn--negative txt-small avatar__delete-btn"))))
+	}
+	qw422016.N().S(`  </div>
+
+`)
+	form = p.ProfileForm()
+
+	qw422016.N().S(`  `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+    <div class="flex flex-column gap">
+      <div class="flex align-center gap">
+        `)
+	qw422016.N().S(string(TranslationButton(p.Ctx, "user_name")))
+	qw422016.N().S(`
+
+        <label class="flex align-center gap flex-item-grow input input--actor">
+          `)
+	qw422016.N().S(string(form.TextField("name", &p.User.Name, NewAttrs().Class("input txt-large ").Autocomplete("name").Placeholder("Enter your name").Autofocus().Required(true).Data("1p-ignore", true))))
+	qw422016.N().S(`
+          `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "person.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	qw422016.N().S(`
+        </label>
+      </div>
+
+      <div class="flex align-center gap">
+        `)
+	qw422016.N().S(string(TranslationButton(p.Ctx, "email_address")))
+	qw422016.N().S(`
+
+        <label class="flex align-center gap flex-item-grow input input--actor">
+          `)
+	qw422016.N().S(string(form.EmailField("email_address", nil, NewAttrs().Class("input txt-large").AttrOpt("value", p.User.EmailAddress).Autocomplete("username").Placeholder("Enter your email address").Required(false))))
+	qw422016.N().S(`
+          `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "email.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	qw422016.N().S(`
+        </label>
+      </div>
+
+      <div class="flex align-center gap">
+        `)
+	qw422016.N().S(string(TranslationButton(p.Ctx, "update_password")))
+	qw422016.N().S(`
+
+        <label class="flex align-center gap flex-item-grow input input--actor">
+          `)
+	qw422016.N().S(string(form.PasswordField("password", NewAttrs().Class("input txt-large").Autocomplete("new-password").Placeholder("Change password").Required(false).Maxlength(72))))
+	qw422016.N().S(`
+          `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "password.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	qw422016.N().S(`
+        </label>
+      </div>
+
+      <div class="flex align-start gap">
+        `)
+	qw422016.N().S(string(TranslationButton(p.Ctx, "bio")))
+	qw422016.N().S(`
+
+        <label class="flex align--center gap flex-item--grow input input--actor">
+          `)
+	qw422016.N().S(string(form.TextArea("bio", p.User.Bio, NewAttrs().Class("input txt-large").Placeholder("A few words about yourself…").Maxlength(200).Rows(3).Required(false))))
+	qw422016.N().S(`
+          `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "bio.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	qw422016.N().S(`
+        </label>
+      </div>
+
+      `)
+	qw422016.N().S(string(ProfileFormSubmitButton(p.Ctx)))
+	qw422016.N().S(`
+    </div>
+`)
+	capture4 := EndCapture(qw422016)
+
+	qw422016.N().S(string(FormWithBlock(capture4, form)))
+	qw422016.N().S(`
+  <div class="margin-block pad-inline pad-block fill-shade border-radius">
+    <menu class="flex flex-column gap margin-none pad">
+      `)
+	for i := range p.SharedMemberships {
+		StreamUsersProfilesMembership(qw422016, p.Ctx, &p.SharedMemberships[i])
+	}
+	qw422016.N().S(`
+`)
+	if len(p.DirectMemberships) > 0 && len(p.SharedMemberships) > 0 {
+		qw422016.N().S(`        <hr class="separator full-width" style="--border-style: solid">
+`)
+	}
+	qw422016.N().S(`
+      `)
+	for i := range p.DirectMemberships {
+		StreamUsersProfilesMembership(qw422016, p.Ctx, &p.DirectMemberships[i])
+	}
+	qw422016.N().S(`    </menu>
+  </div>
+
+  `)
+	StreamUsersProfilesTransfer(qw422016, p.Ctx, &p.User, p.TransferID)
+	qw422016.N().S(`
+</section>
+`)
 }
 
 func (p *UsersProfilesShow) WriteContent(qq422016 qtio422016.Writer) {

@@ -254,6 +254,7 @@ func ScanReferenceUser(row interface{ Scan(...any) error }) (User, error) {
 	var created time.Time
 	err := row.Scan(&u.ID, &u.Name, &email, &digest, &u.Role, &u.Status, &bio, &botToken, timestamp{&created}, timestamp{&u.UpdatedAt})
 	u.Email, u.Password, u.Bio, u.BotToken = email.String, digest.String, bio.String, botToken.String
+	u.NullEmail, u.NullBio = !email.Valid, !bio.Valid
 	return u, err
 }
 

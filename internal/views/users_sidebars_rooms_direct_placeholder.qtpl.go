@@ -15,6 +15,27 @@ var (
 )
 
 func StreamUsersSidebarsRoomsDirectPlaceholder(qw422016 *qt422016.Writer, ctx *ViewContext, user *UserSummary) {
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+  <span class="avatar">
+    `)
+	qw422016.N().S(string(ImageTag(ctx, user.AvatarPath, NewAttrs().AriaHidden())))
+	qw422016.N().S(`
+  </span>
+
+  <span class="direct__author flex align-center gap max-width min-width border-radius txt-small">
+    <span class="txt-nowrap overflow-ellipsis">
+      <span class="for-screen-reader">Start a ping with</span>
+      `)
+	qw422016.E().S(user.FirstName())
+	qw422016.N().S(`
+    </span>
+  </span>
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(ButtonToBlock(capture1, RoomsDirectsWithUser(user.ID), NewAttrs().Class("direct borderless fill-transparent unpad"))))
 }
 
 func WriteUsersSidebarsRoomsDirectPlaceholder(qq422016 qtio422016.Writer, ctx *ViewContext, user *UserSummary) {

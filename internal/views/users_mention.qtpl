@@ -1,2 +1,3 @@
-{% comment %}reference/crates/views/templates/users/_mention.html; TODO: body{% endcomment %}
-{% func UsersMention(ctx *ViewContext, user *MentionUser) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/users/_mention.html{% endcomment %}
+{% func UsersMention(ctx *ViewContext, user *MentionUser) %}<span class="mention" sgid="{%s user.AttachableSgid %}">{%s= string(AvatarTag(ctx, user.Avatar(), NewAttrs())) %} {%s user.Name %}</span>
+{% endfunc %}

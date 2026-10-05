@@ -3,6 +3,8 @@
 
 package views
 
+import "strconv"
+
 import (
 	qtio422016 "io"
 
@@ -15,6 +17,121 @@ var (
 )
 
 func (p *UsersSidebarsShow) StreamContent(qw422016 *qt422016.Writer) {
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+  `)
+	qw422016.N().S(string(TurboStreamFrom(p.RoomsStream)))
+	qw422016.N().S(`
+  `)
+	qw422016.N().S(string(TurboStreamFrom(p.UserRoomsStream)))
+	qw422016.N().S(`
+
+  <div class="sidebar__container overflow-y overflow-hide-scrollbar"
+      data-controller="badge-dot"
+      data-badge-dot-unread-class="unread"
+      data-action="rooms-list:unread@window->badge-dot#update rooms-list:read@window->badge-dot#update turbo:submit-start->turbo-frame#unpermanize">
+    <turbo-frame id="direct_rooms_control" target="_top">
+      <div class="directs gap overflow-x overflow-hide-scrollbar">
+        `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+          <span class="avatar avatar--icon">
+            `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "messages-add.svg", NewAttrs().Size(20).AriaHidden().Class("colorize--black"))))
+	qw422016.N().S(`
+          </span>
+
+          <span class="direct__author flex max-width min-width border-radius pad-inline-half">
+            <span class="for-screen-reader">New</span>
+            <span class="txt-small overflow-clip">Ping</span>
+          </span>
+`)
+	capture2 := EndCapture(qw422016)
+
+	qw422016.N().S(string(LinkToBlock(capture2, RouteNewRoomsDirect(), NewAttrs().Class("direct direct__new").Data("turbo_frame", "_self"))))
+	qw422016.N().S(`
+        <div id="direct_rooms" contents data-controller="sorted-list" data-action="rooms-list:unread@window->sorted-list#updateItem">
+          `)
+	for _, membership := range p.DirectMemberships {
+		qw422016.N().S(CachedDirectRoomItem(p.Ctx, membership).HTML)
+	}
+	qw422016.N().S(`        </div>
+
+        <div contents>
+          `)
+	for i := range p.DirectPlaceholderUsers {
+		StreamUsersSidebarsRoomsDirectPlaceholder(qw422016, p.Ctx, &p.DirectPlaceholderUsers[i])
+	}
+	qw422016.N().S(`        </div>
+      </div>
+    </turbo-frame>
+
+    <div class="rooms position-relative flex flex-column gap">
+      <div id="shared_rooms" contents data-controller="sorted-list">
+`)
+	for i := range p.OtherMemberships {
+		qw422016.N().S(`          `)
+		StreamUsersSidebarsRoomsShared(qw422016, &p.OtherMemberships[i])
+	}
+	qw422016.N().S(`      </div>
+
+`)
+	if p.CanCreateRooms {
+		qw422016.N().S(`        `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+          `)
+		qw422016.N().S(string(ImageTag(p.Ctx, "add.svg", NewAttrs().Size(20).AriaHidden().Style("view-transition-name: new-room"))))
+		qw422016.N().S(`
+`)
+		capture3 := EndCapture(qw422016)
+
+		qw422016.N().S(string(LinkToBlock(capture3, RouteNewRoomsOpen(), NewAttrs().Class("rooms__new-btn btn room align-center gap txt-reversed").Aria("label", "New Chat Room"))))
+	}
+	qw422016.N().S(`    </div>
+
+    <button class="btn sidebar__toggle" data-action="toggle-class#toggle">
+      `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "menu.svg", NewAttrs().Size(20).AriaHidden())))
+	qw422016.N().S(`
+      <span class="for-screen-reader">Open menu</span>
+    </button>
+  </div>
+
+  <div class="flex align-end sidebar__tools gap justify-end">
+    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      `)
+	qw422016.N().S(string(ImageTag(p.Ctx, p.CurrentUser.AvatarPath, NewAttrs().Size(48).AriaHidden().Style("view-transition-name: avatar-"+strconv.FormatInt(p.CurrentUser.ID, 10)))))
+	qw422016.N().S(`
+      <span class="for-screen-reader">My Settings</span>
+`)
+	capture4 := EndCapture(qw422016)
+
+	qw422016.N().S(string(LinkToBlock(capture4, RouteUserProfile(), NewAttrs().Class("btn avatar flex-item-no-shrink sidebar__tool"))))
+	qw422016.N().S(`
+    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "settings.svg", NewAttrs().Size(20).AriaHidden().Style("view-transition-name: account-settings"))))
+	qw422016.N().S(`
+      <span class="for-screen-reader">Account Settings</span>
+`)
+	capture5 := EndCapture(qw422016)
+
+	qw422016.N().S(string(LinkToBlock(capture5, RouteEditAccount(), NewAttrs().Class("btn align-center gap txt-reversed sidebar__tool"))))
+	qw422016.N().S(`  </div>
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(SidebarTurboFrameTagBlock(capture1)))
 }
 
 func (p *UsersSidebarsShow) WriteContent(qq422016 qtio422016.Writer) {

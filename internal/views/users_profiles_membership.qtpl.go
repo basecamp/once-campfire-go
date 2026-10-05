@@ -15,6 +15,36 @@ var (
 )
 
 func StreamUsersProfilesMembership(qw422016 *qt422016.Writer, ctx *ViewContext, membership *ProfileMembership) {
+	qw422016.N().S(`<li class="flex align-center gap margin-none min-width membership-item">
+  `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+    <strong>`)
+	qw422016.E().S(membership.RoomDisplayName)
+	qw422016.N().S(`</strong>
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(LinkToBlock(capture1, RouteRoom(membership.RoomID), NewAttrs().Class("overflow-ellipsis fill-shade txt-primary txt-undecorated"))))
+	qw422016.N().S(`
+  <hr class="separator" aria-hidden="true">
+
+  <span class="txt-small">
+    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      `)
+	qw422016.N().S(string(ButtonToChangeInvolvement(ctx, membership.InvolvementRoom(), membership.Involvement)))
+	qw422016.N().S(`
+`)
+	capture2 := EndCapture(qw422016)
+
+	qw422016.N().S(string(TurboFrameTag(capture2, DomID(membership.RoomParamKey, membership.RoomID, "involvement"), NewAttrs())))
+	qw422016.N().S(`  </span>
+</li>
+`)
 }
 
 func WriteUsersProfilesMembership(qq422016 qtio422016.Writer, ctx *ViewContext, membership *ProfileMembership) {

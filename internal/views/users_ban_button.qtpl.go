@@ -15,6 +15,35 @@ var (
 )
 
 func StreamUsersBanButton(qw422016 *qt422016.Writer, ctx *ViewContext, user *UserSummary) {
+	if user.Active() {
+		qw422016.N().S(`  `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+    `)
+		qw422016.N().S(string(ImageTag(ctx, "cancel.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Ban "+user.Name))))
+		qw422016.N().S(`
+    <span>Ban `)
+		qw422016.E().S(user.Name)
+		qw422016.N().S(`</span>
+`)
+		capture1 := EndCapture(qw422016)
+
+		qw422016.N().S(string(ButtonToBlock(capture1, RouteUserBan(user.ID), NewAttrs().Method("post").Class("btn full-width").Data("turbo_confirm", "Are you sure you want to ban this user? This will log them out, delete their messages, and block their IP addresses."))))
+	} else {
+		qw422016.N().S(`  `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+    `)
+		qw422016.N().S(string(ImageTag(ctx, "cancel.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Remove Ban "+user.Name))))
+		qw422016.N().S(`
+    <span>Remove ban</span>
+`)
+		capture2 := EndCapture(qw422016)
+
+		qw422016.N().S(string(ButtonToBlock(capture2, RouteUserBan(user.ID), NewAttrs().Method("delete").Class("btn btn--negative full-width").Data("turbo_confirm", "Are you sure you want to remove the ban on this user?"))))
+	}
 }
 
 func WriteUsersBanButton(qq422016 qtio422016.Writer, ctx *ViewContext, user *UserSummary) {
