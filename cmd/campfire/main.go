@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"runtime/pprof"
 	"strconv"
 	"syscall"
@@ -29,7 +30,15 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// defaultGCPercent is the GC target when GOGC isn't set: the collector runs half as often as at
+// Go's default of 100, for roughly a quarter more heap (bench/results/apples-step4-*).
+const defaultGCPercent = 200
+
 func run() error {
+	if os.Getenv("GOGC") == "" {
+		debug.SetGCPercent(defaultGCPercent)
+	}
 	if path := os.Getenv("GO_CPU_PROFILE"); path != "" {
 		file, err := os.Create(path)
 		if err != nil {

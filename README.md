@@ -108,34 +108,28 @@ Container verification exercises setup, a live SQLite backup, offline restore, a
 
 ## Benchmarks
 
-The [latest comparison](bench/results/optimization-next-20261003/README.md) measures the
-published Go version, the current Go version, and Rust in three rotating runs. Median
-requests/sec at 16 HTTP clients, with identical seed data and four application CPUs:
+[Apples to apples](bench/results/apples-to-apples-20261005.md) makes Go do the Rust reference's
+work — the same SQL, writer and checkpointer, byte-identical pages with the same caches, and the
+same Cable fan-out — then measures both. Median requests/sec (complete broadcasts/sec for Cable),
+16 HTTP clients, three server CPUs each, the same seed:
 
-| Workload | Previous Go | Current Go | Change | Rust |
+| Workload | Published Go | Go | Rust | Rust / Go |
 |---|---:|---:|---:|---:|
-| Room page | 10,175 | 15,218 | +49.6% | 27,535 |
-| Message history | 21,445 | 21,369 | -0.4% | 31,139 |
-| Sidebar | 24,423 | 24,658 | +1.0% | 38,303 |
-| Search | 14,817 | 14,841 | +0.2% | 30,807 |
-| Post message | 4,025 | 5,036 | +25.1% | 7,740 |
+| Room page | 11,947 | 14,888 | 21,675 | 1.46× |
+| Messages page | 16,411 | 17,885 | 23,290 | 1.30× |
+| Sidebar | 14,238 | 14,794 | 27,518 | 1.86× |
+| Search | 12,101 | 20,934 | 27,449 | 1.31× |
+| Post message | 4,699 | 7,374 | 7,458 | 1.01× |
+| Cable, 1,000 clients | 261 | 499 | 532 | 1.07× |
 
-Room-page p99 latency fell from 5.69 to 4.14 ms; message-write p99 fell from 16.03 to
-12.49 ms. Rust remains 1.81× faster on room pages and 1.54× faster on writes. All nine
-application runs completed with zero HTTP errors, 345,913 acknowledged writes verified
-in both messages and FTS, and nine thumbnails with identical bytes. HTTP memory use was
-essentially unchanged. See the [raw report](bench/results/optimization-next-20261003/application/report.md)
-for ranges, latency, resource measurements and limitations.
-
-This focused pass did not remeasure Cable throughput. In the
-[earlier full-workload comparison](bench/results/application-optimized-20261003/report.md),
-compressed broadcasts to 10,000 clients measured 21.1 complete messages/sec for Go and
-39.3 for Rust. Final workload Pss was 1,023 MiB versus 408 MiB. Those measurements include
-large WebSocket workloads and must not be compared directly with the latest HTTP-only
-memory figures. The earlier run had zero HTTP errors and complete Cable delivery;
-[interrupted attempts](bench/results/application-optimized-20261003/CONTENTION.md) were
-excluded and restarted. The [first optimization report](bench/results/optimization-20261003/comparison.md)
-retains the original-port comparison.
+The published version's pages did less work (a cached page shell, a 9 KB sidebar frame where
+Rust sends a 30 KB page), so only the last three columns compare like with like. The remaining gap
+is cgo calls into SQLite, garbage collection (`GOGC=200` by default trades about 40 MiB for most
+of it), net/http's lack of vectored writes, and template/helper allocation. The per-step reports
+are `bench/results/apples-step{1,2,3,4}-20261005`; earlier optimization passes are in
+`bench/results/optimization-*`. `go build` uses profile-guided optimization from
+`cmd/campfire/default.pgo`, merged from `bench/profile` CPU profiles of the room, messages,
+sidebar, search, avatar, write and Cable workloads; regenerate it after significant changes.
 
 These numbers compare these implementations on this workstation, not languages in general.
 
