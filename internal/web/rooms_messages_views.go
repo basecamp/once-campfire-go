@@ -920,8 +920,11 @@ func (s *Server) refreshShow(w http.ResponseWriter, r *http.Request, u database.
 		s.fail(w, err)
 		return
 	}
+	// Rendered as text, not recorded (the reference's RefreshShow.render()): its ETag digests the
+	// whole body.
 	s.bare(w, r, &u, http.StatusOK, "turbo_stream", turboStreamContentType, func(ctx *views.ViewContext) *views.RecordedPage {
-		return views.Render(0, func(qw *qt.Writer) { views.StreamRoomsRefreshesShowTurboStream(qw, ctx, refresh) })
+		html := views.RenderString(0, func(qw *qt.Writer) { views.StreamRoomsRefreshesShowTurboStream(qw, ctx, refresh) })
+		return &views.RecordedPage{Text: []byte(html)}
 	})
 }
 
