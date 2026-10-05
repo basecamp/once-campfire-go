@@ -107,7 +107,7 @@ two application CPUs and two SQLite readers each. Median requests/sec at 16 HTTP
 |---|---:|---:|---:|---:|
 | Room page | 9,456 | 16,924 | 17,324 | 98% |
 | Message history | 13,430 | 19,335 | 18,940 | 102% |
-| Sidebar (full page) | 11,315 | 16,034 | 20,436 | 78% |
+| Sidebar (full page) | 11,315 | 16,034 | 20,436 | 78% (66% with Rust's SQLite temp store) |
 | Search | 9,073 | 18,800 | 22,942 | 82% |
 | Post message | 4,540 | 7,086 | 6,739 | 105% |
 

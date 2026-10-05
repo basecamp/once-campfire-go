@@ -129,9 +129,11 @@ connection is used by one goroutine at a time (11.0 µs for the same queries).
   builds. Rust therefore still pays the temp-B-tree cost on the same queries (about 20 vs
   6 µs each, measured with Python's SQLite on the seed). In the benchmark this setting
   benefits Go only: it accounts for about 20 of the 21 µs saved on the sidebar's two
-  placeholder queries, most of the sidebar's 13,179 → 15,781 req/s. Sidebar and search
-  comparisons with Rust include it. The same pragma would apply to the reference
-  unchanged.
+  placeholder queries. The same pragma would apply to the reference unchanged.
+- Equal-terms measurement ([temp-store/report.md](temp-store/report.md), three rotating runs,
+  this pull request built with and without the pragma): sidebar 13,671 req/s with the file temp
+  store (66% of Rust's 20,643) and 16,704 with the memory temp store (81%). Search 18,674 vs
+  19,041 (Rust 22,630); room, history and posting unchanged within noise.
 - Batching the sidebar's per-direct-room member queries into one (same order, from the
   same index) was within run-to-run noise. Test: `TestRoomMembersByRoomMatchesEachRoom`.
 

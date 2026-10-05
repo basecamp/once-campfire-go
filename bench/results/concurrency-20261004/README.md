@@ -13,7 +13,7 @@ second and third once), two application CPUs. Full report: [application/report.m
 |---|---:|---:|---:|---:|
 | Room page | 9,456 | 16,924 | 17,324 | 98% |
 | Message history | 13,430 | 19,335 | 18,940 | 102% |
-| Sidebar (full page, fair) | 11,315† | 16,034† | 20,436† | 78% |
+| Sidebar (full page, fair) | 11,315† | 16,034† | 20,436† | 78% (66% on equal SQLite settings‡) |
 | Search | 9,073 | 18,800 | 22,942 | 82% |
 | Post message | 4,540 | 7,086 | 6,739 | 105% |
 
@@ -67,6 +67,11 @@ Pss after the HTTP workloads: 133 MB (published Go), 137 MB (new Go), 102 MB (Ru
 `GOGC` closes much of the read gap but uses about twice the memory, so it was not adopted
 (see CHANGES.md).
 
+‡ Go keeps SQLite temp B-trees in memory; Rust uses the default file temp store. With the
+same file temp store, Go's sidebar measured 13,671 vs Rust's 20,643 req/s in a separate
+three-run comparison ([temp-store/report.md](temp-store/report.md)); other routes were
+unchanged within noise. The setting stays as a documented Go optimization.
+
 ## What was wrong with the sidebar comparison
 
 The harness checks the sidebar by its room IDs, not by the page it returns. For
@@ -91,8 +96,8 @@ Rust slightly more to send.
   Identity encoding, 2-second warmups, 5-second samples, three rotating repetitions.
   `bench/application` gained `--workers` so these counts follow the CPU set.
 - One SQLite setting differs: Go keeps temporary B-trees in memory (`temp_store=MEMORY`);
-  Rust uses SQLite's default file temp store. This favors Go on queries that sort or
-  de-duplicate small results, chiefly the sidebar (see change 7 in CHANGES.md).
+  Rust uses SQLite's default file temp store. It favors Go only on the sidebar (16,704 vs
+  13,671 req/s with the file temp store; Rust 20,643); see change 7 in CHANGES.md.
 - Response contracts (message/room IDs), write persistence and FTS indexing, complete Cable
   delivery and thumbnail bytes are checked on every run.
 - After every change, the room, history, sidebar and search responses of the new Go binary
