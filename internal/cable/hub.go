@@ -93,6 +93,15 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 		defer cancel()
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
+		// One watchdog per connection instead of a timeout context per frame: a write
+		// that stalls for 30 seconds, or the connection's end, closes the socket and
+		// fails the write.
+		watchdog := time.AfterFunc(time.Hour, func() { conn.CloseNow() })
+		watchdog.Stop()
+		defer watchdog.Stop()
+		stopClosing := context.AfterFunc(ctx, func() { conn.CloseNow() })
+		defer stopClosing()
+		batch := make([]*websocket.PreparedMessage, 0, 64)
 		for {
 			var data []byte
 			var frame *websocket.PreparedMessage
@@ -110,12 +119,25 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 				}
 				data, _ = json.Marshal(map[string]any{"type": "ping", "message": time.Now().Unix()})
 			}
-			timeout, stop := context.WithTimeout(ctx, 30*time.Second)
 			if frame == nil {
 				frame = websocket.NewPreparedMessage(websocket.MessageText, data)
 			}
-			err := conn.WritePrepared(timeout, frame)
-			stop()
+			// Frames already queued behind this one go out in the same write, so a
+			// client that has fallen behind catches up in fewer system calls.
+			batch = append(batch[:0], frame)
+		drain:
+			for !closeAfter && len(batch) < cap(batch) {
+				select {
+				case queued := <-c.out:
+					batch = append(batch, queued)
+				default:
+					break drain
+				}
+			}
+			watchdog.Reset(30 * time.Second)
+			err := conn.WritePrepared(context.Background(), batch...)
+			watchdog.Stop()
+			clear(batch)
 			if err != nil || closeAfter {
 				return
 			}

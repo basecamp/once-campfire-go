@@ -11,6 +11,8 @@ import (
 	xhtml "github.com/basecamp/once-campfire-go/internal/html"
 )
 
+var hostLetter = regexp.MustCompile(`[a-zA-Z]`)
+
 type Mention struct {
 	ID                              int64
 	Name, Title, SGID, Path, Avatar string
@@ -515,7 +517,7 @@ func externalURL(value, host string) (string, error) {
 		return "", errors.New("missing host label")
 	}
 	label := name[strings.LastIndex(name, ".")+1:]
-	if !regexp.MustCompile(`[a-zA-Z]`).MatchString(label) || strings.HasPrefix(strings.ToLower(label), "0x") || strings.EqualFold(name, strings.TrimSuffix(host, ".")) {
+	if !hostLetter.MatchString(label) || strings.HasPrefix(strings.ToLower(label), "0x") || strings.EqualFold(name, strings.TrimSuffix(host, ".")) {
 		return "", nil
 	}
 	return value, nil
@@ -587,9 +589,9 @@ func embedHTML(n *xhtml.Node, ctx Context) (string, error) {
 	return result + "    </div>\n  </actiontext-opengraph-embed>\n</figure>", nil
 }
 
-func erbEscape(s string) string {
-	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\"", "&quot;", "'", "&#39;").Replace(s)
-}
+var erbEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\"", "&quot;", "'", "&#39;")
+
+func erbEscape(s string) string { return erbEscaper.Replace(s) }
 func galleries(root *xhtml.Node, render bool) {
 	walk(root, func(n *xhtml.Node) {
 		if n.Data != "div" {

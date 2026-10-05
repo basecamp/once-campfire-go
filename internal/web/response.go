@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 )
 
 var responseBuffers = sync.Pool{New: func() any { return new(bytes.Buffer) }}
@@ -67,7 +68,10 @@ func (w *responseBuffer) finish(r *http.Request) {
 		h.Set("Cache-Control", value)
 	}
 	if w.status == 200 {
-		modified, _ := http.ParseTime(h.Get("Last-Modified"))
+		var modified time.Time
+		if value := h.Get("Last-Modified"); value != "" {
+			modified, _ = http.ParseTime(value)
+		}
 		if notModified(w.ResponseWriter, r, h.Get("ETag"), modified) {
 			return
 		}

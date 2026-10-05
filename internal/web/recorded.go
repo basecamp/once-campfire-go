@@ -17,15 +17,16 @@ import (
 // the cached message list without copying it through template/fmt/page buffers.
 
 func (s *Server) messageList(ctx context.Context, messages []database.Message) (fragmentEntry, error) {
-	var key strings.Builder
-	key.WriteString("message-list/")
+	raw := make([]byte, 0, 16+len(messages)*56)
+	raw = append(raw, "message-list/"...)
 	for _, message := range messages {
-		key.WriteString(messageCacheKey(message))
-		key.WriteByte('/')
+		raw = appendMessageCacheKey(raw, message)
+		raw = append(raw, '/')
 	}
-	if entry, ok := s.fragments.entry(key.String()); ok {
+	if entry, ok := s.fragments.entry(string(raw)); ok {
 		return entry, nil
 	}
+	key := string(raw)
 	views, err := s.messageItems(ctx, messages)
 	if err != nil {
 		return fragmentEntry{}, err
@@ -35,11 +36,28 @@ func (s *Server) messageList(ctx context.Context, messages []database.Message) (
 		body.WriteString(string(view.Fragment))
 	}
 	html := template.HTML(body.String())
-	s.fragments.put(key.String(), html)
-	if entry, ok := s.fragments.entry(key.String()); ok {
+	s.fragments.put(key, html)
+	if entry, ok := s.fragments.entry(key); ok {
 		return entry, nil
 	}
 	return fragmentEntry{html: html, digest: sha256.Sum256([]byte(html))}, nil
+}
+
+// A response body part with its SHA-256, cached for fragments and page shells.
+type recordedPart struct {
+	data   []byte
+	digest [32]byte
+}
+
+func newRecordedPart(data []byte) recordedPart {
+	return recordedPart{data: data, digest: sha256.Sum256(data)}
+}
+func (f fragmentEntry) part() recordedPart {
+	payload := f.payload
+	if payload == nil {
+		payload = []byte(f.html)
+	}
+	return recordedPart{data: payload, digest: f.digest}
 }
 
 func writeRecorded(w http.ResponseWriter, status int, rendered, marker string, fragment fragmentEntry) {
@@ -48,23 +66,18 @@ func writeRecorded(w http.ResponseWriter, status int, rendered, marker string, f
 		http.Error(w, "Missing message insertion point", 500)
 		return
 	}
-	payload := fragment.payload
-	if payload == nil {
-		payload = []byte(fragment.html)
-	}
-	parts := [][]byte{[]byte(before), payload, []byte(after)}
+	writeParts(w, status, []recordedPart{newRecordedPart([]byte(before)), fragment.part(), newRecordedPart([]byte(after))})
+}
+
+func writeParts(w http.ResponseWriter, status int, parts []recordedPart) {
 	if w.Header().Get("ETag") == "" {
-		// Like Rust's Body::Parts, digest boundaries and cached fragment hashes.
+		// Like Rust's Body::Parts, digest boundaries and cached part hashes.
 		hash := sha256.New()
-		for i, part := range parts {
+		for _, part := range parts {
 			var size [8]byte
-			binary.LittleEndian.PutUint64(size[:], uint64(len(part)))
+			binary.LittleEndian.PutUint64(size[:], uint64(len(part.data)))
 			hash.Write(size[:])
-			digest := fragment.digest
-			if i != 1 {
-				digest = sha256.Sum256(part)
-			}
-			hash.Write(digest[:])
+			hash.Write(part.digest[:])
 		}
 		w.Header().Set("ETag", fmt.Sprintf("W/\"%x\"", hash.Sum(nil)[:16]))
 	}
@@ -75,10 +88,14 @@ func writeRecorded(w http.ResponseWriter, status int, rendered, marker string, f
 	if sw, ok := w.(*sessionWriter); ok && sw.failed {
 		return
 	}
+	body := make([][]byte, len(parts))
+	for i, part := range parts {
+		body[i] = part.data
+	}
 	target := w
 	for {
 		if buffered, ok := target.(*responseBuffer); ok {
-			buffered.parts = parts
+			buffered.parts = body
 			return
 		}
 		if wrapper, ok := target.(interface{ Unwrap() http.ResponseWriter }); ok {
@@ -87,7 +104,7 @@ func writeRecorded(w http.ResponseWriter, status int, rendered, marker string, f
 			break
 		}
 	}
-	for _, part := range parts {
+	for _, part := range body {
 		w.Write(part)
 	}
 }

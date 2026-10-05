@@ -41,6 +41,26 @@ func run() error {
 		}
 		defer pprof.StopCPUProfile()
 	}
+	if path := os.Getenv("GO_HEAP_PROFILE"); path != "" {
+		defer func() {
+			if file, err := os.Create(path); err == nil {
+				pprof.Lookup("allocs").WriteTo(file, 0)
+				file.Close()
+			}
+		}()
+		// SIGUSR1 writes the live heap beside it, for profiles under load.
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, syscall.SIGUSR1)
+		go func() {
+			for range signals {
+				if file, err := os.Create(path + ".inuse"); err == nil {
+					runtime.GC()
+					pprof.Lookup("heap").WriteTo(file, 0)
+					file.Close()
+				}
+			}
+		}()
+	}
 
 	command := "server"
 	if len(os.Args) > 1 {

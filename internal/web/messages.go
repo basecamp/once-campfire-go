@@ -61,6 +61,18 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 	views := viewMessages(messages)
 	roomNames := map[int64]string{}
 	creators := map[int64]database.User{}
+	ids := make([]int64, len(views))
+	for i := range views {
+		ids[i] = views[i].ID
+	}
+	boosts, err := s.DB.BoostsByMessage(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	attachments, err := s.Storage.AttachedMany(ctx, "Message", ids, "attachment")
+	if err != nil {
+		return nil, err
+	}
 	for i := range views {
 		name, ok := roomNames[views[i].RoomID]
 		if !ok {
@@ -101,13 +113,11 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 		if sound := soundHTML(result.Plain); sound != "" {
 			views[i].HTML = template.HTML(sound)
 		}
-		boosts, err := s.DB.Boosts(ctx, views[i].ID)
-		if err != nil {
-			return nil, err
+		views[i].Boosts = boosts[views[i].ID]
+		if views[i].Boosts == nil {
+			views[i].Boosts = []database.Boost{}
 		}
-		views[i].Boosts = boosts
-		blob, err := s.Storage.Attached(ctx, "Message", views[i].ID, "attachment")
-		if err == nil {
+		if blob, found := attachments[views[i].ID]; found {
 			views[i].Attachment = &blob
 			views[i].BlobURL = s.Storage.BlobURL(blob)
 			views[i].DownloadURL = views[i].BlobURL + "?disposition=attachment"
@@ -124,18 +134,12 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 			}
 
 			views[i].HTML = template.HTML(attachmentHTML(blob, views[i].BlobURL, views[i].DownloadURL, views[i].PreviewURL))
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
 		}
 		key := messageCacheKey(views[i].Message)
 		if html, ok := s.fragments.get(key); ok {
 			views[i].Fragment = html
 		} else {
-			body, err := s.markup("message-uncached", views[i])
-			if err != nil {
-				return nil, err
-			}
-			views[i].Fragment = s.fragments.put(key, template.HTML(body))
+			views[i].Fragment = s.fragments.put(key, template.HTML(s.renderer.render(views[i])))
 		}
 	}
 	return views, nil

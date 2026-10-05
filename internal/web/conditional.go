@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -22,8 +23,10 @@ func notModified(w http.ResponseWriter, r *http.Request, etag string, modified t
 				}
 			}
 		}
-	} else if since, err := http.ParseTime(r.Header.Get("If-Modified-Since")); err == nil && !modified.IsZero() {
-		fresh = !since.Before(modified.Truncate(time.Second))
+	} else if !modified.IsZero() {
+		if since, err := http.ParseTime(r.Header.Get("If-Modified-Since")); err == nil {
+			fresh = !since.Before(modified.Truncate(time.Second))
+		}
 	}
 	if fresh {
 		w.Header().Del("Content-Type")
@@ -33,23 +36,37 @@ func notModified(w http.ResponseWriter, r *http.Request, etag string, modified t
 	return fresh
 }
 func messageFreshness(w http.ResponseWriter, r *http.Request, messages []database.Message) bool {
-	parts := make([]string, 0, len(messages)+2)
-	var modified time.Time
-	for _, m := range messages {
-		parts = append(parts, fmt.Sprintf("messages/%d-%s", m.ID, m.UpdatedAt.UTC().Format("20060102150405.000000")))
-		parts[len(parts)-1] = strings.ReplaceAll(parts[len(parts)-1], ".", "")
-		if m.UpdatedAt.After(modified) {
-			modified = m.UpdatedAt
-		}
-	}
-	if r.Header.Get("Turbo-Frame") != "" {
-		parts = append(parts, "frame")
-	}
-	parts = append(parts, "messages/index")
-	hash := sha256.Sum256([]byte(strings.Join(parts, "/")))
+	key, modified := messageFreshnessKey(messages, r.Header.Get("Turbo-Frame") != "")
+	hash := sha256.Sum256(key)
 	etag := fmt.Sprintf("W/\"%x\"", hash[:16])
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Last-Modified", modified.UTC().Format(http.TimeFormat))
 	w.Header().Set("Cache-Control", "max-age=0, private, must-revalidate")
 	return notModified(w, r, etag, modified)
+}
+
+// The cache keys of the messages (messages/ID-YYYYMMDDhhmmssUUUUUU), then the frame
+// and template, joined by slashes.
+func messageFreshnessKey(messages []database.Message, frame bool) ([]byte, time.Time) {
+	var modified time.Time
+	key := make([]byte, 0, len(messages)*40+32)
+	for _, m := range messages {
+		updated := m.UpdatedAt.UTC()
+		key = append(key, "messages/"...)
+		key = strconv.AppendInt(key, m.ID, 10)
+		key = append(key, '-')
+		key = updated.AppendFormat(key, "20060102150405")
+		micros := updated.Nanosecond() / 1000
+		for divisor := 100000; divisor > 0; divisor /= 10 {
+			key = append(key, byte('0'+micros/divisor%10))
+		}
+		key = append(key, '/')
+		if m.UpdatedAt.After(modified) {
+			modified = m.UpdatedAt
+		}
+	}
+	if frame {
+		key = append(key, "frame/"...)
+	}
+	return append(key, "messages/index"...), modified
 }

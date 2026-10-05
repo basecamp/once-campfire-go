@@ -99,36 +99,32 @@ Container verification exercises setup, a live SQLite backup, offline restore, a
 
 ## Benchmarks
 
-The [latest comparison](bench/results/optimization-next-20261003/README.md) measures the
-published Go version, the current Go version, and Rust in three rotating runs. Median
-requests/sec at 16 HTTP clients, with identical seed data and four application CPUs:
+The [latest comparisons](bench/results/uncached-cable-20261005/README.md) run the Go and Rust
+applications with identical seed data, two application CPUs and two SQLite readers each.
+Median requests/sec at 16 HTTP clients over three rotating runs; the "Go 2026-10-03" column is
+the version before the [concurrency changes](bench/results/concurrency-20261004/README.md):
 
-| Workload | Previous Go | Current Go | Change | Rust |
+| Workload | Go 2026-10-03 | Current Go | Rust | Current Go / Rust |
 |---|---:|---:|---:|---:|
-| Room page | 10,175 | 15,218 | +49.6% | 27,535 |
-| Message history | 21,445 | 21,369 | -0.4% | 31,139 |
-| Sidebar | 24,423 | 24,658 | +1.0% | 38,303 |
-| Search | 14,817 | 14,841 | +0.2% | 30,807 |
-| Post message | 4,025 | 5,036 | +25.1% | 7,740 |
+| Room page | 9,456 | 16,583 | 17,040 | 97% |
+| Message history | 13,430 | 19,281 | 18,545 | 104% |
+| Sidebar (full page) | 11,315 | 16,599 | 20,713 | 80% (66% with Rust's SQLite temp store) |
+| Search | 9,073 | 17,958 | 22,106 | 81% |
+| Post message | 4,540 | 8,301 | 6,700 | 124% |
+| Cable fan-out, 1,000 clients (messages/s) | 228 | 389 | 403 | 97% |
 
-Room-page p99 latency fell from 5.69 to 4.14 ms; message-write p99 fell from 16.03 to
-12.49 ms. Rust remains 1.81× faster on room pages and 1.54× faster on writes. All nine
-application runs completed with zero HTTP errors, 345,913 acknowledged writes verified
-in both messages and FTS, and nine thumbnails with identical bytes. HTTP memory use was
-essentially unchanged. See the [raw report](bench/results/optimization-next-20261003/application/report.md)
-for ranges, latency, resource measurements and limitations.
+These use warm fragment caches, as both applications do by default. With the cache disabled
+in both, Go renders room pages at 984 req/s and Rust at 1,584. Go's p99 latency is still about
+twice Rust's at 16 clients (equal at one client), and 1,000 Cable clients take about 73 KB each
+in Go and 18 KB in Rust. Earlier sidebar comparisons, including the previous report's 24,658 vs
+38,303 req/s, measured Go returning only the sidebar frame where Rust returned the full page.
+The change logs ([1](bench/results/concurrency-20261004/CHANGES.md),
+[2](bench/results/uncached-cable-20261005/CHANGES.md)) list each change with its measured effect
+and tests. Measurements ran in a 4-CPU Docker Desktop VM and are not comparable with the
+earlier 16-CPU workstation reports ([previous comparison](bench/results/optimization-next-20261003/README.md),
+[full-workload comparison](bench/results/application-optimized-20261003/report.md)).
 
-This focused pass did not remeasure Cable throughput. In the
-[earlier full-workload comparison](bench/results/application-optimized-20261003/report.md),
-compressed broadcasts to 10,000 clients measured 21.1 complete messages/sec for Go and
-39.3 for Rust. Final workload Pss was 1,023 MiB versus 408 MiB. Those measurements include
-large WebSocket workloads and must not be compared directly with the latest HTTP-only
-memory figures. The earlier run had zero HTTP errors and complete Cable delivery;
-[interrupted attempts](bench/results/application-optimized-20261003/CONTENTION.md) were
-excluded and restarted. The [first optimization report](bench/results/optimization-20261003/comparison.md)
-retains the original-port comparison.
-
-These numbers compare these implementations on this workstation, not languages in general.
+These numbers compare these implementations on this machine, not languages in general.
 
 ```sh
 # Build both release binaries and Rust's bench/loadgen; prepare its parity seed.
@@ -138,7 +134,7 @@ bench/application --out bench/results/my-run --reps 3 --seconds 5 \
 ```
 
 The harness alternates applications, uses fresh identical seed copies, fixes server/client CPU
-sets and four application workers, and warms each HTTP workload. It validates message/room IDs,
+sets and four application workers by default (`--workers`), and warms each HTTP workload. It validates message/room IDs,
 static/avatar bytes, every successful write and FTS entry, complete Cable fan-out, and actual thumbnail
 bytes. Reports include raw samples, source/binary hashes, toolchains, load averages and limitations.
 HTTP measurements use the direct application listener and identity encoding; public TLS/compression
@@ -153,16 +149,24 @@ throughput is not measured. `bench/health` remains available for the much narrow
   parameters and every content-negotiation edge case is not claimed.
 - WebSockets share serialized and compressed broadcast payloads through a small extension to
   coder/websocket v1.8.15 (see `third_party/websocket/README.campfire`). Outgoing queues hold 256
-  frames; slow clients are disconnected. Authorization is checked afresh for each publication,
+  frames; slow clients are disconnected. Frames already queued for a client are written together
+  in one vectored write. Authorization is checked afresh for each publication,
   batching distinct sessions per room. Rust uses different stream queues.
 - Go ignores typing commands for rooms that have been deleted; Rust can still echo them to an
   already subscribed socket. The composer shows the same deleted-room message.
 - The response cache uses least-recently-used eviction instead of Rust's sampled eviction. The Go
-  message-fragment cache is also independently implemented. It retains versioned message lists
-  and sidebar HTML; current membership and permission data are read before cache lookup.
-  Room pages also cache their surrounding HTML keyed by fresh page data, inserting the current
-  messages and refresh timestamp on every request. Responses assemble cached message bytes with fresh page HTML and derive validators from part
-  lengths and hashes, so ETag values differ from both the original Go implementation and Rust.
+  message-fragment cache is also independently implemented. It retains versioned message lists;
+  current membership and permission data are read before cache lookup. Room, search and sidebar
+  pages also cache their HTML keyed by all of their freshly read page data, inserting the current
+  messages and refresh timestamp on every request. Responses assemble cached bytes with fresh
+  parts and derive validators from part lengths and hashes, so ETag values differ from both the
+  original Go implementation and Rust.
+- Message HTML is produced by a compiled renderer rather than by executing the message template;
+  tests require it to match the template byte for byte over every branch and adversarial values.
+- SQLite connections keep temporary B-trees (small `DISTINCT`/`ORDER BY` sorts) in memory
+  (`temp_store=MEMORY`); the reference uses SQLite's default file temp store. Results are the
+  same. As in the reference, WAL checkpoints run beside a single writer and SQLite work is not
+  cancelled when a client goes away.
 - The default version label and fallback VAPID subject identify `once-campfire-go`. Explicit version,
   VAPID keys and subject settings remain supported.
 - Native host media output can differ with installed library versions. All byte-golden media tests

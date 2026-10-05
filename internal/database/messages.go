@@ -226,23 +226,48 @@ type Boost struct {
 	CreatedAt, UpdatedAt     time.Time
 }
 
+const boostSelect = "SELECT b.id,b.message_id,b.booster_id,b.content,u.name,coalesce(u.bio,''),u.updated_at,b.created_at,b.updated_at FROM boosts b JOIN users u ON u.id=b.booster_id "
+
 func (d *DB) Boosts(ctx context.Context, message int64) ([]Boost, error) {
-	rows, err := d.Read.QueryContext(ctx, "SELECT b.id,b.message_id,b.booster_id,b.content,u.name,coalesce(u.bio,''),u.updated_at,b.created_at,b.updated_at FROM boosts b JOIN users u ON u.id=b.booster_id WHERE b.message_id=? ORDER BY b.created_at", message)
+	rows, err := d.Read.QueryContext(ctx, boostSelect+"WHERE b.message_id=? ORDER BY b.created_at", message)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	result := []Boost{}
+	err = scanBoosts(rows, func(b Boost) { result = append(result, b) })
+	return result, err
+}
+
+// BoostsByMessage is Boosts for several messages in one query.
+func (d *DB) BoostsByMessage(ctx context.Context, messages []int64) (map[int64][]Boost, error) {
+	result := make(map[int64][]Boost, len(messages))
+	if len(messages) == 0 {
+		return result, nil
+	}
+	raw, err := json.Marshal(messages)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := d.Read.QueryContext(ctx, boostSelect+"WHERE b.message_id IN (SELECT value FROM json_each(?)) ORDER BY b.message_id,b.created_at,b.id", string(raw))
+	if err != nil {
+		return nil, err
+	}
+	err = scanBoosts(rows, func(b Boost) { result[b.MessageID] = append(result[b.MessageID], b) })
+	return result, err
+}
+
+func scanBoosts(rows *sql.Rows, add func(Boost)) error {
+	defer rows.Close()
 	for rows.Next() {
 		var b Boost
 		var bio string
-		if err = rows.Scan(&b.ID, &b.MessageID, &b.BoosterID, &b.Content, &b.Booster, &bio, timestamp{&b.BoosterUpdatedAt}, timestamp{&b.CreatedAt}, timestamp{&b.UpdatedAt}); err != nil {
-			return nil, err
+		if err := rows.Scan(&b.ID, &b.MessageID, &b.BoosterID, &b.Content, &b.Booster, &bio, timestamp{&b.BoosterUpdatedAt}, timestamp{&b.CreatedAt}, timestamp{&b.UpdatedAt}); err != nil {
+			return err
 		}
 		b.BoosterTitle = (User{Name: b.Booster, Bio: bio}).Title()
-		result = append(result, b)
+		add(b)
 	}
-	return result, rows.Err()
+	return rows.Err()
 }
 func (d *DB) CreateBoost(ctx context.Context, user, message int64, content string) (Boost, error) {
 	now := d.Now()
@@ -328,7 +353,7 @@ func (d *DB) MessagePageReferences(ctx context.Context, room, anchor int64, dire
 		return nil, err
 	}
 	defer rows.Close()
-	var messages []Message
+	messages := make([]Message, 0, 40)
 	for rows.Next() {
 		message := Message{RoomID: room}
 		if err := rows.Scan(&message.ID, timestamp{&message.UpdatedAt}); err != nil {

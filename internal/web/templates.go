@@ -7,6 +7,7 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"html/template"
 	"net/mail"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,8 +23,21 @@ type reaction struct{ Character, Title string }
 
 var reactions = []reaction{{"👍", "Thumbs up"}, {"👏", "Clapping"}, {"👋", "Waving hand"}, {"💪", "Muscle"}, {"❤️", "Red heart"}, {"😂", "Face with tears of joy"}, {"🎉", "Party popper"}, {"🔥", "Fire"}}
 
-func parseTemplates(secrets *rails.Secrets) (*template.Template, error) {
-	return template.New("pages").Funcs(template.FuncMap{
+func avatarPath(secrets *rails.Secrets, id int64, updated time.Time) string {
+	path := "/users/" + secrets.SignedID("User", id, "avatar", time.Time{}) + "/avatar"
+	if !updated.IsZero() {
+		path += "?v=" + updated.UTC().Format("20060102150405")
+	}
+	return path
+}
+func epochMillis(t time.Time) string { return strconv.FormatInt(t.UnixMilli(), 10) }
+func isoTime(t time.Time) string     { return t.UTC().Format("2006-01-02T15:04:05.000Z") }
+
+func parseTemplates(secrets *rails.Secrets) (*template.Template, *messageRenderer, error) {
+	// The renderer's avatar paths are shared with the templates.
+	renderer := newMessageRenderer(secrets)
+	t, err := template.New("pages").Funcs(template.FuncMap{
+		"quickBoosts": func(clientID string, id int64) template.HTML { return renderer.quickBoosts.render(clientID, id) },
 		"helpMailto": func(user database.User) template.HTMLAttr {
 			value := "mailto:" + (&mail.Address{Name: user.Name, Address: user.Email}).String()
 			return template.HTMLAttr(`href="` + template.HTMLEscapeString(value) + `"`)
@@ -66,16 +80,22 @@ func parseTemplates(secrets *rails.Secrets) (*template.Template, error) {
 		"stylesheets": func() template.HTML { return assets.Stylesheets },
 		"importmap":   func() template.HTML { return assets.Importmap },
 		"avatar": func(id int64, updated ...time.Time) string {
-			token := secrets.SignedID("User", id, "avatar", time.Time{})
-			path := fmt.Sprintf("/users/%s/avatar", token)
-			if len(updated) > 0 && !updated[0].IsZero() {
-				path += "?v=" + updated[0].UTC().Format("20060102150405")
+			var version time.Time
+			if len(updated) > 0 {
+				version = updated[0]
 			}
-			return path
+			return renderer.avatar(id, version)
 		},
 		"versionTime": func(t time.Time) string { return t.UTC().Format("20060102150405") },
-		"epoch":       func(t time.Time) string { return fmt.Sprintf("%d", t.UnixMilli()) },
-		"iso":         func(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000Z") },
+		"epoch":       epochMillis,
+		"iso":         isoTime,
 		"reactions":   func() []reaction { return reactions },
 	}).ParseFS(templateFiles, "templates/*.html")
+	if err != nil {
+		return nil, nil, err
+	}
+	if renderer.quickBoosts, err = compileQuickBoosts(t); err != nil {
+		return nil, nil, err
+	}
+	return t, renderer, nil
 }

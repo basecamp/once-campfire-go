@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testDB(t *testing.T) *DB {
@@ -107,5 +108,31 @@ func TestPendingMigrationFails(t *testing.T) {
 		t.Fatal("missing migration accepted")
 	} else if !strings.Contains(err.Error(), "pending migration") {
 		t.Fatal(err)
+	}
+}
+
+func TestStampParsingAndFormattingMatchTime(t *testing.T) {
+	inputs := []string{"2026-03-02 16:00:00.000000", "2026-03-02 16:00:00", "1999-12-31 23:59:59.999999999", "2024-02-29 12:00:00.5", "2023-02-29 12:00:00.000000", "2026-13-01 00:00:00", "2026-04-31 00:00:00", "2026-01-01 24:00:00", "2026-01-01 00:60:00", "2026-01-01 00:00:60", "0000-01-01 00:00:00.000001", "9999-12-31 23:59:59.123456", "2026-03-02 16:00:00.", "2026-03-02T16:00:00", "2026-03-02 16:00:00.12345a", "2026-3-02 16:00:00.000000", "+026-03-02 16:00:00", "2026-03-02 16:00:00.0000000000", "2026-03-02 16:00:00Z", "abcd-ef-gh ij:kl:mn"}
+	for _, raw := range inputs {
+		expected, err := time.Parse("2006-01-02 15:04:05.999999999", raw)
+		actual, ok := parseStamp(raw)
+		// The fast path may decline forms time.Parse accepts; Scan then uses time.Parse.
+		if ok && (err != nil || !actual.Equal(expected) || actual.Location() != expected.Location()) {
+			t.Fatalf("%q: %v, time.Parse %v %v", raw, actual, expected, err)
+		}
+		var scanned time.Time
+		if scanErr := (timestamp{&scanned}).Scan(raw); (scanErr == nil) != (err == nil) || err == nil && !scanned.Equal(expected) {
+			t.Fatalf("%q: scanned %v %v, time.Parse %v %v", raw, scanned, scanErr, expected, err)
+		}
+	}
+	for _, raw := range []string{"2026-03-02 16:00:00.000000", "2026-03-02 16:00:00"} {
+		if _, ok := parseStamp(raw); !ok {
+			t.Fatalf("%q: not parsed directly", raw)
+		}
+	}
+	for _, value := range []time.Time{{}, time.Date(2026, 3, 2, 16, 0, 0, 0, time.UTC), time.Date(1999, 12, 31, 23, 59, 59, 999999999, time.FixedZone("x", -18000)), time.Date(5, 6, 7, 8, 9, 10, 11000, time.UTC), time.Date(-1, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)} {
+		if actual, expected := Stamp(value), value.UTC().Format("2006-01-02 15:04:05.000000"); actual != expected {
+			t.Fatalf("%v: %q, expected %q", value, actual, expected)
+		}
 	}
 }

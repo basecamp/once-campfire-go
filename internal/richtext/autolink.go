@@ -81,7 +81,30 @@ func sanitizeString(s string) (string, error) {
 	sanitizeDOM(n, "default")
 	return serialize(n), nil
 }
+
+// Every urlPattern match contains "://" or "www." (in any case). Most messages have
+// neither, and the unanchored pattern tries every position of the text.
+func mayContainURL(text string) bool {
+	if strings.Contains(text, "://") {
+		return true
+	}
+	for i := strings.IndexByte(text, '.'); i >= 0; {
+		if i >= 3 && strings.EqualFold(text[i-3:i], "www") {
+			return true
+		}
+		next := strings.IndexByte(text[i+1:], '.')
+		if next < 0 {
+			break
+		}
+		i += next + 1
+	}
+	return false
+}
+
 func autoLink(text string) (string, error) {
+	if !mayContainURL(text) {
+		return autoLinkEmails(text)
+	}
 	var out strings.Builder
 	last := 0
 	tags := indexTags(text)

@@ -86,11 +86,12 @@ func (s *Store) Path(key string) (string, error) {
 	}
 	return filepath.Join(s.Root, key[:2], key[2:4], key), nil
 }
-func scanBlob(row *sql.Row) (Blob, error) {
+func scanBlob(row *sql.Row) (Blob, error) { return scanBlobFields(row.Scan) }
+func scanBlobFields(scan func(...any) error) (Blob, error) {
 	var b Blob
 	var metadata sql.NullString
 	var checksum sql.NullString
-	err := row.Scan(&b.ID, &b.Key, &b.Filename, &b.ContentType, &metadata, &b.ServiceName, &b.ByteSize, &checksum, &b.CreatedAt)
+	err := scan(&b.ID, &b.Key, &b.Filename, &b.ContentType, &metadata, &b.ServiceName, &b.ByteSize, &checksum, &b.CreatedAt)
 	b.Metadata = json.RawMessage(metadata.String)
 	if !json.Valid(b.Metadata) {
 		b.Metadata = json.RawMessage("{}")
@@ -106,6 +107,35 @@ func (s *Store) Blob(ctx context.Context, id int64) (Blob, error) {
 }
 func (s *Store) Attached(ctx context.Context, kind string, id int64, name string) (Blob, error) {
 	return scanBlob(s.DB.Read.QueryRowContext(ctx, "SELECT "+columns+" FROM active_storage_blobs b JOIN active_storage_attachments a ON a.blob_id=b.id WHERE a.record_type=? AND a.record_id=? AND a.name=? ORDER BY a.id LIMIT 1", kind, id, name))
+}
+
+// AttachedMany is Attached for several records in one query: each record's first
+// attachment by attachment ID.
+func (s *Store) AttachedMany(ctx context.Context, kind string, ids []int64, name string) (map[int64]Blob, error) {
+	result := make(map[int64]Blob)
+	if len(ids) == 0 {
+		return result, nil
+	}
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.DB.Read.QueryContext(ctx, "SELECT a.record_id,"+columns+" FROM active_storage_blobs b JOIN active_storage_attachments a ON a.blob_id=b.id WHERE a.record_type=? AND a.record_id IN (SELECT value FROM json_each(?)) AND a.name=? ORDER BY a.record_id,a.id", kind, string(raw), name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var record int64
+		b, err := scanBlobFields(func(fields ...any) error { return rows.Scan(append([]any{&record}, fields...)...) })
+		if err != nil {
+			return nil, err
+		}
+		if _, found := result[record]; !found {
+			result[record] = b
+		}
+	}
+	return result, rows.Err()
 }
 func (s *Store) Create(ctx context.Context, b Blob) (Blob, error) {
 	if b.Key == "" {
