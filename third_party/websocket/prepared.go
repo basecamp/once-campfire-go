@@ -10,7 +10,8 @@ import (
 
 // PreparedMessage is an immutable server broadcast. Its compressed form is
 // computed once and shared by connections without context takeover.
-// This is the only extension to coder/websocket v1.8.15 in this local fork.
+// It and WritePreparedBatch (batch.go) are this local fork's extensions to
+// coder/websocket v1.8.15.
 type PreparedMessage struct {
 	typ        MessageType
 	data       []byte

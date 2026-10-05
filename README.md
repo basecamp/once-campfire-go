@@ -159,12 +159,14 @@ throughput is not measured. `bench/health` remains available for the much narrow
   Accept-Encoding` to empty bodies, and net/http writes a page's parts from one buffer rather than
   with vectored writes. Exact protocol parity for malformed parameters and every content-negotiation
   edge case is not claimed.
-- WebSockets share serialized and compressed broadcast payloads through a small extension to
-  coder/websocket v1.8.15 (see `third_party/websocket/README.campfire`). Outgoing queues hold 256
-  frames; slow clients are disconnected. Authorization is checked afresh for each publication,
-  batching distinct sessions per room. Rust uses different stream queues.
-- Go ignores typing commands for rooms that have been deleted; Rust can still echo them to an
-  already subscribed socket. The composer shows the same deleted-room message.
+- Action Cable follows Rust's design: broadcasts are routed by stream to the subscribers sharing an
+  identifier, as one shared frame compressed at most once; channels authorize on subscribe, and the
+  same writes as in Rust (ban, deactivation, sign-out, losing a room membership) disconnect the
+  user's sockets. Frames go out up to 64 per vectored write through a small extension to
+  coder/websocket v1.8.15 (see `third_party/websocket/README.campfire`). Rust buffers each stream
+  once in a shared ring; Go queues per connection, but closes a connection at the same point (a
+  subscription 256 frames behind). Room message streams are keyed by room id rather than by the
+  signed GlobalID stream name.
 - The public front server's response cache uses least-recently-used eviction instead of Rust's
   sampled eviction.
 - The default version label and fallback VAPID subject identify `once-campfire-go`. Explicit version,
