@@ -241,29 +241,44 @@ func TestServeSkipDeflatePublicListener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := io.ReadAll(response.Body)
-	response.Body.Close()
+	check := func(wantCache string, response *http.Response) {
+		t.Helper()
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != 201 {
+			t.Fatalf("public preencoded status = %d, want 201", response.StatusCode)
+		}
+		if got := response.Header.Get("Content-Encoding"); got != "gzip" {
+			t.Fatalf("public preencoded Content-Encoding = %q, want gzip", got)
+		}
+		if got := response.Header.Get("Vary"); !strings.Contains(got, "Accept-Encoding") {
+			t.Fatalf("public preencoded Vary = %q, want Accept-Encoding", got)
+		}
+		if got := response.Header.Get("X-Cache"); got != wantCache {
+			t.Fatalf("public preencoded X-Cache = %q, want %q", got, wantCache)
+		}
+		if !bytes.Equal(body, preencoded) {
+			t.Fatalf("public preencoded body changed: %d bytes in, %d out", len(preencoded), len(body))
+		}
+		if decoded := gunzipPayload(t, body); decoded != "public preencoded body" {
+			t.Fatalf("public preencoded body decodes to %q, want one gzip layer", decoded)
+		}
+	}
+	check("miss", response)
+
+	request, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != 201 {
-		t.Fatalf("public preencoded status = %d, want 201", response.StatusCode)
+	request.Header.Set("Accept-Encoding", "gzip")
+	response, err = client.Do(request)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := response.Header.Get("Content-Encoding"); got != "gzip" {
-		t.Fatalf("public preencoded Content-Encoding = %q, want gzip", got)
-	}
-	if got := response.Header.Get("Vary"); !strings.Contains(got, "Accept-Encoding") {
-		t.Fatalf("public preencoded Vary = %q, want Accept-Encoding", got)
-	}
-	if got := response.Header.Get("X-Cache"); got != "miss" {
-		t.Fatalf("public preencoded X-Cache = %q, want miss", got)
-	}
-	if !bytes.Equal(body, preencoded) {
-		t.Fatalf("public preencoded body changed: %d bytes in, %d out", len(preencoded), len(body))
-	}
-	if decoded := gunzipPayload(t, body); decoded != "public preencoded body" {
-		t.Fatalf("public preencoded body decodes to %q, want one gzip layer", decoded)
-	}
+	check("hit", response)
 
 	cancel()
 	select {

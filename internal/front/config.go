@@ -19,8 +19,9 @@ type Config struct {
 	// Content-Encoding and Vary: Accept-Encoding on every cacheable
 	// response (the front cache keys variants on Vary and snapshots headers
 	// before the public chain adds it), the 406 negotiation policy, and the
-	// No-Gzip-Compression / DisableGzipOnAuth vetoes that Deflate would
-	// otherwise apply.
+	// No-Gzip-Compression / DisableGzipOnAuth policy for responses the app
+	// pre-encodes: PublicCompression applies those vetoes only to bodies it
+	// compresses itself.
 	SkipDeflate                                  bool
 	Domains                                      []string
 	ACMEDirectory, StoragePath, EABKeyID, EABKey string
