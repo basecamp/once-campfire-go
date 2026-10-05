@@ -209,19 +209,6 @@ func queryIDs(ctx context.Context, tx *Tx, query string, args ...any) ([]int64, 
 	return ids, rows.Err()
 }
 
-func drain(rows *Rows, err error) error {
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	return rows.Close()
-}
-
 // base58 is SecureRandom.base58(n), has_secure_token's alphabet.
 func base58(n int) string {
 	return randomFrom("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz", n)

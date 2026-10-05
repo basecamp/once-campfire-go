@@ -2,8 +2,6 @@ package database
 
 import (
 	"context"
-	"encoding/json"
-	"slices"
 	"time"
 )
 
@@ -23,63 +21,6 @@ func (d *DB) ReachableMessage(ctx context.Context, user, id int64) (Message, err
 	return messages[0], nil
 }
 
-func (d *DB) MessagePage(ctx context.Context, room, anchor int64, direction string) ([]Message, error) {
-	if direction == "before" || anchor == 0 {
-		return d.Messages(ctx, room, anchor)
-	}
-	var stamp string
-	if err := d.Read.QueryRowContext(ctx, "SELECT created_at FROM messages WHERE id=? AND room_id=?", anchor, room).Scan(&stamp); err != nil {
-		return nil, err
-	}
-	rows, err := d.Read.QueryContext(ctx, messageSelect+"WHERE m.room_id=? AND m.created_at>? ORDER BY m.created_at LIMIT 40", room, stamp)
-	if err != nil {
-		return nil, err
-	}
-	after, err := scanMessages(rows)
-	if err != nil || direction == "after" {
-		return after, err
-	}
-	before, err := d.Messages(ctx, room, anchor)
-	if err != nil {
-		return nil, err
-	}
-	rows, err = d.Read.QueryContext(ctx, messageSelect+"WHERE m.room_id=? AND m.id=?", room, anchor)
-	if err != nil {
-		return nil, err
-	}
-	center, err := scanMessages(rows)
-	if err != nil {
-		return nil, err
-	}
-	return append(append(before, center...), after...), nil
-}
-
-func (d *DB) RefreshedMessages(ctx context.Context, room int64, since time.Time) (created, updated []Message, err error) {
-	rows, err := d.Read.QueryContext(ctx, messageSelect+"WHERE m.room_id=? AND m.created_at>? ORDER BY m.created_at LIMIT 40", room, Stamp(since))
-	if err != nil {
-		return
-	}
-	created, err = scanMessages(rows)
-	if err != nil {
-		return
-	}
-	rows, err = d.Read.QueryContext(ctx, messageSelect+"WHERE m.room_id=? AND m.updated_at>? ORDER BY m.created_at DESC LIMIT 40", room, Stamp(since))
-	if err != nil {
-		return
-	}
-	updated, err = scanMessages(rows)
-	if err != nil {
-		return
-	}
-	slices.Reverse(updated)
-	ids := make(map[int64]bool, len(created))
-	for _, m := range created {
-		ids[m.ID] = true
-	}
-	updated = slices.DeleteFunc(updated, func(m Message) bool { return ids[m.ID] })
-	return
-}
-
 func messagePermission(ctx context.Context, tx *Tx, user, id int64, administer bool) (room int64, err error) {
 	var creator int64
 	var role int
@@ -96,15 +37,10 @@ func touchMessage(ctx context.Context, tx *Tx, id, room int64, now string) error
 	_, err := tx.ExecContext(ctx, "UPDATE rooms SET updated_at=? WHERE id=?", now, room)
 	return err
 }
-func (d *DB) UpdateMessage(ctx context.Context, user, id int64, body, plain string) (Message, error) {
-	return d.UpdateMessageAttributes(ctx, user, id, &body, plain, nil)
-}
 
-// A nil body or attachment leaves that attribute unchanged; attachment zero removes it.
-// Body, attachment, timestamps and the search index commit together.
-func (d *DB) UpdateMessageAttributes(ctx context.Context, user, id int64, body *string, plain string, attachment *int64) (Message, error) {
-	return d.UpdateMessageWithUpload(ctx, user, id, body, plain, attachment, nil)
-}
+// UpdateMessageWithUpload updates a message: a nil body or attachment leaves that attribute
+// unchanged; attachment zero removes it. Body, attachment, timestamps and the search index
+// commit together.
 func (d *DB) UpdateMessageWithUpload(ctx context.Context, user, id int64, body *string, plain string, attachment *int64, staged BlobStager) (Message, error) {
 	if staged != nil {
 		defer staged.Discard()
@@ -225,24 +161,6 @@ type Boost struct {
 	CreatedAt, UpdatedAt     time.Time
 }
 
-func (d *DB) Boosts(ctx context.Context, message int64) ([]Boost, error) {
-	rows, err := d.Read.QueryContext(ctx, "SELECT b.id,b.message_id,b.booster_id,b.content,u.name,coalesce(u.bio,''),u.updated_at,b.created_at,b.updated_at FROM boosts b JOIN users u ON u.id=b.booster_id WHERE b.message_id=? ORDER BY b.created_at", message)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := []Boost{}
-	for rows.Next() {
-		var b Boost
-		var bio string
-		if err = rows.Scan(&b.ID, &b.MessageID, &b.BoosterID, &b.Content, &b.Booster, &bio, timestamp{&b.BoosterUpdatedAt}, timestamp{&b.CreatedAt}, timestamp{&b.UpdatedAt}); err != nil {
-			return nil, err
-		}
-		b.BoosterTitle = (User{Name: b.Booster, Bio: bio}).Title()
-		result = append(result, b)
-	}
-	return result, rows.Err()
-}
 func (d *DB) CreateBoost(ctx context.Context, user, message int64, content string) (Boost, error) {
 	now := d.Now()
 	b := Boost{MessageID: message, BoosterID: user, Content: content, CreatedAt: now, UpdatedAt: now}
@@ -308,45 +226,4 @@ func (d *DB) FindRoom(ctx context.Context, id int64) (Room, error) {
 	var room Room
 	err := d.Read.QueryRowContext(ctx, "SELECT id,creator_id,coalesce(name,''),type,updated_at FROM rooms WHERE id=?", id).Scan(&room.ID, &room.CreatorID, &room.Name, &room.Type, timestamp{&room.UpdatedAt})
 	return room, err
-}
-
-// MessagePageReferences leaves rich text and author loading to cache misses.
-// Around/after pagination retains the same full-record path and ordering.
-func (d *DB) MessagePageReferences(ctx context.Context, room, anchor int64, direction string) ([]Message, error) {
-	if direction != "before" && anchor != 0 {
-		return d.MessagePage(ctx, room, anchor, direction)
-	}
-	query := "SELECT id,updated_at FROM messages WHERE room_id=? "
-	args := []any{room}
-	if anchor != 0 {
-		query += "AND created_at < (SELECT created_at FROM messages WHERE id=? AND room_id=?) "
-		args = append(args, anchor, room)
-	}
-	rows, err := d.Read.QueryContext(ctx, query+"ORDER BY created_at DESC LIMIT 40", args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var messages []Message
-	for rows.Next() {
-		message := Message{RoomID: room}
-		if err := rows.Scan(&message.ID, timestamp{&message.UpdatedAt}); err != nil {
-			return nil, err
-		}
-		messages = append(messages, message)
-	}
-	slices.Reverse(messages)
-	return messages, rows.Err()
-}
-
-func (d *DB) MessagesByID(ctx context.Context, ids []int64) ([]Message, error) {
-	raw, err := json.Marshal(ids)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := d.Read.QueryContext(ctx, messageSelect+"WHERE m.id IN (SELECT value FROM json_each(?))", string(raw))
-	if err != nil {
-		return nil, err
-	}
-	return scanMessages(rows)
 }

@@ -11,7 +11,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/integrations"
@@ -94,15 +93,6 @@ func subscriptionParams(r *http.Request) (map[string]*string, error) {
 	return attrs, nil
 }
 func (s *Server) pushSubscriptions(w http.ResponseWriter, r *http.Request, u database.User) {
-	if r.Method == "GET" || r.Method == "HEAD" {
-		list, err := s.DB.PushSubscriptions(r.Context(), u.ID)
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		s.render(w, r, "push-subscriptions", 200, page{User: u, Title: "Push notification subscriptions", Subscriptions: list})
-		return
-	}
 	attrs, err := subscriptionParams(r)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
@@ -188,25 +178,6 @@ func (s *Server) testPushNotification(w http.ResponseWriter, r *http.Request, u 
 		return
 	}
 	http.Redirect(w, r, s.origin(r)+pushPath, 302)
-}
-func (s *Server) messageCreated(message database.Message, room database.Room) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	members, err := s.DB.RoomMemberIDs(ctx, room.ID)
-	if err != nil {
-		slog.Error("unread notification failed", "error", err)
-	} else {
-		for _, id := range members {
-			s.Cable.PublishStream(ctx, fmt.Sprintf("user_%d_unreads", id), map[string]any{"roomId": room.ID})
-		}
-	}
-	if s.Push.VAPID == nil {
-		return
-	}
-	// Room::PushMessageJob: recipients are selected off the request, as the reference's
-	// PushMessage event does after commit.
-	id := message.ID
-	s.Jobs.Enqueue("push_message", func(ctx context.Context) error { return s.pushMessage(ctx, id, room) })
 }
 
 func (s *Server) pushMessage(ctx context.Context, id int64, room database.Room) error {

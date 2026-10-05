@@ -68,10 +68,6 @@ func (s *Server) richContext(ctx context.Context) richtext.Context {
 		return &m, nil
 	}}
 }
-func (s *Server) richText(ctx context.Context, body string) richtext.Result {
-	result, _ := richtext.Process(body, s.richContext(ctx))
-	return result
-}
 func (s *Server) canonicalMessage(ctx context.Context, body string) (string, string) {
 	body = richtext.Canonical(body)
 	plain, _ := richtext.PlainText(body, s.richContext(ctx))

@@ -69,9 +69,6 @@ func userRow(row *Row) (User, error) {
 	err := row.Scan(&u.ID, &u.Name, &u.Email, &u.Password, &u.Role, &u.Status, &u.Bio, timestamp{&u.UpdatedAt}, &u.BotToken)
 	return u, err
 }
-func (d *DB) UserByEmail(ctx context.Context, email string) (User, error) {
-	return userRow(d.Read.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users u WHERE u.email_address=? AND u.status=0", email))
-}
 func (d *DB) SessionUser(ctx context.Context, token string) (User, error) {
 	return userRow(d.Read.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND u.status=0", token))
 }
@@ -119,16 +116,10 @@ func (d *DB) Setup(ctx context.Context, name, email, passwordDigest string, uplo
 	})
 	return u, err
 }
-func (d *DB) Rooms(ctx context.Context, user int64) ([]Room, error) { return d.rooms(ctx, user, true) }
-func (d *DB) AllRooms(ctx context.Context, user int64) ([]Room, error) {
-	return d.rooms(ctx, user, false)
-}
-func (d *DB) rooms(ctx context.Context, user int64, visible bool) ([]Room, error) {
-	query := "SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=?"
-	if visible {
-		query += " AND m.involvement!='invisible'"
-	}
-	rows, err := d.Read.QueryContext(ctx, query+" ORDER BY lower(r.name)", user)
+
+// Rooms is the user's visible rooms by name.
+func (d *DB) Rooms(ctx context.Context, user int64) ([]Room, error) {
+	rows, err := d.Read.QueryContext(ctx, "SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=? AND m.involvement!='invisible' ORDER BY lower(r.name)", user)
 	if err != nil {
 		return nil, err
 	}
@@ -187,13 +178,7 @@ func (d *DB) CreateMessage(ctx context.Context, user, room int64, client, body, 
 	return d.CreateMessageWithBlob(ctx, user, room, client, body, plain, 0)
 }
 func (d *DB) CreateMessageWithBlob(ctx context.Context, user, room int64, client, body, plain string, blob int64) (Message, error) {
-	return d.createMessage(ctx, user, room, client, &body, plain, blob, nil, true)
-}
-
-// CreateWebhookReply is called only by a queued, authorized webhook delivery. Like
-// the reference model callback it does not reapply controller membership checks.
-func (d *DB) CreateWebhookReply(ctx context.Context, user, room int64, body, plain string, blob int64) (Message, error) {
-	return d.createMessage(ctx, user, room, "", &body, plain, blob, nil, false)
+	return d.createMessage(ctx, user, room, client, &body, plain, blob, nil)
 }
 
 // BlobStager keeps file copying outside the SQLite writer while committing the blob
@@ -204,10 +189,10 @@ type BlobStager interface {
 	Discard()
 }
 
-func (d *DB) CreateMessageWithUpload(ctx context.Context, user, room int64, client string, body *string, plain string, staged BlobStager, webhook bool) (Message, error) {
-	return d.createMessage(ctx, user, room, client, body, plain, 0, staged, !webhook)
+func (d *DB) CreateMessageWithUpload(ctx context.Context, user, room int64, client string, body *string, plain string, staged BlobStager) (Message, error) {
+	return d.createMessage(ctx, user, room, client, body, plain, 0, staged)
 }
-func (d *DB) createMessage(ctx context.Context, user, room int64, client string, body *string, plain string, blob int64, staged BlobStager, _ bool) (Message, error) {
+func (d *DB) createMessage(ctx context.Context, user, room int64, client string, body *string, plain string, blob int64, staged BlobStager) (Message, error) {
 	if staged != nil {
 		defer staged.Discard()
 	}
@@ -305,24 +290,6 @@ func (d *DB) indexedText(tx *Tx, id int64, plain string) (string, error) {
 		return "", nil
 	}
 	return filename, err
-}
-func (d *DB) Search(ctx context.Context, user int64, query string) ([]Message, error) {
-	words := strings.Fields(SearchQuery(query))
-	if len(words) == 0 {
-		return []Message{}, nil
-	}
-	for i, w := range words {
-		words[i] = "\"" + strings.ReplaceAll(w, "\"", "\"\"") + "\""
-	}
-	rows, err := d.Read.QueryContext(ctx, messageSelect+"JOIN message_search_index idx ON idx.rowid=m.id JOIN memberships member ON member.room_id=m.room_id WHERE member.user_id=? AND idx.body MATCH ? ORDER BY m.created_at DESC LIMIT 100", user, strings.Join(words, " "))
-	if err != nil {
-		return nil, err
-	}
-	messages, err := scanMessages(rows)
-	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-		messages[i], messages[j] = messages[j], messages[i]
-	}
-	return messages, err
 }
 
 // AuthorizedSessions checks a publication's distinct sessions in one snapshot.

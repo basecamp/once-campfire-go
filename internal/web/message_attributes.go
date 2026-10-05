@@ -11,23 +11,6 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/storage"
 )
 
-func requireMessage(w http.ResponseWriter, r *http.Request) bool {
-	for key := range r.Form {
-		if strings.HasPrefix(key, "message[") {
-			return true
-		}
-	}
-	if r.MultipartForm != nil {
-		for key := range r.MultipartForm.File {
-			if strings.HasPrefix(key, "message[") {
-				return true
-			}
-		}
-	}
-	http.Error(w, "Missing message parameter", 400)
-	return false
-}
-
 // Matches MessagesController#update and Messages::ByBotsController#message_params.
 func (s *Server) updateMessageAttributes(r *http.Request, user database.User, message database.Message, bodyField, attachmentField string, rawBody *string) (database.Message, error) {
 	var body *string
@@ -89,7 +72,7 @@ func pendingBlob(staged *storage.Staged) database.BlobStager {
 	}
 	return staged
 }
-func (s *Server) saveNewMessage(ctx context.Context, user, room int64, client string, body *string, staged *storage.Staged, webhook bool) (database.Message, error) {
+func (s *Server) saveNewMessage(ctx context.Context, user, room int64, client string, body *string, staged *storage.Staged) (database.Message, error) {
 	if staged != nil {
 		defer staged.Discard()
 	}
@@ -99,7 +82,7 @@ func (s *Server) saveNewMessage(ctx context.Context, user, room int64, client st
 		value := richtext.Canonical(*body)
 		body = &value
 	}
-	message, err := s.DB.CreateMessageWithUpload(ctx, user, room, client, body, "", pendingBlob(staged), webhook)
+	message, err := s.DB.CreateMessageWithUpload(ctx, user, room, client, body, "", pendingBlob(staged))
 	if err != nil {
 		return message, err
 	}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"mime/multipart"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
@@ -49,7 +48,7 @@ func TestMessageAttachmentUpdatePreservesBodyAndIndexes(t *testing.T) {
 	if response.StatusCode != 302 {
 		t.Fatalf("clear body: %s %s", response.Status, data)
 	}
-	hits, err := app.DB.Search(ctx, user.ID, "report")
+	hits, err := app.DB.MessageSearchReachable(ctx, user.ID, "report")
 	if err != nil || len(hits) != 1 {
 		t.Fatalf("filename search: %+v %v", hits, err)
 	}
@@ -60,7 +59,7 @@ func TestMessageAttachmentUpdatePreservesBodyAndIndexes(t *testing.T) {
 	if _, err = app.Storage.Attached(ctx, "Message", message.ID, "attachment"); !errors.Is(err, database.ErrNoRows) {
 		t.Fatal(err)
 	}
-	hits, err = app.DB.Search(ctx, user.ID, "report")
+	hits, err = app.DB.MessageSearchReachable(ctx, user.ID, "report")
 	if err != nil || len(hits) != 0 {
 		t.Fatalf("stale search: %+v %v", hits, err)
 	}
@@ -79,7 +78,7 @@ func TestMessageUpdateRollbackAndMissingBodyRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, nonexistent := "edited", int64(99999999)
-	_, err = app.DB.UpdateMessageAttributes(ctx, user.ID, message.ID, &body, body, &nonexistent)
+	_, err = app.DB.UpdateMessageWithUpload(ctx, user.ID, message.ID, &body, body, &nonexistent, nil)
 	if err == nil {
 		t.Fatal("invalid attachment accepted")
 	}
@@ -90,7 +89,7 @@ func TestMessageUpdateRollbackAndMissingBodyRecord(t *testing.T) {
 	if _, err = app.DB.Write.ExecContext(ctx, "DELETE FROM action_text_rich_texts WHERE record_type='Message' AND record_id=?", message.ID); err != nil {
 		t.Fatal(err)
 	}
-	message, err = app.DB.UpdateMessageAttributes(ctx, user.ID, message.ID, &body, body, nil)
+	message, err = app.DB.UpdateMessageWithUpload(ctx, user.ID, message.ID, &body, body, nil, nil)
 	if err != nil || message.Body != body {
 		t.Fatalf("missing rich text: %+v %v", message, err)
 	}
@@ -123,10 +122,16 @@ func TestBoostIDIsNotInterpretedAsRoomID(t *testing.T) {
 }
 
 func TestEmptyMessageUpdateRequiresParameter(t *testing.T) {
-	r := httptest.NewRequest("PATCH", "/messages/1", nil)
-	w := httptest.NewRecorder()
-	if requireMessage(w, r) || w.Code != 400 {
-		t.Fatal(w.Code)
+	app, server, cookie, user := testApp(t)
+	ctx := context.Background()
+	rooms, _ := app.DB.Rooms(ctx, user.ID)
+	message, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "", "original", "original")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := fmt.Sprintf("/rooms/%d/messages/%d", message.RoomID, message.ID)
+	if response, data := perform(t, server, "PATCH", path, "application/x-www-form-urlencoded", strings.NewReader(""), cookie); response.StatusCode != 400 {
+		t.Fatalf("update: %s %s", response.Status, data)
 	}
 }
 
@@ -145,7 +150,7 @@ func TestStagedUploadRollbackAndAbsentBody(t *testing.T) {
 	if err = app.DB.Read.QueryRowContext(ctx, "SELECT count(*) FROM active_storage_blobs WHERE key=?", staged.Blob.Key).Scan(&count); err != nil || count != 0 {
 		t.Fatal("premature blob row", count, err)
 	}
-	if _, err = app.DB.CreateMessageWithUpload(ctx, user.ID, 999999, "", nil, "rollback.txt", staged, false); err == nil {
+	if _, err = app.DB.CreateMessageWithUpload(ctx, user.ID, 999999, "", nil, "rollback.txt", staged); err == nil {
 		t.Fatal("invalid room accepted")
 	}
 	if _, err = os.Stat(path); !errors.Is(err, os.ErrNotExist) {
@@ -156,7 +161,7 @@ func TestStagedUploadRollbackAndAbsentBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	message, err := app.DB.CreateMessageWithUpload(ctx, user.ID, rooms[0].ID, "", nil, "attachment.txt", staged, false)
+	message, err := app.DB.CreateMessageWithUpload(ctx, user.ID, rooms[0].ID, "", nil, "attachment.txt", staged)
 	if err != nil {
 		t.Fatal(err)
 	}

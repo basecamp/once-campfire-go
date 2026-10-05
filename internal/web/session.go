@@ -194,18 +194,3 @@ func safeRedirect(location, origin string) bool {
 func (s *Server) flash(r *http.Request, name, message string) {
 	browserState(r).set("flash", map[string]any{"discard": []any{}, "flashes": map[string]any{name: message}})
 }
-func (s *Server) requireUnauthenticated(w http.ResponseWriter, r *http.Request) bool {
-	cookie, err := r.Cookie("session_token")
-	if err != nil {
-		return true
-	}
-	var token string
-	if s.Secrets.VerifyCookie("session_token", rails.UnescapeCookie(cookie.Value), s.DB.Now(), &token) != nil {
-		return true
-	}
-	if _, err := s.DB.SessionUser(r.Context(), token); err != nil {
-		return true
-	}
-	http.Redirect(w, r, s.origin(r)+"/", http.StatusFound)
-	return false
-}

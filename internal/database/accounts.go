@@ -26,52 +26,6 @@ func (d *DB) Account(ctx context.Context) (Account, error) {
 	a.Settings = json.RawMessage(settings)
 	return a, err
 }
-func (a Account) RestrictRooms() bool {
-	var s struct {
-		Restrict bool `json:"restrict_room_creation_to_administrators"`
-	}
-	json.Unmarshal(a.Settings, &s)
-	return s.Restrict
-}
-func (d *DB) UpdateAccount(ctx context.Context, name *string, styles *string, restrict *bool, resetJoin bool, uploads ...BlobStager) error {
-	var id int64
-	return d.recordWithUpload(ctx, "Account", &id, uploads, func(tx *Tx) error {
-		var settings string
-		if err := tx.QueryRowContext(ctx, "SELECT id,coalesce(settings,'{}') FROM accounts ORDER BY id LIMIT 1").Scan(&id, &settings); err != nil {
-			return err
-		}
-		sets := []string{"updated_at=?"}
-		args := []any{Stamp(d.Now())}
-		if name != nil {
-			sets = append(sets, "name=?")
-			args = append(args, *name)
-		}
-		if styles != nil {
-			sets = append(sets, "custom_styles=?")
-			args = append(args, *styles)
-		}
-		if restrict != nil {
-			var data map[string]any
-			if json.Unmarshal([]byte(settings), &data) != nil || data == nil {
-				data = map[string]any{}
-			}
-			data["restrict_room_creation_to_administrators"] = *restrict
-			b, err := json.Marshal(data)
-			if err != nil {
-				return err
-			}
-			sets = append(sets, "settings=?")
-			args = append(args, string(b))
-		}
-		if resetJoin {
-			sets = append(sets, "join_code=?")
-			args = append(args, RandomToken(24))
-		}
-		args = append(args, id)
-		_, err := tx.ExecContext(ctx, "UPDATE accounts SET "+strings.Join(sets, ",")+" WHERE id=?", args...)
-		return err
-	})
-}
 func RandomToken(length int) string {
 	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 	out := make([]byte, 0, length)
@@ -93,35 +47,6 @@ func RandomToken(length int) string {
 }
 func (d *DB) User(ctx context.Context, id int64) (User, error) {
 	return userRow(d.Read.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users u WHERE u.id=?", id))
-}
-func usersRows(rows *Rows) ([]User, error) {
-	defer rows.Close()
-	users := []User{}
-	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Password, &u.Role, &u.Status, &u.Bio, timestamp{&u.UpdatedAt}, &u.BotToken); err != nil {
-			return nil, err
-		}
-		users = append(users, u)
-	}
-	return users, rows.Err()
-}
-func (d *DB) Users(ctx context.Context, room int64, botsOnly bool) ([]User, error) {
-	query := "SELECT " + userColumns + " FROM users u "
-	args := []any{}
-	if room != 0 {
-		query += "JOIN memberships m ON m.user_id=u.id AND m.room_id=? "
-		args = append(args, room)
-	}
-	query += "WHERE u.status=0 "
-	if botsOnly {
-		query += "AND u.role=2 "
-	}
-	rows, err := d.Read.QueryContext(ctx, query+"ORDER BY lower(u.name)", args...)
-	if err != nil {
-		return nil, err
-	}
-	return usersRows(rows)
 }
 func (d *DB) CreateUser(ctx context.Context, name, email, password, bio string, role int, webhook *string, uploads ...BlobStager) (User, error) {
 	var u User
@@ -199,13 +124,6 @@ func (d *DB) UpdateUser(ctx context.Context, id int64, attributes map[string]str
 		return err
 	})
 }
-func (d *DB) Bot(ctx context.Context, key string) (User, error) {
-	id, token, ok := strings.Cut(strings.TrimSpace(key), "-")
-	if !ok {
-		return User{}, ErrNoRows
-	}
-	return userRow(d.Read.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users u WHERE u.id=? AND u.bot_token=? AND u.role=2 AND u.status=0", id, token))
-}
 func (d *DB) DeactivateUser(ctx context.Context, id int64) error {
 	return d.Transaction(ctx, func(tx *Tx) error {
 		now := Stamp(d.Now())
@@ -257,68 +175,4 @@ func (d *DB) BanUser(ctx context.Context, id int64, ban bool) error {
 func (d *DB) BannedIP(ctx context.Context, ip string) (bool, error) {
 	return d.exists(ctx, `SELECT 1 AS one FROM "bans" WHERE "bans"."ip_address" = ? LIMIT 1`, ip)
 }
-func (d *DB) RefreshSession(ctx context.Context, token, agent, ip string) (bool, error) {
-	now := d.Now()
-	var active time.Time
-	if err := d.Read.QueryRowContext(ctx, "SELECT last_active_at FROM sessions WHERE token=?", token).Scan(timestamp{&active}); err != nil {
-		return false, err
-	}
-	if !active.Before(now.Add(-time.Hour)) {
-		return false, nil
-	}
-	r, err := d.Write.ExecContext(ctx, "UPDATE sessions SET last_active_at=?,updated_at=?,user_agent=?,ip_address=? WHERE token=? AND last_active_at<?", Stamp(now), Stamp(now), agent, ip, token, Stamp(now.Add(-time.Hour)))
-	if err != nil {
-		return false, err
-	}
-	n, err := r.RowsAffected()
-	return n > 0, err
-}
 func (u User) BotKey() string { return fmt.Sprintf("%d-%s", u.ID, u.BotToken) }
-
-func (d *DB) AccountUsers(ctx context.Context, includeBanned bool) ([]User, error) {
-	status := "u.status=0"
-	if includeBanned {
-		status = "u.status IN (0,2)"
-	}
-	rows, err := d.Read.QueryContext(ctx, "SELECT "+userColumns+" FROM users u WHERE "+status+" AND u.role != 2 ORDER BY lower(u.name)")
-	if err != nil {
-		return nil, err
-	}
-	return usersRows(rows)
-}
-
-func (d *DB) RoomMembers(ctx context.Context, room int64) ([]User, error) {
-	rows, err := d.Read.QueryContext(ctx, "SELECT "+userColumns+" FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.room_id=?", room)
-	if err != nil {
-		return nil, err
-	}
-	return usersRows(rows)
-}
-
-func (d *DB) DirectPlaceholders(ctx context.Context, user int64) ([]User, error) {
-	rows, err := d.Read.QueryContext(ctx, "SELECT DISTINCT user_id FROM memberships WHERE room_id IN (SELECT r.id FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE r.type='Rooms::Direct' AND m.user_id=?)", user)
-	if err != nil {
-		return nil, err
-	}
-	ids := []any{}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	ids = append(ids, user)
-	marks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	rows, err = d.Read.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM users u WHERE u.status=0 AND u.id NOT IN (%s) ORDER BY u.created_at ASC LIMIT %d", userColumns, marks, max(0, 20-len(ids))), ids...)
-	if err != nil {
-		return nil, err
-	}
-	return usersRows(rows)
-}

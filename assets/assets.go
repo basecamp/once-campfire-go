@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
-	"html/template"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -32,8 +31,8 @@ var Manifest = func() map[string]struct {
 	}
 	return manifest
 }()
-var Importmap = template.HTML(read("generated/importmap.html"))
-var Stylesheets = template.HTML(read("generated/stylesheets.html"))
+var Importmap = read("generated/importmap.html")
+var Stylesheets = read("generated/stylesheets.html")
 
 func read(name string) string {
 	data, err := files.ReadFile(name)

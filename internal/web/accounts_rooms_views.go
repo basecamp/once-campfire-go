@@ -672,7 +672,7 @@ func (s *Server) broadcastClosedRoom(r *http.Request, room database.ReferenceRoo
 
 // roomFormHandlers are the room-type controllers' new, create, edit, update and destroy actions.
 // Rooms::DirectsController has no update and the others' destroy raises: the route table
-// answers those before they get here.
+// answers those before they get here, so they're nil.
 type roomFormHandlers struct {
 	new, create, edit, update, destroy func(http.ResponseWriter, *http.Request, database.User)
 }
@@ -680,11 +680,11 @@ type roomFormHandlers struct {
 func (s *Server) roomForms(namespace string) roomFormHandlers {
 	switch namespace {
 	case "closeds":
-		return roomFormHandlers{s.roomsClosedsNew, s.roomsClosedsCreate, s.roomsClosedsEdit, s.roomsClosedsUpdate, s.deleteRoom}
+		return roomFormHandlers{s.roomsClosedsNew, s.roomsClosedsCreate, s.roomsClosedsEdit, s.roomsClosedsUpdate, nil}
 	case "directs":
-		return roomFormHandlers{s.roomsDirectsNew, s.roomsDirectsCreate, s.roomsDirectsEdit, s.saveRoom, s.roomsDirectsDestroy}
+		return roomFormHandlers{s.roomsDirectsNew, s.roomsDirectsCreate, s.roomsDirectsEdit, nil, s.roomsDirectsDestroy}
 	}
-	return roomFormHandlers{s.roomsOpensNew, s.roomsOpensCreate, s.roomsOpensEdit, s.roomsOpensUpdate, s.deleteRoom}
+	return roomFormHandlers{s.roomsOpensNew, s.roomsOpensCreate, s.roomsOpensEdit, s.roomsOpensUpdate, nil}
 }
 
 // roomsDirectsNew is Rooms::DirectsController#new.

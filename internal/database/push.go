@@ -20,9 +20,6 @@ func pushRow(row interface{ Scan(...any) error }) (p PushSubscription, err error
 func (d *DB) PushSubscription(ctx context.Context, user, id int64) (PushSubscription, error) {
 	return pushRow(d.Read.QueryRowContext(ctx, "SELECT "+pushColumns+" FROM push_subscriptions p WHERE p.user_id=? AND p.id=?", user, id))
 }
-func (d *DB) PushSubscriptions(ctx context.Context, user int64) ([]PushSubscription, error) {
-	return d.pushQuery(ctx, "SELECT "+pushColumns+" FROM push_subscriptions p WHERE p.user_id=?", user)
-}
 func (d *DB) pushQuery(ctx context.Context, query string, args ...any) ([]PushSubscription, error) {
 	rows, err := d.Read.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -78,20 +75,4 @@ func (d *DB) PushRecipients(ctx context.Context, room, creator int64, mentioned 
 		}
 	}
 	return d.pushQuery(ctx, query+") ORDER BY CASE m.involvement WHEN 'everything' THEN 0 ELSE 1 END", args...)
-}
-func (d *DB) RoomMemberIDs(ctx context.Context, room int64) ([]int64, error) {
-	rows, err := d.Read.QueryContext(ctx, "SELECT user_id FROM memberships WHERE room_id=?", room)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
 }

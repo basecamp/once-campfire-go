@@ -166,19 +166,6 @@ func StreamFragment(qw *qt.Writer, f *Fragment) {
 	w.WriteString(f.HTML)
 }
 
-// StreamPage writes a recorded page into the one being rendered, keeping its fragments (a page's
-// content inside turbo-rails' frame layout).
-func StreamPage(qw *qt.Writer, p *RecordedPage) {
-	w := writerOf(qw)
-	position := 0
-	for _, placed := range p.Fragments {
-		w.Write(p.Text[position:placed.Offset])
-		StreamFragment(qw, placed.Fragment)
-		position = placed.Offset
-	}
-	w.Write(p.Text[position:])
-}
-
 // BeginCapture starts capturing what the template writes, for a filter block (`link_to ... do`).
 func BeginCapture(qw *qt.Writer) {
 	w := writerOf(qw)

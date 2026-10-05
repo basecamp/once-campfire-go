@@ -6,50 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
-	"slices"
 	"strings"
-	"time"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/rails"
 	"github.com/basecamp/once-campfire-go/internal/storage"
 )
 
-func (s *Server) enqueueWebhooks(message database.Message, room database.Room) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	var candidates []database.User
-	var err error
-	if room.Type == "Rooms::Direct" {
-		candidates, err = s.DB.Users(ctx, room.ID, true)
-	} else {
-		ids := s.mentionedIDs(ctx, message.Body)
-		for _, id := range ids {
-			u, e := s.DB.User(ctx, id)
-			if errors.Is(e, database.ErrNoRows) {
-				continue
-			}
-			if e != nil {
-				err = e
-				break
-			}
-			candidates = append(candidates, u)
-		}
-	}
-	if err != nil {
-		slog.Error("webhook recipients failed", "error", err)
-		return
-	}
-	seen := []int64{}
-	for _, bot := range candidates {
-		if bot.Role != 2 || bot.Status != 0 || bot.ID == message.CreatorID || slices.Contains(seen, bot.ID) {
-			continue
-		}
-		seen = append(seen, bot.ID)
-		s.Jobs.Enqueue("webhook", func(ctx context.Context) error { return s.deliverWebhook(ctx, bot.ID, message.ID) })
-	}
-}
 func (s *Server) deliverWebhook(ctx context.Context, botID, messageID int64) error {
 	bot, err := s.DB.User(ctx, botID)
 	if err != nil {
@@ -137,19 +100,22 @@ func (s *Server) deliverWebhook(ctx context.Context, botID, messageID int64) err
 			return err
 		}
 	}
-	created, err := s.saveNewMessage(ctx, bot.ID, room.ID, "", reply.Text, staged, true)
+	created, err := s.saveNewMessage(ctx, bot.ID, room.ID, "", reply.Text, staged)
 	if err != nil {
 		return err
 	}
-	s.messageCreated(created, room)
-	views, err := s.messageViews(ctx, []database.Message{created})
+	// The reply's broadcast_create, rendered outside a request (the renderer's http://example.org).
+	replyRoom, err := s.DB.RoomFind(ctx, room.ID)
 	if err != nil {
 		return err
 	}
-	markup, err := s.markup("message", views[0])
+	replyMessage, found, err := s.DB.MessageFindByID(ctx, created.ID)
+	if err == nil && !found {
+		err = database.ErrNoRows
+	}
 	if err != nil {
 		return err
 	}
-	s.publish(room.ID, stream("append", room.DOM("messages"), markup))
-	return nil
+	s.enqueuePushMessage(replyMessage.ID, &replyRoom)
+	return s.broadcastCreateAt(ctx, rendererBaseURLFrom(ctx), &replyRoom, &replyMessage)
 }

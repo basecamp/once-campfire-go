@@ -383,6 +383,9 @@ func (s *Server) pwaManifest(w http.ResponseWriter, r *http.Request) {
 	s.renderAs(w, r, http.StatusOK, "application/json; charset=utf-8", body)
 }
 
+// qrSlots bounds the QR codes being encoded at once.
+var qrSlots = make(chan struct{}, 4)
+
 // qrCodeShow is QrCodeController#show: an SVG QR code of a Base64url-encoded URL, cached a year.
 func (s *Server) qrCodeShow(w http.ResponseWriter, r *http.Request) {
 	value := strings.NewReplacer("-", "+", "_", "/").Replace(r.PathValue("id"))

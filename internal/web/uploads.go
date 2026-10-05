@@ -217,13 +217,6 @@ func (s *Server) serveStored(w http.ResponseWriter, r *http.Request, path, ct, d
 	}
 	http.ServeContent(w, r, stat.Name(), modified, file)
 }
-func (s *Server) uploadAttachment(r *http.Request, field string) (storage.Blob, error) {
-	staged, err := s.stageAttachment(r, field)
-	if err != nil {
-		return storage.Blob{}, err
-	}
-	return staged.Save(r.Context())
-}
 func (s *Server) stageAttachment(r *http.Request, field string) (*storage.Staged, error) {
 	file, header, err := uploadedFile(r, field)
 	if err != nil {
@@ -238,16 +231,6 @@ func (s *Server) stageAttachment(r *http.Request, field string) (*storage.Staged
 	head = head[:n]
 	ct := storage.Identify(head, header.Filename, header.Header.Get("Content-Type"))
 	return s.Storage.StageFile(r.Context(), header.Filename, ct, io.MultiReader(strings.NewReader(string(head)), file))
-}
-func (s *Server) attachUploaded(r *http.Request, field, kind string, id int64, name string) error {
-	if r.MultipartForm == nil || len(r.MultipartForm.File[field]) == 0 {
-		return nil
-	}
-	b, err := s.uploadAttachment(r, field)
-	if err != nil {
-		return err
-	}
-	return s.Storage.Attach(r.Context(), b, kind, id, name)
 }
 
 func (s *Server) storageAuth(next func(http.ResponseWriter, *http.Request, database.User)) http.HandlerFunc {

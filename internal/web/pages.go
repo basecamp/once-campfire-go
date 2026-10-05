@@ -309,7 +309,7 @@ func (s *Server) writePage(w http.ResponseWriter, r *http.Request, status int, c
 // the layout links (Propshaft's stylesheet_link_tag :all).
 var stylesheetPreloadLinks = func() []string {
 	var links []string
-	for _, tag := range strings.Split(string(assets.Stylesheets), "\n") {
+	for _, tag := range strings.Split(assets.Stylesheets, "\n") {
 		_, rest, ok := strings.Cut(tag, `href="`)
 		if !ok {
 			continue

@@ -43,9 +43,9 @@ func TestMentionAutocompleteAndRendering(t *testing.T) {
 	if response.StatusCode != 200 || !strings.Contains(string(raw), `class="mention"`) {
 		t.Fatalf("%d %s", response.StatusCode, raw)
 	}
-	result := app.richText(ctx, messages[0].Body)
-	if result.Plain != "Hi @Owner" || len(result.Mentioned) != 1 || result.Mentioned[0] != owner.ID {
-		t.Fatal(result)
+	plain, mentioned := app.plainText(ctx, messages[0].Body), app.mentionedIDs(ctx, messages[0].Body)
+	if plain != "Hi @Owner" || len(mentioned) != 1 || mentioned[0] != owner.ID {
+		t.Fatal(plain, mentioned)
 	}
 	response, raw = perform(t, server, "GET", "/autocompletable/users?filter=Other", "", nil, cookie)
 	if response.StatusCode != 200 || !strings.Contains(string(raw), `<lexxy-prompt-item`) || strings.Contains(string(raw), `Other <person>`) {
@@ -58,8 +58,13 @@ func TestMentionAutocompleteAndRendering(t *testing.T) {
 }
 func TestManifestAndServiceWorker(t *testing.T) {
 	app, server, _, _ := testApp(t)
+	ctx := context.Background()
 	name := `A "quoted" \\ name`
-	if err := app.DB.UpdateAccount(context.Background(), &name, nil, nil, false); err != nil {
+	account, _, err := app.DB.AccountFirst(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.DB.AccountUpdate(ctx, account, &name, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	response, raw := perform(t, server, "GET", "/webmanifest.json", "", nil, nil)

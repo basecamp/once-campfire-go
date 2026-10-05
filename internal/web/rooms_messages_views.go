@@ -374,7 +374,7 @@ func (s *Server) createMessageRecord(r *http.Request, u *database.User, room *da
 	if params.clientMessageID != nil {
 		client = *params.clientMessageID
 	}
-	created, err := s.DB.CreateMessageWithUpload(r.Context(), u.ID, room.ID, client, body, "", pendingBlob(staged), false)
+	created, err := s.DB.CreateMessageWithUpload(r.Context(), u.ID, room.ID, client, body, "", pendingBlob(staged))
 	if err != nil {
 		return database.ReferenceMessage{}, err
 	}
@@ -407,12 +407,16 @@ func (s *Server) enqueuePushMessage(id int64, room *database.ReferenceRoom) {
 // broadcastCreate is Message#broadcast_create: messages/_message, rendered without the request
 // through the fragment cache, appended to the room; then each member's unread ping.
 func (s *Server) broadcastCreate(r *http.Request, room *database.ReferenceRoom, message *database.ReferenceMessage) error {
-	ctx := r.Context()
+	return s.broadcastCreateAt(r.Context(), s.rendererBaseURL(r), room, message)
+}
+
+// broadcastCreateAt is broadcastCreate with its URLs at base.
+func (s *Server) broadcastCreateAt(ctx context.Context, base string, room *database.ReferenceRoom, message *database.ReferenceMessage) error {
 	view, err := s.newPresenter(ctx, "").message(message)
 	if err != nil {
 		return err
 	}
-	detached, err := s.detachedViewContext(ctx, s.rendererBaseURL(r))
+	detached, err := s.detachedViewContext(ctx, base)
 	if err != nil {
 		return err
 	}

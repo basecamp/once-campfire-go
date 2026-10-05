@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ import (
 // (reference/crates/campfire/src/controllers/messages/{by_bots,boosts/by_bots}.rs): the bot API
 // under /rooms/:room_id/:bot_key/messages, JSON by route default, rendered with the Jbuilder views
 // (views/messages_json.go).
+
+var botRoute = regexp.MustCompile(`^/rooms/([^/]+)/([^/]+)/messages(?:/([^/]+))?(?:/boosts(?:/([^/]+))?)?$`)
 
 // botRequestViews authenticates a bot API request (the session cookie, else params[:bot_key]),
 // reads its body (RawRequestBody, or a multipart attachment) and runs action. False when the

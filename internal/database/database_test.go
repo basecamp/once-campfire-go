@@ -47,11 +47,11 @@ func TestSchemaAndMessageTransaction(t *testing.T) {
 	if err != nil || len(messages) != 1 || messages[0].ID != m.ID || messages[0].Body != "<p>running dogs</p>" {
 		t.Fatalf("messages: %v %v", messages, err)
 	}
-	hits, err := d.Search(ctx, u.ID, "run")
+	hits, err := d.MessageSearchReachable(ctx, u.ID, "run")
 	if err != nil || len(hits) != 1 {
 		t.Fatalf("porter search: %v %v", hits, err)
 	}
-	if hits, err = d.Search(ctx, u.ID+1, "run"); err != nil || len(hits) != 0 {
+	if hits, err = d.MessageSearchReachable(ctx, u.ID+1, "run"); err != nil || len(hits) != 0 {
 		t.Fatalf("private search leaked: %v %v", hits, err)
 	}
 	// The search index is written after commit, as the reference's after_commit callback: its

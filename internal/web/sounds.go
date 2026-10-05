@@ -1,6 +1,11 @@
 // Built-in sound catalog from reference/reference/app/models/sound.rb.
 package web
 
+type sound struct {
+	Text, Image   string
+	Width, Height int
+}
+
 var sounds = map[string]sound{
 	"56k":           {Image: "56k.webp", Width: 79, Height: 33},
 	"bell":          {Text: "🔔"},

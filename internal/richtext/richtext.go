@@ -2,15 +2,10 @@
 package richtext
 
 import (
-	xhtml "github.com/basecamp/once-campfire-go/internal/html"
 	"strings"
-)
 
-// Render is the context-free entry point for messages without user attachments.
-func Render(body string) (string, string) {
-	result, _ := Process(body, Context{})
-	return result.Presentation, result.Plain
-}
+	xhtml "github.com/basecamp/once-campfire-go/internal/html"
+)
 
 // Canonical mirrors assignment to an Action Text body. Parse failures retain the
 // original input, as the Rust controller does; presentation still sanitizes it.

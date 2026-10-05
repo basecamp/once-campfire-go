@@ -4,17 +4,8 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 )
-
-type Membership struct {
-	ID, RoomID, UserID    int64
-	Involvement           string
-	UnreadAt, ConnectedAt *time.Time
-	Connections           int
-	UpdatedAt             time.Time
-}
 
 func (r Room) ParamKey() string {
 	switch r.Type {
@@ -31,15 +22,6 @@ func (r Room) DOM(prefix string) string {
 		prefix += "_"
 	}
 	return fmt.Sprintf("%s%s_%d", prefix, r.ParamKey(), r.ID)
-}
-func (r Room) EditPath() string {
-	return fmt.Sprintf("/rooms/%ss/%d/edit", strings.TrimPrefix(r.ParamKey(), "rooms_"), r.ID)
-}
-func (r Room) Noun() string {
-	if r.Type == "Rooms::Direct" {
-		return "Ping"
-	}
-	return "room"
 }
 func uniqueIDs(ids []int64) []int64 {
 	out := slices.Clone(ids)
@@ -127,73 +109,6 @@ func (d *DB) CreateRoom(ctx context.Context, creator int64, kind, name string, u
 	err = d.Read.QueryRowContext(ctx, "SELECT id,creator_id,coalesce(name,''),type,updated_at FROM rooms WHERE id=?", room.ID).Scan(&room.ID, &room.CreatorID, &room.Name, &room.Type, timestamp{&room.UpdatedAt})
 	return room, err
 }
-func (d *DB) UpdateRoom(ctx context.Context, id int64, kind, name string, users []int64) error {
-	var revoked []int64
-	err := d.Transaction(ctx, func(tx *Tx) error {
-		var old string
-		if err := tx.QueryRowContext(ctx, "SELECT type FROM rooms WHERE id=?", id).Scan(&old); err != nil {
-			return err
-		}
-		if old == "Rooms::Direct" || kind != "Rooms::Open" && kind != "Rooms::Closed" {
-			return ErrForbidden
-		}
-		now := Stamp(d.Now())
-		if _, err := tx.ExecContext(ctx, "UPDATE rooms SET type=?,name=?,updated_at=? WHERE id=?", kind, name, now, id); err != nil {
-			return err
-		}
-		if kind == "Rooms::Open" && old != kind {
-			_, err := tx.ExecContext(ctx, "INSERT INTO memberships(room_id,user_id,created_at,updated_at) SELECT ?,id,?,? FROM users WHERE status=0 ON CONFLICT(room_id,user_id) DO NOTHING", id, now, now)
-			return err
-		}
-		if kind == "Rooms::Closed" {
-			rows, err := tx.QueryContext(ctx, "SELECT user_id FROM memberships WHERE room_id=?", id)
-			if err != nil {
-				return err
-			}
-			for rows.Next() {
-				var user int64
-				if err := rows.Scan(&user); err != nil {
-					rows.Close()
-					return err
-				}
-				if !slices.Contains(users, user) {
-					revoked = append(revoked, user)
-				}
-			}
-			err = rows.Err()
-			rows.Close()
-			if err != nil {
-				return err
-			}
-
-			if len(users) == 0 {
-				_, err := tx.ExecContext(ctx, "DELETE FROM memberships WHERE room_id=?", id)
-				return err
-			}
-			args := []any{id}
-			marks := make([]string, len(users))
-			for i, user := range users {
-				marks[i] = "?"
-				args = append(args, user)
-			}
-			if _, err := tx.ExecContext(ctx, "DELETE FROM memberships WHERE room_id=? AND user_id NOT IN ("+strings.Join(marks, ",")+")", args...); err != nil {
-				return err
-			}
-			for _, user := range uniqueIDs(users) {
-				if err := grant(ctx, tx, id, user, "mentions", now); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
-	if err == nil && d.ResetConnections != nil {
-		for _, user := range revoked {
-			d.ResetConnections(user)
-		}
-	}
-	return err
-}
 func (d *DB) DeleteRoom(ctx context.Context, id int64) error {
 	var blobs []int64
 	err := d.Transaction(ctx, func(tx *Tx) error {
@@ -221,28 +136,6 @@ func (d *DB) DeleteRoom(ctx context.Context, id int64) error {
 	}
 	return err
 }
-func (d *DB) Involvement(ctx context.Context, user, room int64) (string, error) {
-	var value string
-	err := d.Read.QueryRowContext(ctx, "SELECT involvement FROM memberships WHERE user_id=? AND room_id=?", user, room).Scan(&value)
-	return value, err
-}
-func (d *DB) SetInvolvement(ctx context.Context, user, room int64, value string) error {
-	if !slices.Contains([]string{"invisible", "nothing", "mentions", "everything"}, value) {
-		return ErrValidation
-	}
-	r, err := d.Write.ExecContext(ctx, "UPDATE memberships SET involvement=?,updated_at=? WHERE user_id=? AND room_id=?", value, Stamp(d.Now()), user, room)
-	if err != nil {
-		return err
-	}
-	count, err := r.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if count == 0 {
-		return ErrNoRows
-	}
-	return nil
-}
 func (d *DB) Presence(ctx context.Context, user, room int64, action string) error {
 	return d.Transaction(ctx, func(tx *Tx) error {
 		now := d.Now()
@@ -266,35 +159,4 @@ func (d *DB) Presence(ctx context.Context, user, room int64, action string) erro
 		_, err := tx.ExecContext(ctx, query, cutoff, stamp, user, room)
 		return err
 	})
-}
-
-// OriginalRoom follows Room.original (creation order, not the fixture ID order).
-func (d *DB) OriginalRoom(ctx context.Context, user int64) (int64, error) {
-	var id int64
-	err := d.Read.QueryRowContext(ctx, "SELECT rooms.id FROM rooms JOIN memberships ON memberships.room_id=rooms.id WHERE memberships.user_id=? ORDER BY rooms.created_at LIMIT 1", user).Scan(&id)
-	return id, err
-}
-
-// SidebarRoom loads membership state alongside the room, avoiding per-room queries.
-type SidebarRoom struct {
-	Room
-	Involvement string
-	Unread      bool
-}
-
-func (d *DB) SidebarRooms(ctx context.Context, user int64) ([]SidebarRoom, error) {
-	rows, err := d.Read.QueryContext(ctx, "SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at,coalesce(m.involvement,''),m.unread_at IS NOT NULL FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=? AND m.involvement!='invisible' ORDER BY lower(r.name)", user)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var rooms []SidebarRoom
-	for rows.Next() {
-		var r SidebarRoom
-		if err := rows.Scan(&r.ID, &r.CreatorID, &r.Name, &r.Type, timestamp{&r.UpdatedAt}, &r.Involvement, &r.Unread); err != nil {
-			return nil, err
-		}
-		rooms = append(rooms, r)
-	}
-	return rooms, rows.Err()
 }

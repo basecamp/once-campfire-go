@@ -23,7 +23,7 @@ func TestPushSubscriptions(t *testing.T) {
 			t.Fatalf("create: %s %s", response.Status, data)
 		}
 	}
-	list, err := app.DB.PushSubscriptions(context.Background(), user.ID)
+	list, err := app.DB.PushSubscriptionsForUser(context.Background(), user.ID)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("duplicate subscription: %v %v", list, err)
 	}
@@ -43,7 +43,7 @@ func TestPushSubscriptions(t *testing.T) {
 	if response.StatusCode != 302 || response.Header.Get("Location") != server.URL+pushPath {
 		t.Fatal(response.Status, response.Header)
 	}
-	list, err = app.DB.PushSubscriptions(context.Background(), user.ID)
+	list, err = app.DB.PushSubscriptionsForUser(context.Background(), user.ID)
 	if err != nil || len(list) != 0 {
 		t.Fatalf("delete: %v %v", list, err)
 	}

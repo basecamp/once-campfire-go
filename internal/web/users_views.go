@@ -249,42 +249,6 @@ func (s *Server) directPlaceholderUsers(ctx context.Context, user *database.User
 	return summaries, nil
 }
 
-// sharedRoomPartial is users/sidebars/rooms/_shared for room (rooms controllers'
-// render_shared_room; presenter.sidebar_room is never unread).
-func sharedRoomPartial(room database.ReferenceRoom) string {
-	sidebarRoom := views.SidebarRoom{ID: room.ID, ParamKey: roomParamKey(room.Type), Name: room.Name.String}
-	return views.RenderString(512, func(qw *qt.Writer) { views.StreamUsersSidebarsRoomsShared(qw, &sidebarRoom) })
-}
-
-// directRoomPartial is users/sidebars/rooms/_direct for one membership of a direct room.
-type directRoomPartial struct {
-	Membership database.ReferenceMembership
-	HTML       *views.Fragment
-}
-
-// directRoomPartials is users/sidebars/rooms/_direct for each of room's memberships, rendered
-// outside a request at base through the fragment cache (Rooms::DirectsController's
-// broadcast_create_room, which prepends each to its user's direct_rooms).
-func (s *Server) directRoomPartials(ctx context.Context, base string, room database.ReferenceRoom) ([]directRoomPartial, error) {
-	viewContext, err := s.detachedViewContext(ctx, base)
-	if err != nil {
-		return nil, err
-	}
-	memberships, err := s.DB.MembershipsForRoom(ctx, room.ID)
-	if err != nil {
-		return nil, err
-	}
-	partials := make([]directRoomPartial, len(memberships))
-	for i := range memberships {
-		direct, err := s.sidebarDirect(ctx, &memberships[i], &room)
-		if err != nil {
-			return nil, err
-		}
-		partials[i] = directRoomPartial{Membership: memberships[i], HTML: views.CachedDirectRoom(viewContext, direct)}
-	}
-	return partials, nil
-}
-
 // rendererBaseURLFrom is renderer_base_url for the request ctx belongs to (the renderer's
 // http://example.org outside one).
 func rendererBaseURLFrom(ctx context.Context) string {

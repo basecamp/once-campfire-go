@@ -324,3 +324,64 @@ func TestSearchesAndInvolvementsRedirectAsTheReferenceDoes(t *testing.T) {
 		t.Errorf("invalid involvement: %d", response.StatusCode)
 	}
 }
+
+// A message whose creator is gone renders messages/_unrenderable in its place, and the page
+// around it still renders.
+func TestMissingMessageAuthorRendersUnrenderable(t *testing.T) {
+	app, server, cookie, user := testApp(t)
+	ctx := context.Background()
+	rooms, err := app.DB.Rooms(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "orphan", "hello", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = app.DB.Write.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = app.DB.Write.Exec("UPDATE messages SET creator_id=999999 WHERE id=?", message.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = app.DB.Write.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		t.Fatal(err)
+	}
+	response, body := perform(t, server, "GET", fmt.Sprintf("/rooms/%d/messages", rooms[0].ID), "", nil, cookie)
+	if response.StatusCode != 200 || !strings.Contains(string(body), `message--failed`) || !strings.Contains(string(body), "Failed to load message content") {
+		t.Fatalf("%d %s", response.StatusCode, body)
+	}
+}
+
+// A bot's webhook reply is broadcast_create'd outside the request: messages/_message appended to
+// the room, after the message that triggered it.
+func TestBotWebhookReplyIsBroadcast(t *testing.T) {
+	rt := newRoomsTest(t)
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, "<p>Bot reply</p>")
+	}))
+	t.Cleanup(webhook.Close)
+	ctx := context.Background()
+	endpoint := webhook.URL
+	bot, err := rt.db.CreateUser(ctx, "Reply Bot", "", "", "", 2, &endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.room, err = rt.db.CreateRoom(ctx, rt.room.CreatorID, "Rooms::Direct", "", []int64{bot.ID}); err != nil {
+		t.Fatal(err)
+	}
+	rt.subscribe()
+	response := rt.do("POST", fmt.Sprintf("/rooms/%d/messages", rt.room.ID), "message%5Bbody%5D=hello&message%5Bclient_message_id%5D=client-1", turboStream)
+	if response.StatusCode != 200 {
+		t.Fatalf("create: %d %s", response.StatusCode, rt.body(response))
+	}
+	target := fmt.Sprintf(`<turbo-stream action="append" target="messages_rooms_direct_%d"><template>`, rt.room.ID)
+	if created := rt.broadcast(); !strings.HasPrefix(created, target) || !strings.Contains(created, `id="message_client-1"`) {
+		t.Fatalf("broadcast_create: %s", created)
+	}
+	reply := rt.broadcast()
+	if !strings.HasPrefix(reply, target) || !strings.Contains(reply, "Bot reply") || !strings.Contains(reply, fmt.Sprintf(`data-user-id="%d"`, bot.ID)) {
+		t.Fatalf("reply broadcast: %s", reply)
+	}
+}

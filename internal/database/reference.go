@@ -99,8 +99,6 @@ const (
 	messageColumns  = `"messages"."id", "messages"."room_id", "messages"."creator_id", "messages"."client_message_id", "messages"."created_at", "messages"."updated_at"`
 	selectInRoom    = `SELECT ` + messageColumns + ` FROM "messages" WHERE "messages"."room_id" = ?`
 	selectReachable = `SELECT ` + messageColumns + ` FROM "messages" INNER JOIN "rooms" ON "messages"."room_id" = "rooms"."id" INNER JOIN "memberships" ON "rooms"."id" = "memberships"."room_id"`
-	// Message::Pagination's PAGE_SIZE.
-	PageSize = 40
 )
 
 // ReferenceMessage is a message row as the reference's Message model reads it (no body).
