@@ -1,0 +1,21 @@
+#!/bin/sh
+# Build Rust here (the 16 vCPUs make short work of the fat-LTO link), then main (go-before), the
+# branch (go) and rust, gzip then identity, on this machine's CPUs 8-15.
+nproc; lscpu | grep -E "Model name|CPU family|Model:|Thread|Core|Socket|MHz|Hypervisor"; free -g | head -2; df -h / | tail -1
+lscpu > /bench/machine.txt
+cd /bench/rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.98.1 2>&1 | tail -3
+export PATH=/root/.cargo/bin:$PATH
+rustc --version
+LIBRARY_PATH=/opt/vips/lib cargo build --release --locked -p campfire 2>&1 | tail -4
+ls -l target/release/campfire && echo "RUST BUILT" || echo "RUST BUILD FAILED"
+cd /bench/go && mkdir -p .cache/tmp
+REPS=${REPS:-6} SECONDS_=${SECONDS_:-5} SERVER=${SERVER:-8-11} LOADGEN=${LOADGEN:-12-15}
+for gzip in 1 0; do
+  bench/application --rust-root /bench/rust --out bench/results/fly-gzip$gzip --apps go-before go rust --baseline-go /bench/campfire-main \
+    --routes room_show messages_page sidebar search post_message --concurrency 16 --cable-clients --upload-reps 1 \
+    --reps $REPS --seconds $SECONDS_ --server-cpus $SERVER --loadgen-cpus $LOADGEN --gzip $gzip || echo "BENCH FAILED gzip=$gzip"
+done
+cp /bench/machine.txt bench/results/
+tar czf /bench/results.tgz -C bench/results . && echo "BENCH DONE"
+exec sleep ${HOLD:-3600}
