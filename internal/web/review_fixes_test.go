@@ -17,6 +17,8 @@ import (
 )
 
 func TestResponseEncodingRespectsFrontSettings(t *testing.T) {
+	t.Setenv("GZIP_COMPRESSION_ENABLED", "true")
+	t.Setenv("GZIP_COMPRESSION_DISABLE_ON_AUTH", "false")
 	request := httptest.NewRequest("GET", "/rooms/1", nil)
 	request.Header.Set("Accept-Encoding", "gzip")
 	if got := responseEncoding(nil, request); got != "gzip" {
@@ -175,6 +177,7 @@ func TestSidebarInvalidatesAfterUserCreate(t *testing.T) {
 }
 
 func TestCachedRoomSkipsGzipWhenDisabled(t *testing.T) {
+	t.Setenv("GZIP_COMPRESSION_ENABLED", "true")
 	app, server, cookie, user := testApp(t)
 	ctx := context.Background()
 	rooms, err := app.DB.Rooms(ctx, user.ID)

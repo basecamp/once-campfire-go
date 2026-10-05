@@ -254,20 +254,10 @@ func (c *Cache) ResetStats() {
 }
 
 func (c *Cache) compressionOK(r *http.Request, entry *cacheEntry) bool {
-	if c == nil || !c.gzip {
+	if c == nil {
 		return false
 	}
-	if entry.header.Get("No-Gzip-Compression") != "" {
-		return false
-	}
-	if c.disableGzipOnAuth {
-		for _, name := range []string{"Cookie", "Authorization", "X-CSRF-Token"} {
-			if r.Header.Get(name) != "" {
-				return false
-			}
-		}
-	}
-	return true
+	return compressionAllowed(c.gzip, c.disableGzipOnAuth, r, entry.header)
 }
 
 func (e *cacheEntry) encoded(r *http.Request, allow bool) ([]byte, string) {

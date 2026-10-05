@@ -27,7 +27,7 @@ func TestCompressionNegotiation(t *testing.T) {
 	handler := Deflate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		io.WriteString(w, "<h1>hello</h1>")
-	}))
+	}), Config{Gzip: true})
 	request := httptest.NewRequest("GET", "/", nil)
 	request.Header.Set("Accept-Encoding", "gzip")
 	response := httptest.NewRecorder()
@@ -338,5 +338,89 @@ func TestCacheRespectsCompressionVetoes(t *testing.T) {
 	vetoed := request(veto, "/veto", "gzip", "")
 	if vetoed.Header().Get("X-Cache") != "hit" || vetoed.Header().Get("Content-Encoding") != "" {
 		t.Fatalf("No-Gzip-Compression still compressed: %v", vetoed.Header())
+	}
+}
+
+func TestDeflateRespectsCompressionVetoes(t *testing.T) {
+	body := "<html>" + strings.Repeat("hello campfire ", 200) + "</html>"
+	app := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.URL.Path == "/veto" {
+			w.Header().Set("No-Gzip-Compression", "1")
+		}
+		io.WriteString(w, body)
+	})
+	request := func(handler http.Handler, path, cookie string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", path, nil)
+		r.Header.Set("Accept-Encoding", "gzip")
+		if cookie != "" {
+			r.Header.Set("Cookie", cookie)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+
+	disabled := Deflate(app, Config{Gzip: false})
+	got := request(disabled, "/", "")
+	if got.Header().Get("Content-Encoding") != "" || !strings.Contains(got.Body.String(), "hello campfire") {
+		t.Fatalf("gzip disabled still compressed: %v body=%q", got.Header(), got.Body.String()[:min(80, got.Body.Len())])
+	}
+
+	normal := Deflate(app, Config{Gzip: true})
+	got = request(normal, "/", "")
+	if got.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("enabled gzip missing Content-Encoding: %v", got.Header())
+	}
+	reader, err := gzip.NewReader(got.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := io.ReadAll(reader)
+	if err != nil || string(decoded) != body {
+		t.Fatalf("gzip body: %v %q", err, decoded[:min(40, len(decoded))])
+	}
+
+	guarded := Deflate(app, Config{Gzip: true, DisableGzipOnAuth: true})
+	got = request(guarded, "/", "session_token=secret")
+	if got.Header().Get("Content-Encoding") != "" || !strings.Contains(got.Body.String(), "hello campfire") {
+		t.Fatalf("DisableGzipOnAuth still compressed: %v", got.Header())
+	}
+	got = request(guarded, "/", "")
+	if got.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("anonymous request should still compress: %v", got.Header())
+	}
+
+	got = request(normal, "/veto", "")
+	if got.Header().Get("Content-Encoding") != "" || got.Header().Get("No-Gzip-Compression") != "" || !strings.Contains(got.Body.String(), "hello campfire") {
+		t.Fatalf("No-Gzip-Compression still compressed: %v", got.Header())
+	}
+}
+
+func TestDeflateAndCacheMissWithoutGzip(t *testing.T) {
+	body := "<html>" + strings.Repeat("room ", 400) + "</html>"
+	var calls atomic.Int32
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Cache-Control", "public, max-age=30")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		io.WriteString(w, body)
+	})
+	cache := NewCache(8<<20, 1<<20).AllowCompression(false, false)
+	handler := Deflate(cache.Handler(inner), Config{Gzip: false})
+	request := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/page", nil)
+		r.Header.Set("Accept-Encoding", "gzip")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	miss := request()
+	if miss.Header().Get("X-Cache") != "miss" || miss.Header().Get("Content-Encoding") != "" || miss.Body.String() != body {
+		t.Fatalf("miss with gzip disabled: %v len=%d", miss.Header(), miss.Body.Len())
+	}
+	hit := request()
+	if hit.Header().Get("X-Cache") != "hit" || hit.Header().Get("Content-Encoding") != "" || hit.Body.String() != body || calls.Load() != 1 {
+		t.Fatalf("hit with gzip disabled: %v calls=%d", hit.Header(), calls.Load())
 	}
 }

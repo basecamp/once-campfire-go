@@ -22,6 +22,7 @@ import (
 // and checks that the in-memory caches stay hot. A disk cache is only worth
 // adding when this ratio is poor.
 func TestHotCacheRatio(t *testing.T) {
+	t.Setenv("GZIP_COMPRESSION_ENABLED", "true")
 	app, server, cookie, user := testApp(t)
 	ctx := context.Background()
 	rooms, err := app.DB.Rooms(ctx, user.ID)
