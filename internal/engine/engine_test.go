@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
-	"time"
 
+	"github.com/basecamp/once-campfire-go/internal/engine/difftest"
 	"github.com/basecamp/once-campfire-go/internal/front"
 )
 
@@ -57,101 +57,55 @@ type requestCase struct {
 	name   string
 	method string
 	path   string
-	header map[string]string
+	header http.Header
 	body   []byte
 }
 
 var passThroughCases = []requestCase{
 	{"home", "GET", "/", nil, nil},
 	{"room", "GET", "/rooms/1", nil, nil},
-	{"room accepts gzip", "GET", "/rooms/1", map[string]string{"Accept-Encoding": "gzip"}, nil},
-	{"room accepts identity", "GET", "/rooms/1", map[string]string{"Accept-Encoding": "identity"}, nil},
+	{"room accepts gzip", "GET", "/rooms/1", http.Header{"Accept-Encoding": {"gzip"}}, nil},
+	{"room accepts identity", "GET", "/rooms/1", http.Header{"Accept-Encoding": {"identity"}}, nil},
 	{"messages page", "GET", "/rooms/1/messages", nil, nil},
 	{"messages before", "GET", "/rooms/1/messages?before=5", nil, nil},
 	{"sidebar", "GET", "/users/sidebar", nil, nil},
 	{"head room", "HEAD", "/rooms/1", nil, nil},
-	{"post message", "POST", "/rooms/1/messages", map[string]string{"Content-Type": "text/plain"}, []byte("hello world")},
+	{"post message", "POST", "/rooms/1/messages", http.Header{"Content-Type": {"text/plain"}}, []byte("hello world")},
 	{"unknown path", "GET", "/nope", nil, nil},
 	{"unknown method", "DELETE", "/rooms/1", nil, nil},
 }
 
-// exchange is one observed response.
-type exchange struct {
-	status int
-	header http.Header
-	body   []byte
-}
-
-func testClient() *http.Client {
-	return &http.Client{
-		Timeout:   5 * time.Second,
-		Transport: &http.Transport{DisableCompression: true},
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-}
-
-func fetch(t *testing.T, client *http.Client, base string, tc requestCase) exchange {
-	t.Helper()
-	var body io.Reader
-	if len(tc.body) > 0 {
-		body = bytes.NewReader(tc.body)
-	}
-	request, err := http.NewRequest(tc.method, base+tc.path, body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for key, value := range tc.header {
-		request.Header.Set(key, value)
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	payload, err := io.ReadAll(response.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return exchange{status: response.StatusCode, header: response.Header, body: payload}
-}
-
-// withoutVolatileHeaders drops Date, the one header two separate exchanges of
-// the same request never share.
-func withoutVolatileHeaders(header http.Header) http.Header {
-	clone := header.Clone()
-	clone.Del("Date")
-	return clone
-}
-
 // TestPassThroughByteIdentical pins the strangler contract: with no owned
 // routes the engine serves status, headers and body byte-identical to the
-// legacy handler for a table of representative requests.
+// legacy handler for a table of representative requests. The comparison runs
+// through difftest, the same harness later differential tests use.
 func TestPassThroughByteIdentical(t *testing.T) {
 	legacy := legacyFixture()
 	for _, mode := range []Mode{ModeOn, ModeForce, ModeOff} {
 		t.Run(mode.String(), func(t *testing.T) {
-			legacyServer := httptest.NewServer(legacy)
-			defer legacyServer.Close()
 			engine := New(legacy, Config{Mode: mode})
-			engineServer := httptest.NewServer(engine)
-			defer engineServer.Close()
-			client := testClient()
-			defer client.CloseIdleConnections()
+			pair := difftest.New(engine, legacy)
+			defer pair.Close()
 
 			for _, tc := range passThroughCases {
 				t.Run(tc.name, func(t *testing.T) {
-					got := fetch(t, client, engineServer.URL, tc)
-					want := fetch(t, client, legacyServer.URL, tc)
-					if got.status != want.status {
-						t.Fatalf("status = %d, legacy = %d", got.status, want.status)
+					got, want, err := pair.Exchange(difftest.Request{
+						Method: tc.method,
+						Path:   tc.path,
+						Header: tc.header,
+						Body:   tc.body,
+					})
+					if err != nil {
+						t.Fatal(err)
 					}
-					if !reflect.DeepEqual(withoutVolatileHeaders(got.header), withoutVolatileHeaders(want.header)) {
-						t.Fatalf("headers differ\n engine: %v\n legacy: %v", withoutVolatileHeaders(got.header), withoutVolatileHeaders(want.header))
+					if got.Status != want.Status {
+						t.Fatalf("status = %d, legacy = %d", got.Status, want.Status)
 					}
-					if !bytes.Equal(got.body, want.body) {
-						t.Fatalf("body differs\n engine: %q\n legacy: %q", got.body, want.body)
+					if !reflect.DeepEqual(got.Header, want.Header) {
+						t.Fatalf("headers differ\n engine: %v\n legacy: %v", got.Header, want.Header)
+					}
+					if !bytes.Equal(got.Body, want.Body) {
+						t.Fatalf("body differs\n engine: %q\n legacy: %q", got.Body, want.Body)
 					}
 				})
 			}
@@ -168,19 +122,18 @@ func TestUnknownPath404Identical(t *testing.T) {
 	legacy := legacyFixture()
 	engine := New(legacy, Config{Mode: ModeOn})
 
-	got := httptest.NewRecorder()
-	engine.ServeHTTP(got, httptest.NewRequest("GET", "/definitely-unknown", nil))
-	want := httptest.NewRecorder()
-	legacy.ServeHTTP(want, httptest.NewRequest("GET", "/definitely-unknown", nil))
-
-	if got.Code != http.StatusNotFound {
-		t.Fatalf("engine status = %d, want 404", got.Code)
+	got, want, err := difftest.Run(engine, legacy, difftest.Request{Method: "GET", Path: "/definitely-unknown"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got.Code != want.Code {
-		t.Fatalf("engine status = %d, legacy = %d", got.Code, want.Code)
+	if got.Status != http.StatusNotFound {
+		t.Fatalf("engine status = %d, want 404", got.Status)
 	}
-	if !bytes.Equal(got.Body.Bytes(), want.Body.Bytes()) {
-		t.Fatalf("engine body = %q, legacy = %q", got.Body.Bytes(), want.Body.Bytes())
+	if got.Status != want.Status {
+		t.Fatalf("engine status = %d, legacy = %d", got.Status, want.Status)
+	}
+	if !bytes.Equal(got.Body, want.Body) {
+		t.Fatalf("engine body = %q, legacy = %q", got.Body, want.Body)
 	}
 }
 
@@ -222,7 +175,7 @@ func TestOwnershipModes(t *testing.T) {
 			if got := response.Header().Get("X-Source"); got != wantSource {
 				t.Fatalf("owned probe served by %q, want %q", got, wantSource)
 			}
-			if tc.mode == ModeForce {
+			if tc.owned {
 				if got := engine.Fallbacks(); got != 0 {
 					t.Fatalf("fallbacks after owned probe = %d, want 0", got)
 				}
@@ -251,20 +204,51 @@ func TestOwnershipModes(t *testing.T) {
 	}
 }
 
+// TestEscapedPathOwnership pins that ownership keys on r.URL.EscapedPath(),
+// the form the legacy router recognizes. An encoded slash is a different
+// escaped path from the decoded one, so it must fall back rather than serve
+// the entry registered under the decoded path.
+func TestEscapedPathOwnership(t *testing.T) {
+	legacy, probe := probeHandlers()
+	engine := New(legacy, Config{Mode: ModeForce})
+	engine.handle("GET", "/rooms/1", probe)
+
+	plain := httptest.NewRecorder()
+	engine.ServeHTTP(plain, httptest.NewRequest("GET", "/rooms/1", nil))
+	if got := plain.Header().Get("X-Source"); got != "engine" {
+		t.Fatalf("plain path served by %q, want engine", got)
+	}
+
+	encoded := httptest.NewRecorder()
+	engine.ServeHTTP(encoded, httptest.NewRequest("GET", "/rooms%2F1", nil))
+	if got := encoded.Header().Get("X-Source"); got != "legacy" {
+		t.Fatalf("encoded-slash path served by %q, want legacy", got)
+	}
+	if got := engine.Fallbacks(); got != 1 {
+		t.Fatalf("fallbacks = %d, want 1", got)
+	}
+}
+
 func TestParseMode(t *testing.T) {
 	for _, tc := range []struct {
 		value string
 		want  Mode
+		ok    bool
 	}{
-		{"", ModeOn},
-		{"on", ModeOn},
-		{"off", ModeOff},
-		{"force", ModeForce},
-		{"OFF", ModeOn},
-		{"bogus", ModeOn},
+		{"", ModeOn, true},
+		{"on", ModeOn, true},
+		{"ON", ModeOn, true},
+		{"off", ModeOff, true},
+		{"OFF", ModeOff, true},
+		{" off ", ModeOff, true},
+		{"force", ModeForce, true},
+		{"Force", ModeForce, true},
+		{"bogus", ModeOn, false},
+		{"of", ModeOn, false},
 	} {
-		if got := ParseMode(tc.value); got != tc.want {
-			t.Errorf("ParseMode(%q) = %v, want %v", tc.value, got, tc.want)
+		got, ok := ParseMode(tc.value)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("ParseMode(%q) = (%v, %t), want (%v, %t)", tc.value, got, ok, tc.want, tc.ok)
 		}
 	}
 }
@@ -319,32 +303,66 @@ func TestFallbackKeepsLegacyGzip(t *testing.T) {
 
 // TestOwnedRouteOwnsEncoding pins the takeover half of the contract: a route
 // the engine serves sends its precomposed encoded bytes untouched, without the
-// legacy Deflate wrapper adding a second gzip layer.
+// legacy Deflate wrapper adding a second gzip layer, in both owned modes.
 func TestOwnedRouteOwnsEncoding(t *testing.T) {
 	member := gzipMember(t, "engine body")
 	legacy := front.Deflate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "legacy body")
 	}))
-	probe := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Encoding", "gzip")
-		w.Header().Set("Vary", "Accept-Encoding")
-		w.Write(member)
+	for _, mode := range []Mode{ModeOn, ModeForce} {
+		t.Run(mode.String(), func(t *testing.T) {
+			probe := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Encoding", "gzip")
+				w.Header().Set("Vary", "Accept-Encoding")
+				w.Write(member)
+			})
+			engine := New(legacy, Config{Mode: mode})
+			engine.handle("GET", "/probe", probe)
+
+			request := httptest.NewRequest("GET", "/probe", nil)
+			request.Header.Set("Accept-Encoding", "gzip")
+			response := httptest.NewRecorder()
+			engine.ServeHTTP(response, request)
+
+			if got := response.Header().Get("Content-Encoding"); got != "gzip" {
+				t.Fatalf("Content-Encoding = %q, want gzip", got)
+			}
+			if got := response.Header().Get("Vary"); got != "Accept-Encoding" {
+				t.Fatalf("Vary = %q, want Accept-Encoding", got)
+			}
+			if !bytes.Equal(response.Body.Bytes(), member) {
+				t.Fatalf("owned body re-encoded: %d bytes in, %d out", len(member), response.Body.Len())
+			}
+		})
+	}
+}
+
+// nopResponseWriter is the cheapest possible http.ResponseWriter: no status
+// tracking, no buffering, no header allocation. It lets AllocsPerRun measure
+// the engine seam alone rather than recorder internals.
+type nopResponseWriter struct {
+	header http.Header
+}
+
+func (w *nopResponseWriter) Header() http.Header         { return w.header }
+func (w *nopResponseWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (w *nopResponseWriter) WriteHeader(int)             {}
+
+var fixedLegacyBody = []byte("legacy")
+
+// TestFallbackPathZeroAllocations pins the seam contract: a delegated request
+// costs one map lookup and one atomic add, and allocates nothing.
+func TestFallbackPathZeroAllocations(t *testing.T) {
+	legacy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(fixedLegacyBody)
 	})
-	engine := New(legacy, Config{Mode: ModeForce})
-	engine.handle("GET", "/probe", probe)
+	engine := New(legacy, Config{Mode: ModeOn})
+	request := httptest.NewRequest("GET", "/rooms/1", nil)
+	writer := &nopResponseWriter{header: make(http.Header)}
 
-	request := httptest.NewRequest("GET", "/probe", nil)
-	request.Header.Set("Accept-Encoding", "gzip")
-	response := httptest.NewRecorder()
-	engine.ServeHTTP(response, request)
-
-	if got := response.Header().Get("Content-Encoding"); got != "gzip" {
-		t.Fatalf("Content-Encoding = %q, want gzip", got)
-	}
-	if got := response.Header().Get("Vary"); got != "Accept-Encoding" {
-		t.Fatalf("Vary = %q, want Accept-Encoding", got)
-	}
-	if !bytes.Equal(response.Body.Bytes(), member) {
-		t.Fatalf("owned body re-encoded: %d bytes in, %d out", len(member), response.Body.Len())
+	if allocs := testing.AllocsPerRun(200, func() {
+		engine.ServeHTTP(writer, request)
+	}); allocs != 0 {
+		t.Fatalf("fallback path allocated %.2f objects per run, want 0", allocs)
 	}
 }

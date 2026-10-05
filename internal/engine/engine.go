@@ -10,6 +10,7 @@ package engine
 
 import (
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -40,17 +41,21 @@ func (m Mode) String() string {
 	}
 }
 
-// ParseMode maps a CAMPFIRE_ENGINE value to a Mode. The empty string, "on",
-// and unrecognized values select ModeOn, the production default; "off" and
-// "force" are exact matches.
-func ParseMode(value string) Mode {
-	switch value {
+// ParseMode maps a CAMPFIRE_ENGINE value to a Mode. Surrounding whitespace is
+// trimmed and ASCII case is folded. The empty string and "on" select the
+// production default ModeOn; "off" and "force" are exact. Any other non-empty
+// value returns ModeOn with ok=false so the caller can warn instead of
+// silently running a misconfigured mode.
+func ParseMode(value string) (Mode, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "on":
+		return ModeOn, true
 	case "off":
-		return ModeOff
+		return ModeOff, true
 	case "force":
-		return ModeForce
+		return ModeForce, true
 	default:
-		return ModeOn
+		return ModeOn, false
 	}
 }
 
@@ -92,7 +97,15 @@ func (e *Engine) enabled() bool { return e.mode != ModeOff }
 // from the counter bump.
 func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if e.enabled() {
-		if handler, ok := e.routes.lookup(r.Method, r.URL.Path); ok {
+		// Ownership matches on r.URL.EscapedPath(), the form the legacy router
+		// recognizes (web.recognize; it normalizes further with
+		// normalizedPath). An exact escaped-path match is conservative: a
+		// request whose escaped form differs from the registered key — an
+		// encoded slash, a non-canonical escape, a path normalizedPath would
+		// collapse — falls back to legacy rather than being served with
+		// different semantics. Dynamic patterns must replicate normalizedPath
+		// when ENGINE-16 lands.
+		if handler, ok := e.routes.lookup(r.Method, r.URL.EscapedPath()); ok {
 			e.serve(handler, w, r)
 			return
 		}

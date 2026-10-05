@@ -2,12 +2,14 @@ package engine
 
 import "net/http"
 
-// routeTable is the compiled ownership map: method -> path -> handler.
+// routeTable is the compiled ownership map: method -> escaped path -> handler.
 //
-// The shape is deliberately small. ENGINE-11 ships it empty (nothing is
-// owned, so the engine is a pure pass-through) and ENGINE-16 fills it with the
-// real routes. Lookups are exact method and path matches; dynamic patterns get
-// their own matching when the first one lands.
+// Keys are the exact r.URL.EscapedPath() strings the legacy router recognizes
+// (see Engine.ServeHTTP for the normalization caveat). The shape is
+// deliberately small. ENGINE-11 ships it empty (nothing is owned, so the
+// engine is a pure pass-through) and ENGINE-16 fills it with the real routes.
+// Lookups are exact method and escaped-path matches; dynamic patterns get their
+// own matching, including normalizedPath semantics, when the first one lands.
 type routeTable struct {
 	byMethod map[string]map[string]http.Handler
 }

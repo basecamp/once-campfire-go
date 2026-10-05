@@ -17,6 +17,14 @@
 //
 // Callers with other per-exchange fields append them to Pair.Mask; everything
 // else is returned untouched for byte comparison.
+//
+// Preconditions for a meaningful comparison: both handlers must see
+// equivalent state. Run them against identical database copies with the same
+// configuration, and freeze wall-clock-dependent output with
+// CAMPFIRE_FROZEN_TIME. Exchange always runs the engine exchange first and the
+// legacy exchange second, so a non-idempotent request (a write, a one-shot
+// token, a rate-limited path) must be accounted for by the caller — use a
+// fresh fixture per side or replay-safe requests.
 package difftest
 
 import (
@@ -34,6 +42,9 @@ type Request struct {
 	Method string
 	// Path is the request path plus optional query, e.g. "/rooms/1?before=5".
 	Path string
+	// Host overrides the request host. Go's http.Request ignores
+	// Header["Host"]; set this field instead.
+	Host string
 	// Header carries request headers verbatim; the caller sets Accept-Encoding
 	// explicitly when encoding is under test.
 	Header http.Header
@@ -121,6 +132,9 @@ func (p *Pair) run(server *httptest.Server, req Request) (Result, error) {
 	request, err := http.NewRequest(method, server.URL+req.Path, body)
 	if err != nil {
 		return Result{}, err
+	}
+	if req.Host != "" {
+		request.Host = req.Host
 	}
 	for key, values := range req.Header {
 		for _, value := range values {

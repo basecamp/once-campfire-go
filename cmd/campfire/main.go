@@ -75,14 +75,15 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Encoding composition (engine design §3.2): the engine wraps the legacy
-	// handler, which keeps the exact bodyLimit(Deflate(app)) chain, and
-	// front.Serve skips its own Deflate wrap. Engine-owned routes encode
-	// themselves; fallback routes stay byte-identical to the pre-engine chain.
-	mode := engine.ParseMode(os.Getenv("CAMPFIRE_ENGINE"))
+	// Encoding composition (engine design §3.2) lives in compose.go: the
+	// engine wraps the legacy front.Deflate chain, and rootConfig marks the
+	// front configuration precomposed so front.Serve does not add a second
+	// encoding layer.
+	setting := os.Getenv("CAMPFIRE_ENGINE")
+	mode, ok := engine.ParseMode(setting)
+	if !ok {
+		slog.Warn("engine: unrecognized CAMPFIRE_ENGINE value, defaulting to on", "value", setting)
+	}
 	slog.Info("engine", "mode", mode)
-	root := engine.New(front.Deflate(app), engine.Config{Mode: mode})
-	config := front.FromEnv()
-	config.SkipDeflate = true
-	return front.Serve(ctx, config, root)
+	return front.Serve(ctx, rootConfig(front.FromEnv()), buildRoot(app, mode))
 }

@@ -112,6 +112,25 @@ func TestGzipBodyArrivesRaw(t *testing.T) {
 	}
 }
 
+func TestHostIsForwarded(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, r.Host)
+	})
+	engine, legacy, err := Run(handler, handler, Request{
+		Path:   "/",
+		Host:   "campfire.example.test",
+		Header: http.Header{"Host": {"ignored.example.test"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, result := range map[string]Result{"engine": engine, "legacy": legacy} {
+		if got := string(result.Body); got != "campfire.example.test" {
+			t.Fatalf("%s host = %q, want campfire.example.test (Header[\"Host\"] must be ignored)", name, got)
+		}
+	}
+}
+
 func TestRedirectIsNotFollowed(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/elsewhere", http.StatusFound)
