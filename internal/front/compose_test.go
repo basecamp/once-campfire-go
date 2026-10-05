@@ -160,6 +160,18 @@ func TestServeSkipDeflate(t *testing.T) {
 				t.Fatalf("identity body = %q", identityBody)
 			}
 
+			// With SkipDeflate the caller owns negotiation: the front must not
+			// reject an encoding set it cannot satisfy. Without it, Deflate
+			// keeps its 406 policy.
+			unacceptable, unacceptableBody := get("/plain", "gzip;q=0, identity;q=0")
+			if skip {
+				if unacceptable.StatusCode != 200 || string(unacceptableBody) != "plain body" {
+					t.Fatalf("negotiation passthrough: status %d body %q", unacceptable.StatusCode, unacceptableBody)
+				}
+			} else if unacceptable.StatusCode != 406 {
+				t.Fatalf("negotiation-failure status = %d, want 406", unacceptable.StatusCode)
+			}
+
 			limited, err := client.Post(target+"/plain", "text/plain", strings.NewReader("more than eight bytes"))
 			if err != nil {
 				t.Fatal(err)
@@ -180,5 +192,86 @@ func TestServeSkipDeflate(t *testing.T) {
 				t.Fatal("shutdown hung")
 			}
 		})
+	}
+}
+
+// TestServeSkipDeflatePublicListener runs a precomposed, cacheable response
+// through the whole public chain (forward, cache, PublicCompression) to pin
+// the takeover contract: the app's bytes, status and Vary survive untouched.
+func TestServeSkipDeflatePublicListener(t *testing.T) {
+	preencoded := gzipPayload(t, "public preencoded body")
+	config := FromLookup(func(string) (string, bool) { return "", false })
+	port := reservePort(t)
+	config.HTTPPort = port
+	config.TargetPort = port
+	config.SkipDeflate = true
+	config.LogRequests = false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, config, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Header().Set("Vary", "Accept-Encoding")
+			w.Header().Set("Cache-Control", "public, max-age=30")
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("X-Engine-Marker", "preserved")
+			w.WriteHeader(201)
+			w.Write(preencoded)
+		}))
+	}()
+	client := &http.Client{Timeout: time.Second}
+	defer client.CloseIdleConnections()
+	url := "http://127.0.0.1:" + strconv.Itoa(port) + "/preencoded"
+	var response *http.Response
+	var err error
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		request, requestErr := http.NewRequest("GET", url, nil)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		request.Header.Set("Accept-Encoding", "gzip")
+		response, err = client.Do(request)
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != 201 {
+		t.Fatalf("public preencoded status = %d, want 201", response.StatusCode)
+	}
+	if got := response.Header.Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("public preencoded Content-Encoding = %q, want gzip", got)
+	}
+	if got := response.Header.Get("Vary"); !strings.Contains(got, "Accept-Encoding") {
+		t.Fatalf("public preencoded Vary = %q, want Accept-Encoding", got)
+	}
+	if got := response.Header.Get("X-Cache"); got != "miss" {
+		t.Fatalf("public preencoded X-Cache = %q, want miss", got)
+	}
+	if !bytes.Equal(body, preencoded) {
+		t.Fatalf("public preencoded body changed: %d bytes in, %d out", len(preencoded), len(body))
+	}
+	if decoded := gunzipPayload(t, body); decoded != "public preencoded body" {
+		t.Fatalf("public preencoded body decodes to %q, want one gzip layer", decoded)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(7 * time.Second):
+		t.Fatal("shutdown hung")
 	}
 }

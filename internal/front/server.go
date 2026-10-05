@@ -77,9 +77,8 @@ func forward(next http.Handler, c Config) http.Handler {
 // Serve hosts the application listener and the public HTTP/TLS listeners in one
 // process. The ACME manager is Go's autocert, also used by Thruster.
 func Serve(ctx context.Context, c Config, app http.Handler) error {
-	// A precomposed application (the engine) carries its own Content-Encoding,
-	// so the front must not add its negotiation/encoding layer. bodyLimit
-	// applies in both modes.
+	// SkipDeflate hands encoding to the app; see Config.SkipDeflate.
+	// bodyLimit applies in both modes.
 	if c.SkipDeflate {
 		app = bodyLimit(app, c.MaxRequestBody)
 	} else {

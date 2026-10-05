@@ -14,10 +14,17 @@ type Config struct {
 	TargetPort, HTTPPort, HTTPSPort                           int
 	CacheSize, MaxCacheItemSize, MaxRequestBody               int64
 	Gzip, DisableGzipOnAuth, H2C, ForwardHeaders, LogRequests bool
-	SkipDeflate                                               bool
-	Domains                                                   []string
-	ACMEDirectory, StoragePath, EABKeyID, EABKey              string
-	IdleTimeout, ReadTimeout, WriteTimeout                    time.Duration
+	// SkipDeflate hands response encoding to the application, for a
+	// precomposed handler such as the engine. The caller then owns
+	// Content-Encoding and Vary: Accept-Encoding on every cacheable
+	// response (the front cache keys variants on Vary and snapshots headers
+	// before the public chain adds it), the 406 negotiation policy, and the
+	// No-Gzip-Compression / DisableGzipOnAuth vetoes that Deflate would
+	// otherwise apply.
+	SkipDeflate                                  bool
+	Domains                                      []string
+	ACMEDirectory, StoragePath, EABKeyID, EABKey string
+	IdleTimeout, ReadTimeout, WriteTimeout       time.Duration
 }
 
 func FromEnv() Config { return FromLookup(os.LookupEnv) }
