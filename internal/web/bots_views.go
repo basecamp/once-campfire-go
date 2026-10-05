@@ -321,7 +321,7 @@ func (s *Server) botMessagesUpdate(w http.ResponseWriter, r *http.Request, u *da
 		}
 		writeJSONBody(w, http.StatusOK, views.MessagesByBotsShowJSON(json))
 	case "html":
-		s.redirectTo(w, r, views.RouteRoomMessage(room.ID, message.ID))
+		s.redirectToPath(w, r, views.RouteRoomMessage(room.ID, message.ID))
 	}
 }
 

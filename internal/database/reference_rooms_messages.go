@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 )
@@ -12,104 +11,43 @@ import (
 // with its SQL text.
 
 const (
-	membershipColumns = `"memberships"."id", "memberships"."room_id", "memberships"."user_id", "memberships"."involvement", "memberships"."unread_at", "memberships"."connected_at", "memberships"."connections", "memberships"."created_at", "memberships"."updated_at"`
-	boostColumns      = `"boosts"."id", "boosts"."message_id", "boosts"."booster_id", "boosts"."content", "boosts"."created_at", "boosts"."updated_at"`
-	richTextColumns   = `"action_text_rich_texts"."id", "action_text_rich_texts"."name", "action_text_rich_texts"."body", "action_text_rich_texts"."record_type", "action_text_rich_texts"."record_id", "action_text_rich_texts"."created_at", "action_text_rich_texts"."updated_at"`
-	selectRoomUsers   = `SELECT ` + UserColumns + ` FROM "users" INNER JOIN "memberships" ON "users"."id" = "memberships"."user_id" WHERE "memberships"."room_id" = ?`
+	boostColumns    = `"boosts"."id", "boosts"."message_id", "boosts"."booster_id", "boosts"."content", "boosts"."created_at", "boosts"."updated_at"`
+	richTextColumns = `"action_text_rich_texts"."id", "action_text_rich_texts"."name", "action_text_rich_texts"."body", "action_text_rich_texts"."record_type", "action_text_rich_texts"."record_id", "action_text_rich_texts"."created_at", "action_text_rich_texts"."updated_at"`
 )
-
-// ToDB is the reference's Timestamp::to_db, how it binds a time: seconds, then six digits of
-// microseconds unless they are zero. A stored "…:00.000000" compares greater than a bound "…:00".
-func ToDB(t time.Time) string {
-	t = t.UTC()
-	base := t.Format("2006-01-02 15:04:05")
-	if us := t.Nanosecond() / 1000; us != 0 {
-		return base + "." + fmt.Sprintf("%06d", us)
-	}
-	return base
-}
-
-// ReferenceMembership is a memberships row as the reference's Membership model reads it.
-type ReferenceMembership struct {
-	ID, RoomID, UserID int64
-	// Nil when the column is NULL.
-	Involvement *string
-	UnreadAt    *time.Time
-	UpdatedAt   time.Time
-}
-
-func scanReferenceMemberships(rows *Rows, err error) ([]ReferenceMembership, error) {
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var memberships []ReferenceMembership
-	for rows.Next() {
-		var m ReferenceMembership
-		var involvement, unread, connected NullString
-		var connections int64
-		var created time.Time
-		if err := rows.Scan(&m.ID, &m.RoomID, &m.UserID, &involvement, &unread, &connected, &connections, timestamp{&created}, timestamp{&m.UpdatedAt}); err != nil {
-			return nil, err
-		}
-		if involvement.Valid {
-			m.Involvement = &involvement.String
-		}
-		if unread.Valid {
-			if t, ok := parseStamp(unread.String); ok {
-				m.UnreadAt = &t
-			}
-		}
-		memberships = append(memberships, m)
-	}
-	return memberships, rows.Err()
-}
 
 // MembershipFindByRoomAndUser is Membership::find_by_room_and_user.
 func (d *DB) MembershipFindByRoomAndUser(ctx context.Context, room, user int64) (ReferenceMembership, bool, error) {
-	memberships, err := scanReferenceMemberships(d.Read.QueryContext(ctx, `SELECT `+membershipColumns+` FROM "memberships" WHERE "memberships"."room_id" = ? AND "memberships"."user_id" = ? LIMIT 1`, room, user))
-	if err != nil || len(memberships) == 0 {
-		return ReferenceMembership{}, false, err
+	var m ReferenceMembership
+	var unread, connected NullString
+	var connections int64
+	err := d.Read.QueryRowContext(ctx, `SELECT `+membershipColumns+` FROM "memberships" WHERE "memberships"."room_id" = ? AND "memberships"."user_id" = ? LIMIT 1`, room, user).
+		Scan(&m.ID, &m.RoomID, &m.UserID, &m.Involvement, &unread, &connected, &connections, timestamp{&m.CreatedAt}, timestamp{&m.UpdatedAt})
+	if err == ErrNoRows {
+		return m, false, nil
 	}
-	return memberships[0], true, nil
-}
-
-// MembershipsForRoom is Membership::for_room.
-func (d *DB) MembershipsForRoom(ctx context.Context, room int64) ([]ReferenceMembership, error) {
-	return scanReferenceMemberships(d.Read.QueryContext(ctx, `SELECT `+membershipColumns+` FROM "memberships" WHERE "memberships"."room_id" = ?`, room))
+	if err != nil {
+		return m, false, err
+	}
+	m.Unread = unread.Valid
+	if unread.Valid {
+		var t time.Time
+		if err := (timestamp{&t}).parse(unread.String); err != nil {
+			return m, false, err
+		}
+		m.UnreadAt = &t
+	}
+	return m, true, nil
 }
 
 // UpdateMembershipInvolvement is Membership#update_involvement: nothing when it's unchanged.
 func (d *DB) UpdateMembershipInvolvement(ctx context.Context, membership ReferenceMembership, involvement *string) error {
-	if (membership.Involvement == nil) == (involvement == nil) && (involvement == nil || *membership.Involvement == *involvement) {
+	if membership.Involvement.Valid == (involvement != nil) && (involvement == nil || membership.Involvement.String == *involvement) {
 		return nil
 	}
 	return d.Transaction(ctx, func(tx *Tx) error {
 		_, err := tx.ExecContext(ctx, `UPDATE "memberships" SET "involvement" = ?, "updated_at" = ? WHERE "memberships"."id" = ?`, involvement, Stamp(d.Now()), membership.ID)
 		return err
 	})
-}
-
-// RoomFindByID is Room::find_by_id.
-func (d *DB) RoomFindByID(ctx context.Context, id int64) (ReferenceRoom, bool, error) {
-	return d.optionalRoom(ctx, `SELECT `+roomColumns+` FROM "rooms" WHERE "rooms"."id" = ? LIMIT 1`, id)
-}
-
-func (d *DB) referenceUsers(ctx context.Context, query string, args ...any) ([]User, error) {
-	rows, err := d.Read.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var users []User
-	for rows.Next() {
-		u, err := ScanReferenceUser(rows)
-		if err != nil {
-			return nil, err
-		}
-		users = append(users, u)
-	}
-	return users, rows.Err()
 }
 
 // UserAuthenticateBot is User::authenticate_bot: the active bot with the key's id and token
@@ -122,21 +60,12 @@ func (d *DB) UserAuthenticateBot(ctx context.Context, key string) (User, bool, e
 	if len(parts) < 2 {
 		return User{}, false, nil
 	}
-	users, err := d.referenceUsers(ctx, `SELECT `+UserColumns+` FROM "users" WHERE "users"."status" = 0 AND "users"."role" = 2 AND "users"."id" = ? AND "users"."bot_token" = ? LIMIT 1`, parts[0], parts[1])
-	if err != nil || len(users) == 0 {
-		return User{}, false, err
-	}
-	return users[0], true, nil
-}
-
-// RoomUsers is room.users.
-func (d *DB) RoomUsers(ctx context.Context, room int64) ([]User, error) {
-	return d.referenceUsers(ctx, selectRoomUsers, room)
+	return d.optionalUser(ctx, selectUsers+` WHERE "users"."status" = 0 AND "users"."role" = 2 AND "users"."id" = ? AND "users"."bot_token" = ? LIMIT 1`, parts[0], parts[1])
 }
 
 // RoomActiveBots is room.users.active_bots.
 func (d *DB) RoomActiveBots(ctx context.Context, room int64) ([]User, error) {
-	return d.referenceUsers(ctx, selectRoomUsers+` AND "users"."status" = 0 AND "users"."role" = 2`, room)
+	return d.referenceUsers(ctx, `SELECT `+UserColumns+roomUsers+` AND "users"."status" = 0 AND "users"."role" = 2`, room)
 }
 
 // MentioneesInRoom is room.users.where(id: ids).
@@ -150,10 +79,6 @@ func (d *DB) MentioneesInRoom(ctx context.Context, room int64, ids []int64) ([]U
 		args = append(args, id)
 	}
 	return d.referenceUsers(ctx, `SELECT `+UserColumns+` FROM "users" INNER JOIN "memberships" ON "users"."id" = "memberships"."user_id" WHERE "memberships"."room_id" = ? AND "users"."id" IN (`+placeholders(len(ids))+`)`, args...)
-}
-
-func placeholders(n int) string {
-	return strings.TrimSuffix(strings.Repeat("?, ", n), ", ")
 }
 
 func (d *DB) optionalMessage(ctx context.Context, query string, args ...any) (ReferenceMessage, bool, error) {
@@ -213,12 +138,12 @@ func (d *DB) exists(ctx context.Context, query string, args ...any) (bool, error
 
 // MessageExistsBefore is room.messages.before(message).exists?.
 func (d *DB) MessageExistsBefore(ctx context.Context, room int64, message ReferenceMessage) (bool, error) {
-	return d.exists(ctx, `SELECT 1 FROM "messages" WHERE "messages"."room_id" = ? AND (created_at < ?) LIMIT 1`, room, ToDB(message.CreatedAt))
+	return d.exists(ctx, `SELECT 1 FROM "messages" WHERE "messages"."room_id" = ? AND (created_at < ?) LIMIT 1`, room, Stamp(message.CreatedAt))
 }
 
 // MessageExistsAfter is room.messages.after(message).exists?.
 func (d *DB) MessageExistsAfter(ctx context.Context, room int64, message ReferenceMessage) (bool, error) {
-	return d.exists(ctx, `SELECT 1 FROM "messages" WHERE "messages"."room_id" = ? AND (created_at > ?) LIMIT 1`, room, ToDB(message.CreatedAt))
+	return d.exists(ctx, `SELECT 1 FROM "messages" WHERE "messages"."room_id" = ? AND (created_at > ?) LIMIT 1`, room, Stamp(message.CreatedAt))
 }
 
 // MessageBodyHTML is message.body.body: RichTextRecord::find_for(conn, "Message", id, "body"),

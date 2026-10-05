@@ -1,107 +1,110 @@
-# Area A: rooms#show, messages, boosts, refreshes, involvements and searches. Every request names
-# the same host, so the absolute URLs (url_for) agree although the two servers listen on different
-# ports.
+# Area A: rooms#show, messages, boosts, refreshes, involvements and searches.
 
-# rooms#show: the original room (invitation), open, closed, direct, group direct, invisible, and
-# a room created by someone else. (A room David isn't in redirects to the root, which the harness
-# can't follow to campfire.test; internal/web tests cover it.)
+# rooms#show: the original room (invitation), open, closed, direct, group direct, invisible, a room
+# created by someone else (also as its creator), and rooms David isn't in (back to the root with an
+# alert). The invitation's QR code link encodes the join URL, so it asks both servers for one host.
 /rooms/{rooms.pets} | Host: campfire.test
-/rooms/{rooms.hq} | Host: campfire.test
-/rooms/{rooms.watercooler} | Host: campfire.test
-/rooms/{rooms.watercooler} | Turbo-Frame: messages | Host: campfire.test
-/rooms/{rooms.designers} | Host: campfire.test
-/rooms/{rooms.david_and_jason} | Host: campfire.test
-/rooms/{rooms.david_and_kevin} | Host: campfire.test
-/rooms/{rooms.group_direct} | Host: campfire.test
-/rooms/{rooms.quiet} | Host: campfire.test
-/rooms/{rooms.archive} | Host: campfire.test
-/rooms/{rooms.broken} | Host: campfire.test
+/rooms/{rooms.hq}
+/rooms/{rooms.watercooler}
+/rooms/{rooms.watercooler} | Turbo-Frame: messages
+/rooms/{rooms.designers}
+/rooms/{rooms.david_and_jason}
+/rooms/{rooms.david_and_kevin}
+/rooms/{rooms.group_direct}
+/rooms/{rooms.quiet}
+/rooms/{rooms.quiet} | !as kevin
+/rooms/{rooms.hq} | !as kevin
+/rooms/{rooms.archive}
+/rooms/{rooms.broken}
+/rooms/{rooms.bender_and_kevin} | !nofollow
+/rooms/999999999 | !nofollow
+/rooms/abc | !nofollow
 
 # Deep links: the page around a message, a message in another room, one that doesn't exist.
-/rooms/{rooms.watercooler}/@{messages.busy_060} | Host: campfire.test
-/rooms/{rooms.watercooler}/@{messages.busy_001} | Host: campfire.test
-/rooms/{rooms.watercooler}/@{messages.busy_120} | Host: campfire.test
-/rooms/{rooms.watercooler}/@{messages.busy_060} | Turbo-Frame: messages | Host: campfire.test
-/rooms/{rooms.designers}/@{messages.first} | Host: campfire.test
-/rooms/{rooms.watercooler}/@{messages.first} | Host: campfire.test
-/rooms/{rooms.watercooler}/@999999999 | Host: campfire.test
+/rooms/{rooms.watercooler}/@{messages.busy_060}
+/rooms/{rooms.watercooler}/@{messages.busy_001}
+/rooms/{rooms.watercooler}/@{messages.busy_120}
+/rooms/{rooms.watercooler}/@{messages.busy_060} | Turbo-Frame: messages
+/rooms/{rooms.designers}/@{messages.first}
+/rooms/{rooms.watercooler}/@{messages.first}
+/rooms/{rooms.watercooler}/@999999999
 
 # messages#index: the last page, before and after a message, empty pages, missing anchors.
-/rooms/{rooms.watercooler}/messages | Host: campfire.test
-/rooms/{rooms.watercooler}/messages?before={messages.busy_060} | Host: campfire.test
-/rooms/{rooms.watercooler}/messages?after={messages.busy_060} | Host: campfire.test
-/rooms/{rooms.watercooler}/messages?before={messages.busy_001} | Host: campfire.test
-/rooms/{rooms.watercooler}/messages?after={messages.busy_120} | Host: campfire.test
-/rooms/{rooms.watercooler}/messages?before={messages.busy_060} | Turbo-Frame: messages | Host: campfire.test
-/rooms/{rooms.designers}/messages?before={messages.second} | Host: campfire.test
-/rooms/{rooms.designers}/messages?after={messages.first} | Host: campfire.test
-/rooms/{rooms.david_and_jason}/messages | Host: campfire.test
-/rooms/{rooms.pets}/messages | Host: campfire.test
-/rooms/{rooms.watercooler}/messages?before=999999999 | Host: campfire.test
-/rooms/{rooms.bender_and_kevin}/messages | Host: campfire.test
+/rooms/{rooms.watercooler}/messages
+/rooms/{rooms.watercooler}/messages?before={messages.busy_060}
+/rooms/{rooms.watercooler}/messages?after={messages.busy_060}
+/rooms/{rooms.watercooler}/messages?before={messages.busy_001}
+/rooms/{rooms.watercooler}/messages?after={messages.busy_120}
+/rooms/{rooms.watercooler}/messages?before={messages.busy_060} | Turbo-Frame: messages
+/rooms/{rooms.designers}/messages?before={messages.second}
+/rooms/{rooms.designers}/messages?after={messages.first}
+/rooms/{rooms.david_and_jason}/messages
+/rooms/{rooms.pets}/messages
+/rooms/{rooms.watercooler}/messages?before=999999999
+/rooms/{rooms.bender_and_kevin}/messages
 
 # messages#show and #edit.
-/rooms/{rooms.designers}/messages/{messages.first} | Host: campfire.test
-/rooms/{rooms.designers}/messages/{messages.second} | Host: campfire.test
-/rooms/{rooms.watercooler}/messages/{messages.fourth} | Host: campfire.test
-/rooms/{rooms.watercooler}/messages/{messages.busy_060} | Host: campfire.test
-/rooms/{rooms.watercooler}/messages/{messages.bot_in_watercooler} | Host: campfire.test
-/rooms/{rooms.david_and_jason}/messages/{messages.direct_first} | Host: campfire.test
-/rooms/{rooms.designers}/messages/{messages.first} | Turbo-Frame: edit_message_0001 | Host: campfire.test
-/rooms/{rooms.designers}/messages/{messages.first}/edit | Host: campfire.test
-/rooms/{rooms.designers}/messages/{messages.second}/edit | Host: campfire.test
-/rooms/{rooms.watercooler}/messages/{messages.busy_060}/edit | Host: campfire.test
-/rooms/{rooms.designers}/messages/{messages.first}/edit | Turbo-Frame: edit_message_0001 | Host: campfire.test
-/rooms/{rooms.watercooler}/messages/{messages.first} | Host: campfire.test
-/messages/{messages.first} | Host: campfire.test
+/rooms/{rooms.designers}/messages/{messages.first}
+/rooms/{rooms.designers}/messages/{messages.second}
+/rooms/{rooms.watercooler}/messages/{messages.fourth}
+/rooms/{rooms.watercooler}/messages/{messages.busy_060}
+/rooms/{rooms.watercooler}/messages/{messages.bot_in_watercooler}
+/rooms/{rooms.david_and_jason}/messages/{messages.direct_first}
+/rooms/{rooms.designers}/messages/{messages.first} | Turbo-Frame: edit_message_0001
+/rooms/{rooms.designers}/messages/{messages.first}/edit
+/rooms/{rooms.designers}/messages/{messages.second}/edit
+/rooms/{rooms.watercooler}/messages/{messages.busy_060}/edit
+/rooms/{rooms.designers}/messages/{messages.first}/edit | Turbo-Frame: edit_message_0001
+/rooms/{rooms.watercooler}/messages/{messages.first}
+/messages/{messages.first}
 
 # Boosts.
-/messages/{messages.first}/boosts | Host: campfire.test
-/messages/{messages.first}/boosts | Turbo-Frame: boosting_message_0001 | Host: campfire.test
-/messages/{messages.fourth}/boosts | Host: campfire.test
-/messages/{messages.thirteenth}/boosts | Host: campfire.test
-/messages/{messages.busy_060}/boosts | Host: campfire.test
-/messages/{messages.first}/boosts/new | Host: campfire.test
-/messages/{messages.first}/boosts/new | Turbo-Frame: new_boost_message_0001 | Host: campfire.test
-/messages/{messages.busy_060}/boosts/new | Host: campfire.test
-/messages/999999999/boosts | Host: campfire.test
+/messages/{messages.first}/boosts
+/messages/{messages.first}/boosts | Turbo-Frame: boosting_message_0001
+/messages/{messages.fourth}/boosts
+/messages/{messages.thirteenth}/boosts
+/messages/{messages.busy_060}/boosts
+/messages/{messages.first}/boosts/new
+/messages/{messages.first}/boosts/new | Turbo-Frame: new_boost_message_0001
+/messages/{messages.busy_060}/boosts/new
+/messages/999999999/boosts
 
 # rooms/refreshes#show, with since as the client sends it (room.updated_at in ms).
-/rooms/{rooms.watercooler}/refresh?since=1772466900000 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
-/rooms/{rooms.watercooler}/refresh?since=1772452800000 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
-/rooms/{rooms.watercooler}/refresh?since=1772323200000 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
-/rooms/{rooms.watercooler}/refresh?since=0 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
-/rooms/{rooms.watercooler}/refresh | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
-/rooms/{rooms.designers}/refresh?since=0 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
-/rooms/{rooms.david_and_jason}/refresh?since=0 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
-/rooms/{rooms.watercooler}/refresh?since=0 | Host: campfire.test
+/rooms/{rooms.watercooler}/refresh?since=1772466900000 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml
+/rooms/{rooms.watercooler}/refresh?since=1772452800000 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml
+/rooms/{rooms.watercooler}/refresh?since=1772323200000 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml
+/rooms/{rooms.watercooler}/refresh?since=0 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml
+/rooms/{rooms.watercooler}/refresh | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml
+/rooms/{rooms.designers}/refresh?since=0 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml
+/rooms/{rooms.david_and_jason}/refresh?since=0 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml
+/rooms/{rooms.watercooler}/refresh?since=0
 
 # rooms/involvements#show.
-/rooms/{rooms.watercooler}/involvement | Host: campfire.test
-/rooms/{rooms.hq}/involvement | Host: campfire.test
-/rooms/{rooms.archive}/involvement | Host: campfire.test
-/rooms/{rooms.pets}/involvement | Host: campfire.test
-/rooms/{rooms.david_and_jason}/involvement | Host: campfire.test
-/rooms/{rooms.watercooler}/involvement | Turbo-Frame: involvement_rooms_closed_486777696 | Host: campfire.test
+/rooms/{rooms.watercooler}/involvement
+/rooms/{rooms.hq}/involvement
+/rooms/{rooms.archive}/involvement
+/rooms/{rooms.pets}/involvement
+/rooms/{rooms.david_and_jason}/involvement
+/rooms/{rooms.watercooler}/involvement | Turbo-Frame: involvement_rooms_closed_486777696
 
 # searches#index.
-/searches | Host: campfire.test
-/searches?q=coffee | Host: campfire.test
-/searches?q= | Host: campfire.test
-/searches?q=zzzzqqqq | Host: campfire.test
-/searches?q=hello%2C+world%21 | Host: campfire.test
-/searches?q=coffee | Turbo-Frame: search-results | Host: campfire.test
+/searches
+/searches?q=coffee
+/searches?q=
+/searches?q=zzzzqqqq
+/searches?q=hello%2C+world%21
+/searches?q=coffee | Turbo-Frame: search-results
 
 # The notification bell's PWA help (pwa/_browser_settings, _system_settings, _install_instructions)
 # on each platform it distinguishes.
-/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 | Host: campfire.test
-/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 | Host: campfire.test
-/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15 | Host: campfire.test
-/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1 | Host: campfire.test
-/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/140.0.0.0 Mobile/15E148 Safari/604.1 | Host: campfire.test
-/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36 | Host: campfire.test
-/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 14.5; rv:131.0) Gecko/20100101 Firefox/131.0 | Host: campfire.test
-/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0 | Host: campfire.test
-/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Android 14; Mobile; rv:131.0) Gecko/131.0 Firefox/131.0 | Host: campfire.test
-/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0 | Host: campfire.test
-/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0 | Host: campfire.test
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/140.0.0.0 Mobile/15E148 Safari/604.1
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 14.5; rv:131.0) Gecko/20100101 Firefox/131.0
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Android 14; Mobile; rv:131.0) Gecko/131.0 Firefox/131.0
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0

@@ -26,8 +26,6 @@ import (
 // Rooms::InvolvementsController and SearchesController, rendered with the reference's views
 // (reference/crates/campfire/src/controllers/{rooms,messages,searches}.rs and their modules).
 
-const turboStreamContentType = "text/vnd.turbo-stream.html; charset=utf-8"
-
 var (
 	roomShowSize      views.RenderSize
 	messagesIndexSize views.RenderSize
@@ -52,13 +50,6 @@ func paramID(r *http.Request, key string) (int64, bool) {
 		return 0, false
 	}
 	return integerCast(value)
-}
-
-// redirectTo is redirect_to url_for(path): a 302 with the absolute URL and no body.
-func (s *Server) redirectTo(w http.ResponseWriter, r *http.Request, path string) {
-	w.Header().Set("Location", s.origin(r)+path)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusFound)
 }
 
 // headFromBeforeAction is concerns::head: a status with text/html and no body.
@@ -102,7 +93,7 @@ func (s *Server) setRoom(w http.ResponseWriter, r *http.Request, u *database.Use
 	}
 	if !found {
 		s.flash(r, "alert", "Room not found or inaccessible")
-		s.redirectTo(w, r, views.RouteRoot())
+		s.redirectToPath(w, r, views.RouteRoot())
 	}
 	return room, found
 }
@@ -156,24 +147,6 @@ func (s *Server) rememberLastRoomVisited(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	r.Header.Set("Cookie", strings.Join(cookies, "; "))
-}
-
-// requireParams is params.require(key): ParameterMissing, a 400, without key's params.
-func requireParams(w http.ResponseWriter, r *http.Request, key string) bool {
-	for name := range r.Form {
-		if strings.HasPrefix(name, key+"[") {
-			return true
-		}
-	}
-	if r.MultipartForm != nil {
-		for name := range r.MultipartForm.File {
-			if strings.HasPrefix(name, key+"[") {
-				return true
-			}
-		}
-	}
-	publicError(w, r, http.StatusBadRequest)
-	return false
 }
 
 // failWith is fail for an error the request's own format renders: the bot API's routes default
@@ -534,7 +507,7 @@ func (s *Server) messagesCreate(w http.ResponseWriter, r *http.Request, u databa
 		s.fail(w, err)
 		return
 	}
-	if !requireParams(w, r, "message") {
+	if !requireParam(w, r, "message") {
 		return
 	}
 	message, err := s.createMessageRecord(r, &u, &room, messageParamsOf(r))
@@ -643,7 +616,7 @@ func (s *Server) messagesUpdate(w http.ResponseWriter, r *http.Request, u databa
 		headFromBeforeAction(w, http.StatusForbidden)
 		return
 	}
-	if !requireParams(w, r, "message") {
+	if !requireParam(w, r, "message") {
 		return
 	}
 	legacy, err := s.DB.Message(r.Context(), message.ID)
@@ -670,7 +643,7 @@ func (s *Server) messagesUpdate(w http.ResponseWriter, r *http.Request, u databa
 	case "json":
 		s.fail(w, errors.New("Missing template messages/show"))
 	case "html":
-		s.redirectTo(w, r, views.RouteRoomMessage(room.ID, message.ID))
+		s.redirectToPath(w, r, views.RouteRoomMessage(room.ID, message.ID))
 	}
 }
 
@@ -775,12 +748,12 @@ func (s *Server) boostsCreate(w http.ResponseWriter, r *http.Request, u database
 		s.fail(w, err)
 		return
 	}
-	s.redirectTo(w, r, views.RouteMessageBoosts(message.ID))
+	s.redirectToPath(w, r, views.RouteMessageBoosts(message.ID))
 }
 
 // requireBoostContent is params.require(:boost).permit(:content): a 400 without boost params.
 func requireBoostContent(w http.ResponseWriter, r *http.Request) (*string, bool) {
-	if !requireParams(w, r, "boost") {
+	if !requireParam(w, r, "boost") {
 		return nil, false
 	}
 	if values, ok := r.Form["boost[content]"]; ok && len(values) > 0 && !nullParam(r, "boost[content]") {
@@ -886,7 +859,7 @@ func lastUpdatedAt(r *http.Request) string {
 	}
 	const minMS, maxMS = -377705116800000, 253402300799999
 	since = min(max(since, minMS), maxMS)
-	return database.ToDB(time.UnixMilli(since))
+	return database.Stamp(time.UnixMilli(since))
 }
 
 // refreshShow is Rooms::RefreshesController#show: the messages created and updated since the
@@ -940,12 +913,12 @@ func (s *Server) involvementShow(w http.ResponseWriter, r *http.Request, u datab
 		s.fail(w, err)
 		return
 	}
-	if membership.Involvement == nil {
+	if !membership.Involvement.Valid {
 		// button_to_change_involvement's image_tag("notification-bell-.svg") raises: no such asset.
 		s.fail(w, errors.New("the asset notification-bell-.svg is not present in the asset pipeline"))
 		return
 	}
-	involvement := &views.InvolvementView{RoomID: room.ID, Kind: roomKind(room.Type), Involvement: *membership.Involvement}
+	involvement := &views.InvolvementView{RoomID: room.ID, Kind: roomKind(room.Type), Involvement: membership.Involvement.String}
 	s.content(w, r, &u, http.StatusOK, func(ctx *views.ViewContext) views.HTML {
 		return views.HTML(views.RenderString(0, func(qw *qt.Writer) { views.StreamRoomsInvolvementsShow(qw, ctx, involvement) }))
 	})
@@ -977,7 +950,10 @@ func (s *Server) involvementUpdate(w http.ResponseWriter, r *http.Request, u dat
 		s.fail(w, err)
 		return
 	}
-	previous := membership.Involvement
+	var previous *string
+	if membership.Involvement.Valid {
+		previous = &membership.Involvement.String
+	}
 	if err = s.DB.UpdateMembershipInvolvement(r.Context(), membership, involvement); err != nil {
 		s.fail(w, err)
 		return
@@ -1004,7 +980,7 @@ func (s *Server) involvementUpdate(w http.ResponseWriter, r *http.Request, u dat
 			s.Cable.PublishStream(publish, stream, turboStreamAction("prepend", "shared_rooms", html, false))
 		}
 	}
-	s.redirectTo(w, r, views.RouteRoomInvolvement(room.ID))
+	s.redirectToPath(w, r, views.RouteRoomInvolvement(room.ID))
 }
 
 // searchQueryParam is params[:q] (nil when absent or null).
@@ -1104,7 +1080,7 @@ func (s *Server) searchesCreate(w http.ResponseWriter, r *http.Request, u databa
 		s.fail(w, err)
 		return
 	}
-	s.redirectTo(w, r, views.SearchPath(*query))
+	s.redirectToPath(w, r, views.SearchPath(*query))
 }
 
 // searchesClear is SearchesController#clear.
@@ -1117,5 +1093,5 @@ func (s *Server) searchesClear(w http.ResponseWriter, r *http.Request, u databas
 		s.fail(w, err)
 		return
 	}
-	s.redirectTo(w, r, views.RouteSearches())
+	s.redirectToPath(w, r, views.RouteSearches())
 }
