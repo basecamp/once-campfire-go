@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -290,34 +289,4 @@ func (d *DB) indexedText(tx *Tx, id int64, plain string) (string, error) {
 		return "", nil
 	}
 	return filename, err
-}
-
-// AuthorizedSessions checks a publication's distinct sessions in one snapshot.
-// json_each keeps the SQL shape stable and avoids SQLite's placeholder limit.
-func (d *DB) AuthorizedSessions(ctx context.Context, tokens []string, room int64) (map[string]int64, error) {
-	raw, err := json.Marshal(tokens)
-	if err != nil {
-		return nil, err
-	}
-	query := "SELECT s.token,s.user_id FROM sessions s JOIN users u ON u.id=s.user_id WHERE u.status=0 AND s.token IN (SELECT value FROM json_each(?))"
-	args := []any{string(raw)}
-	if room != 0 {
-		query += " AND EXISTS (SELECT 1 FROM memberships m WHERE m.user_id=s.user_id AND m.room_id=?)"
-		args = append(args, room)
-	}
-	rows, err := d.Read.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := make(map[string]int64, len(tokens))
-	for rows.Next() {
-		var token string
-		var user int64
-		if err := rows.Scan(&token, &user); err != nil {
-			return nil, err
-		}
-		result[token] = user
-	}
-	return result, rows.Err()
 }
