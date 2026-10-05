@@ -20,12 +20,10 @@ func formatInput(r *http.Request) httpcompat.FormatInput {
 func respondFormat(w http.ResponseWriter, r *http.Request, available ...string) string {
 	input := formatInput(r)
 	format, err := httpcompat.Negotiate(input, available...)
-	if err != nil {
-		http.Error(w, "Invalid MIME type", 400)
-		return ""
-	}
-	if format == "" {
-		http.Error(w, "Not acceptable", 406)
+	// ActionController::UnknownFormat, and an invalid Accept header (Mime::Type::InvalidMimeType),
+	// are a 406 from the public exceptions app.
+	if err != nil || format == "" {
+		publicError(w, r, http.StatusNotAcceptable)
 		return ""
 	}
 	if input.UsesAccept() {
