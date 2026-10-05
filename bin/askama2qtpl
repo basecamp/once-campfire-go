@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Convert one of the reference's askama templates into a quicktemplate skeleton.
+
+    bin/askama2qtpl reference/crates/views/templates/messages/_message.html > internal/views/messages_message.qtpl
+
+The output keeps every byte of text the askama template renders: `include` and `extends` are
+inlined (askama resolves both at compile time), block contents are substituted into the layout,
+and whitespace control (`{%-`, `-%}`, `{{-`, `-}}`, `{#-`, `-#}`) is applied, so what remains is
+literal text and tags. Each Rust expression is left as `RX(...)` for a person to translate into
+Go, choosing the output tag by type: `{%s %}` escapes a string as ERB does, `{%s= %}` writes
+views.HTML unescaped. `filter` blocks become a capture of their content:
+
+    {% code views.BeginCapture(qw422016) %}...{% code capture1 := views.EndCapture(qw422016) %}{%s= RX(link_to(capture1, ...)) %}
+"""
+import re, sys
+from pathlib import Path
+
+TAG = re.compile(r'(\{\{|\{%|\{#)([-+~]?)(.*?)([-+~]?)(\}\}|%\}|#\})', re.S)
+
+
+def tokenize(source):
+    """Text and tags, with askama's whitespace control applied to the text around each tag."""
+    tokens, pos = [], 0
+    for m in TAG.finditer(source):
+        tokens.append(['text', source[pos:m.start()]])
+        tokens.append(['tag', m.group(1), m.group(2), m.group(3).strip(), m.group(4)])
+        pos = m.end()
+    tokens.append(['text', source[pos:]])
+    for i, token in enumerate(tokens):
+        if token[0] != 'tag':
+            continue
+        _, opener, before, _, after, = token
+        if before == '-' and i > 0:
+            tokens[i - 1][1] = tokens[i - 1][1].rstrip()
+        if after == '-' and i + 1 < len(tokens):
+            tokens[i + 1][1] = tokens[i + 1][1].lstrip()
+        if before == '~' or after == '~':
+            raise SystemExit('~ whitespace control is not supported')
+    return [t for t in tokens if not (t[0] == 'text' and t[1] == '') and not (t[0] == 'tag' and t[1] == '{#')]
+
+
+def parse(root, name):
+    source = (root / name).read_text()
+    if source.endswith('\n'):  # askama drops one trailing newline from every template file
+        source = source[:-1]
+    return tokenize(source)
+
+
+def statement(token):
+    return token[3].split(None, 1)[0] if token[0] == 'tag' and token[1] == '{%' else None
+
+
+def func_name(name):
+    """messages/_message.html -> MessagesMessage."""
+    return ''.join(part[:1].upper() + part[1:] for part in re.split(r'[/_.]+', name.removesuffix('.html')) if part)
+
+
+def blocks_of(tokens):
+    """The {% block %} contents of an extending template, in order."""
+    blocks, stack = [], []
+    for token in tokens:
+        kind = statement(token)
+        if kind == 'block':
+            stack.append((token[3].split()[1], []))
+        elif kind == 'endblock':
+            name, body = stack.pop()
+            blocks.append((name, body))
+        elif stack:
+            stack[-1][1].append(token)
+    return blocks
+
+
+def structure(tokens):
+    """Includes become calls to the included template's function; a layout's blocks become calls
+    to the page's block methods."""
+    out = []
+    for token in tokens:
+        kind = statement(token)
+        if kind == 'include':
+            included = re.search(r'"([^"]+)"', token[3]).group(1)
+            out.append(['raw', '{%%= %s(RX_ARGS) %%}' % func_name(included)])
+        elif kind == 'block':
+            name = token[3].split()[1]
+            out.append(['raw', '{%%= p.%s() %%}' % (name[:1].upper() + name[1:])])
+        elif kind == 'endblock':
+            continue
+        else:
+            out.append(token)
+    return out
+
+
+def emit(tokens):
+    out, captures, stack = [], 0, []
+    for token in tokens:
+        if token[0] == 'text':
+            out.append(token[1])
+            continue
+        if token[0] == 'raw':
+            out.append(token[1])
+            continue
+        _, opener, _, body, _ = token
+        if opener == '{{':
+            if body.endswith('|safe'):
+                out.append('{%s= RX(' + body[:-5].strip() + ') %}')
+            else:
+                out.append('{%s RX(' + body + ') %}')
+            continue
+        kind, rest = (body.split(None, 1) + [''])[:2]
+        if kind in ('if', 'for'):
+            out.append('{% ' + kind + ' RX(' + rest + ') %}')
+        elif kind == 'elif':
+            out.append('{% elseif RX(' + rest + ') %}')
+        elif kind in ('else', 'endif', 'endfor'):
+            out.append('{% ' + kind + ' %}')
+        elif kind == 'let':
+            out.append('{% code RX(let ' + rest + ') %}')
+        elif kind == 'filter':
+            captures += 1
+            stack.append((captures, rest))
+            out.append('{% code views.BeginCapture(qw422016) %}')
+        elif kind == 'endfilter':
+            n, call = stack.pop()
+            out.append('{%% code capture%d := views.EndCapture(qw422016) %%}{%%s= RX(%s, capture%d) %%}' % (n, call, n))
+        else:
+            raise SystemExit('unsupported tag: ' + body)
+    return ''.join(out)
+
+
+def main():
+    path = Path(sys.argv[1]).resolve()
+    root = next(p for p in path.parents if p.name == 'templates')
+    name = str(path.relative_to(root))
+    tokens = parse(root, name)
+    func = func_name(name)
+    extends = next((t for t in tokens if statement(t) == 'extends'), None)
+    if extends:
+        layout = re.search(r'"([^"]+)"', extends[3]).group(1)
+        out = ['{%% comment %%}%s: blocks of %s, which renders them in its layout (%s).{%% endcomment %%}\n' % (name, func, layout)]
+        for block, body in blocks_of(tokens):
+            method = block[:1].upper() + block[1:]
+            out.append('{%% func (p *%s) %s() %%}%s{%% endfunc %%}\n' % (func, method, emit(structure(body))))
+        sys.stdout.write(''.join(out))
+    else:
+        sys.stdout.write('{%% func %s(RX_PARAMS) %%}%s{%% endfunc %%}\n' % (func, emit(structure(tokens))))
+
+
+main()

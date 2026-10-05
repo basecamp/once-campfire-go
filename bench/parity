@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Compare Go and Rust responses byte for byte on the same seed.
+
+    bench/parity --go ./campfire --rust ../once-campfire-rust/target/release/campfire
+
+Both applications start on fresh copies of the Rust checkout's default seed with the seed's frozen
+clock and the reference's fixed environment, sign in as David, and fetch every URL in --urls
+(label placeholders like {rooms.watercooler} come from the seed's labels.json). Each pair of bodies
+must be identical once per-request tokens (CSRF) are masked; differences are reported with their
+first differing byte and both bodies are kept in --out for `diff`.
+
+A URL line may carry request headers after the path, separated by ` | `:
+    /rooms/{rooms.watercooler} | Turbo-Frame: messages
+"""
+import argparse, json, os, re, shutil, sqlite3, socket, subprocess, sys, tempfile, time, urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+MASKS = [
+    (re.compile(rb'(<meta name="csrf-token" content=")[^"]*'), rb'\1CSRF'),
+    (re.compile(rb'(name="authenticity_token" value=")[^"]*'), rb'\1CSRF'),
+    (re.compile(rb'(<input type="hidden" name="authenticity_token" autocomplete="off" value=")[^"]*'), rb'\1CSRF'),
+]
+DEFAULT_URLS = """
+/rooms/{rooms.watercooler}
+/rooms/{rooms.watercooler}/messages?before={messages.busy_060}
+/rooms/{rooms.designers}
+/rooms/{rooms.hq}
+/rooms/{rooms.david_and_jason}
+/rooms/{rooms.group_direct}
+/users/me/sidebar
+/searches?q=coffee
+/searches
+"""
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+def start(name, binary, seed, env, work):
+    db = work / 'database.sqlite3'
+    with sqlite3.connect(f'file:{seed}/db/production.sqlite3?mode=ro', uri=True) as source, sqlite3.connect(db) as dest:
+        source.backup(dest)
+    shutil.copytree(seed / 'storage', work / 'storage-root/files')
+    target, front = free_port(), free_port()
+    run_env = env | dict(CAMPFIRE_DATABASE_PATH=str(db), CAMPFIRE_STORAGE_PATH=str(work / 'storage-root'),
+                         CAMPFIRE_FILES_PATH=str(work / 'storage-root/files'), TARGET_PORT=str(target), HTTP_PORT=str(front))
+    log = (work / 'server.log').open('w')
+    proc = subprocess.Popen([str(binary), 'server'], cwd=ROOT, env=run_env, stdout=log, stderr=subprocess.STDOUT)
+    base = f'http://127.0.0.1:{target}'
+    started = time.monotonic()
+    while True:
+        if proc.poll() is not None:
+            raise SystemExit(f'{name} exited; see {work / "server.log"}')
+        try:
+            with urllib.request.urlopen(base + '/up', timeout=1):
+                break
+        except OSError:
+            if time.monotonic() - started > 30:
+                raise SystemExit(f'{name} did not start')
+            time.sleep(0.05)
+    return proc, base
+
+
+def fetch(base, path, cookie, headers):
+    request = urllib.request.Request(base + path, headers={'Cookie': cookie, 'Accept-Encoding': 'identity', **headers})
+    try:
+        with urllib.request.urlopen(request) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read()
+
+
+def mask(body):
+    for pattern, replacement in MASKS:
+        body = pattern.sub(replacement, body)
+    return body
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('--go', type=Path, default=ROOT / 'campfire')
+    p.add_argument('--rust', type=Path, required=True)
+    p.add_argument('--rust-root', type=Path, default=ROOT.parent / 'once-campfire-rust')
+    p.add_argument('--loadgen', type=Path, help='the Rust bench/loadgen binary (default: under --rust-root)')
+    p.add_argument('--urls', type=Path, help='one URL per line (default: the benchmarked pages)')
+    p.add_argument('--out', type=Path, default=ROOT / '.cache/parity')
+    a = p.parse_args()
+    seed = a.rust_root / 'parity/.seed/default'
+    labels = json.loads((seed / 'labels.json').read_text())
+    loadgen = a.loadgen or a.rust_root / 'target/bench/release/loadgen'
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('CAMPFIRE_', 'THRUSTER_')) and k != 'TLS_DOMAIN'}
+    for line in (a.rust_root / 'parity/.env.reference').read_text().splitlines():
+        if line and not line.startswith('#') and '=' in line:
+            key, value = line.split('=', 1)
+            env[key] = value
+    env.update(DISABLE_SSL='true', TARGET_BIND='127.0.0.1', CAMPFIRE_FROZEN_TIME=labels['clock.now'])
+    urls = (a.urls.read_text() if a.urls else DEFAULT_URLS).splitlines()
+    urls = [u.strip() for u in urls if u.strip() and not u.strip().startswith('#')]
+    shutil.rmtree(a.out, ignore_errors=True)
+    a.out.mkdir(parents=True)
+    servers = []
+    try:
+        bases, cookies = {}, {}
+        for name, binary in (('rust', a.rust), ('go', a.go)):
+            work = Path(tempfile.mkdtemp(prefix=f'parity-{name}-'))
+            proc, base = start(name, binary, seed, env, work)
+            servers.append((proc, work))
+            bases[name] = base
+            login = subprocess.check_output([str(loadgen), 'login', '--base', base, '--email', labels['emails.david'], '--password', labels['passwords.all']], text=True)
+            cookies[name] = json.loads(login)['cookie']
+        failures = 0
+        for line in urls:
+            path, *header_parts = [part.strip() for part in line.split(' | ')]
+            path = re.sub(r'\{([a-z_]+\.[a-z0-9_]+)\}', lambda m: str(labels[m.group(1)]), path)
+            headers = dict(h.split(': ', 1) for h in header_parts)
+            results = {name: fetch(bases[name], path, cookies[name], headers) for name in bases}
+            (rust_status, rust_body), (go_status, go_body) = results['rust'], results['go']
+            rust_body, go_body = mask(rust_body), mask(go_body)
+            slug = re.sub(r'[^a-z0-9]+', '_', line.lower()).strip('_')[:80]
+            if rust_status == go_status and rust_body == go_body:
+                print(f'same  {rust_status} {len(rust_body):>7} {line}')
+                continue
+            failures += 1
+            (a.out / f'{slug}.rust.html').write_bytes(rust_body)
+            (a.out / f'{slug}.go.html').write_bytes(go_body)
+            at = next((i for i, (x, y) in enumerate(zip(rust_body, go_body)) if x != y), min(len(rust_body), len(go_body)))
+            print(f'DIFF  rust {rust_status} {len(rust_body)} / go {go_status} {len(go_body)} {line}')
+            print(f'      at byte {at}:\n      rust …{rust_body[max(0, at - 120):at + 120]!r}\n      go   …{go_body[max(0, at - 120):at + 120]!r}')
+        print(f'{len(urls) - failures}/{len(urls)} identical; bodies of differences in {a.out}')
+        sys.exit(1 if failures else 0)
+    finally:
+        for proc, work in servers:
+            proc.terminate()
+            proc.wait()
+            shutil.rmtree(work, ignore_errors=True)
+
+
+main()

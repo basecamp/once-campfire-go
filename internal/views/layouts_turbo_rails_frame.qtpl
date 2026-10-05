@@ -1,0 +1,9 @@
+{% func LayoutsTurboRailsFrame(ctx *ViewContext, p Page) %}<html>
+  <head>
+    {%= p.Head() %}
+  </head>
+  <body>
+    {%= p.Content() %}
+  </body>
+</html>
+{% endfunc %}

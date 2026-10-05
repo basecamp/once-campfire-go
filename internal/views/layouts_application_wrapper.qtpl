@@ -1,0 +1,6 @@
+{% comment %}layouts/application_wrapper.html: blocks of LayoutsApplicationWrapper, which renders them in its layout (layouts/application.html).{% endcomment %}
+{% func (p *LayoutsApplicationWrapper) Head() %}{%s= string(p.HeadHTML) %}{% endfunc %}
+{% func (p *LayoutsApplicationWrapper) Nav() %}{%s= string(p.NavHTML) %}{% endfunc %}
+{% func (p *LayoutsApplicationWrapper) Content() %}{%s= string(p.ContentHTML) %}{% endfunc %}
+{% func (p *LayoutsApplicationWrapper) Footer() %}{%s= string(p.FooterHTML) %}{% endfunc %}
+{% func (p *LayoutsApplicationWrapper) Sidebar() %}{%s= string(p.SidebarHTML) %}{% endfunc %}
