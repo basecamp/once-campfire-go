@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
-
 	"net/http"
 	"strconv"
 	"sync"
+
+	"github.com/basecamp/once-campfire-go/internal/views"
 )
 
 var responseBuffers = sync.Pool{New: func() any { return new(bytes.Buffer) }}
@@ -28,6 +29,8 @@ type responseBuffer struct {
 	status    int
 	exception bool
 	parts     [][]byte
+	// page is a recorded page (writePage): its ETag comes from its parts.
+	page *views.RecordedPage
 }
 
 func (w *responseBuffer) WriteHeader(status int) {
@@ -54,10 +57,17 @@ func (w *responseBuffer) finish(r *http.Request) {
 	}
 	h := w.Header()
 	digested := false
-	if !w.exception && (w.status == 200 || w.status == 201) && w.body.Len() > 0 && h.Get("ETag") == "" && h.Get("Last-Modified") == "" {
-		hash := sha256.Sum256(w.body.Bytes())
-		h.Set("ETag", fmt.Sprintf("W/\"%x\"", hash[:16]))
-		digested = true
+	if !w.exception && (w.status == 200 || w.status == 201) && h.Get("ETag") == "" && h.Get("Last-Modified") == "" {
+		if w.page != nil {
+			if etag := w.page.ETag(); etag != "" {
+				h.Set("ETag", `W/"`+etag+`"`)
+				digested = true
+			}
+		} else if w.body.Len() > 0 {
+			hash := sha256.Sum256(w.body.Bytes())
+			h.Set("ETag", fmt.Sprintf("W/\"%x\"", hash[:16]))
+			digested = true
+		}
 	}
 	if !w.exception && h.Get("Cache-Control") == "" {
 		value := "no-cache"
@@ -75,12 +85,21 @@ func (w *responseBuffer) finish(r *http.Request) {
 	if h.Get("Content-Type") == "" && w.status != 204 && w.status != 304 {
 		h.Set("Content-Type", "text/html; charset=utf-8")
 	}
+	if w.page != nil && w.status != 204 && w.status != 304 {
+		// One write of the assembled page: net/http has no vectored writes, so the page's
+		// parts are copied into one buffer rather than written one by one.
+		w.body.Reset()
+		w.body.Grow(w.page.Len())
+		w.page.WriteTo(w.body)
+	}
 	if len(w.parts) > 0 && w.status != 204 && w.status != 304 {
 		size := 0
 		for _, part := range w.parts {
 			size += len(part)
 		}
 		h.Set("Content-Length", strconv.Itoa(size))
+	} else if w.status != 204 && w.status != 304 && h.Get("Content-Length") == "" {
+		h.Set("Content-Length", strconv.Itoa(w.body.Len()))
 	}
 	w.ResponseWriter.WriteHeader(w.status)
 	if r.Method != "HEAD" && w.status != 204 && w.status != 304 {

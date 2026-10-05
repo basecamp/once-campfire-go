@@ -25,6 +25,7 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/richtext"
 	"github.com/basecamp/once-campfire-go/internal/storage"
 	"github.com/basecamp/once-campfire-go/internal/useragent"
+	"github.com/basecamp/once-campfire-go/internal/views"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -32,7 +33,9 @@ const HealthBody = `<!DOCTYPE html><html><body style="background-color: green"><
 const MaxBody = 16 << 20
 
 type Server struct {
-	fragments  *fragmentCache
+	fragments *fragmentCache
+	// views is the fragment store the reference's templates cache into (views.FragmentCache).
+	views      *views.FragmentCache
 	Webhooks   *integrations.WebhookClient
 	Jobs       *jobs.Runner
 	Push       *integrations.PushSender
@@ -139,7 +142,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 			return nil, fmt.Errorf("invalid CAMPFIRE_FRAGMENT_CACHE_MB %q", raw)
 		}
 	}
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), views: views.NewFragmentCache(cacheMB << 20), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -475,25 +478,36 @@ func (s *Server) auth(next func(http.ResponseWriter, *http.Request, database.Use
 			s.requestAuthentication(w, r)
 			return
 		}
-		u, err := s.DB.SessionUser(r.Context(), token)
-		if errors.Is(err, database.ErrNoRows) {
+		// The reference's resume_session: the session by its token, its activity refreshed at most
+		// hourly (only then on the writer, with a fresh cookie), then its user.
+		session, found, err := s.DB.SessionByToken(r.Context(), token)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		if !found {
 			s.requestAuthentication(w, r)
 			return
 		}
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		refreshed, err := s.DB.RefreshSession(r.Context(), token, r.UserAgent(), remoteIP(r))
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		if refreshed {
+		if session.NeedsResume(s.DB.Now()) {
+			agent, ip := r.UserAgent(), remoteIP(r)
+			if err = s.DB.ResumeSession(r.Context(), session, &agent, &ip); err != nil {
+				s.fail(w, err)
+				return
+			}
 			if err = s.setAuthenticationCookie(w, token); err != nil {
 				s.fail(w, err)
 				return
 			}
+		}
+		u, found, err := s.DB.UserFindByID(r.Context(), session.UserID)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		if !found {
+			s.requestAuthentication(w, r)
+			return
 		}
 		if s.blockBrowser(w, r) {
 			return

@@ -15,6 +15,8 @@ type Account struct {
 	Settings                     json.RawMessage
 	UpdatedAt                    time.Time
 	HasLogo                      bool
+	// Whether custom_styles is set at all (AccountFirst); an empty string still renders a tag.
+	HasCustomStyles bool
 }
 
 func (d *DB) Account(ctx context.Context) (Account, error) {
