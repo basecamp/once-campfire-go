@@ -21,6 +21,22 @@ type UsersNew struct {
 func (p *UsersNew) PageTitle() *string { return Ptr("Sign up") }
 func (p *UsersNew) BodyClass() *string { return Ptr("signup") }
 
+// EmailAddressOrDefault is user.email_address.as_deref().unwrap_or_default().
+func (u *UserSummary) EmailAddressOrDefault() string {
+	if u.EmailAddress == nil {
+		return ""
+	}
+	return *u.EmailAddress
+}
+
+// BioOrDefault is user.bio.as_deref().unwrap_or_default().
+func (u *UserSummary) BioOrDefault() string {
+	if u.Bio == nil {
+		return ""
+	}
+	return *u.Bio
+}
+
 // UsersShow is users/show.html.erb.
 type UsersShow struct {
 	PageBase

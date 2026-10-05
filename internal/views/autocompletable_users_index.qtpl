@@ -1,2 +1,3 @@
-{% comment %}reference/crates/views/templates/autocompletable/users/index.html; TODO: body{% endcomment %}
-{% func AutocompletableUsersIndex(ctx *ViewContext, users []MentionUser) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/autocompletable/users/index.html{% endcomment %}
+{% func AutocompletableUsersIndex(ctx *ViewContext, users []MentionUser) %}{% for i := range users %}{%= AutocompletableUsersPromptItem(ctx, &users[i]) %}{% endfor %}
+{% endfunc %}

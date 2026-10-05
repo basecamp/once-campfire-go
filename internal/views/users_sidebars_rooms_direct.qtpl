@@ -1,2 +1,20 @@
-{% comment %}reference/crates/views/templates/users/sidebars/rooms/_direct.html; TODO: body{% endcomment %}
-{% func UsersSidebarsRoomsDirect(ctx *ViewContext, membership *SidebarDirect) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/users/sidebars/rooms/_direct.html{% endcomment %}
+{% func UsersSidebarsRoomsDirect(ctx *ViewContext, membership *SidebarDirect) %}
+  {% code BeginCapture(qw422016) %}
+{% if len(membership.Members) > 1 %}      <div class="avatar__group">
+{% for i := range min(4, len(membership.Members)) %}          <span class="avatar">
+            {%s= string(ImageTag(ctx, membership.Members[i].AvatarPath, NewAttrs().Size(20).AriaHidden())) %}
+          </span>
+{% endfor %}      </div>
+{% else %}      <span class="avatar">
+        {%s= string(ImageTag(ctx, membership.Members[0].AvatarPath, NewAttrs().Size(48).AriaHidden())) %}
+      </span>
+{% endif %}
+    <span class="direct__author flex align-center gap max-width min-width border-radius txt-small">
+      <span class="txt-nowrap overflow-ellipsis">
+        <span class="for-screen-reader">Ping with</span>
+{% if len(membership.Members) > 1 %}          {%s membership.MemberInitials() %}
+{% else %}          {%s membership.Members[0].FirstName() %}
+{% endif %}      </span>
+    </span>
+{% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToRoom(capture1, membership.RoomID, NewAttrs().Class(membership.ClassNames()).ID(DomID("rooms_direct", membership.RoomID, "list")).Data("sorted_list_number", membership.UpdatedAtEpoch))) %}{% endfunc %}

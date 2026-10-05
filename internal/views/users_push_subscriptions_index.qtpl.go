@@ -32,6 +32,12 @@ func (p *UsersPushSubscriptionsIndex) Head() string {
 }
 
 func (p *UsersPushSubscriptionsIndex) StreamNav(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`  <div class="flex-item-justify-start">
+    `)
+	qw422016.N().S(string(LinkBackToLastRoomVisited(p.Ctx)))
+	qw422016.N().S(`
+  </div>
+`)
 }
 
 func (p *UsersPushSubscriptionsIndex) WriteNav(qq422016 qtio422016.Writer) {
@@ -49,6 +55,18 @@ func (p *UsersPushSubscriptionsIndex) Nav() string {
 }
 
 func (p *UsersPushSubscriptionsIndex) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`<section class="panel panel--wide flex flex-column gap">
+  <h1 class="txt-align-center txt-large margin-none">Push Notification Subscriptions</h1>
+  <div class="pad-inline fill-shade border-radius" id="push_subscriptions">
+    <menu class="pad flex flex-column gap">
+      `)
+	for i := range p.PushSubscriptions {
+		StreamUsersPushSubscriptionsPushSubscription(qw422016, p.Ctx, &p.PushSubscriptions[i])
+	}
+	qw422016.N().S(`    </menu>
+  </div>
+</section>
+`)
 }
 
 func (p *UsersPushSubscriptionsIndex) WriteContent(qq422016 qtio422016.Writer) {

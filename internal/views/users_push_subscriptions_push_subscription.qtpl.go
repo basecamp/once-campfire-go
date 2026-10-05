@@ -15,6 +15,52 @@ var (
 )
 
 func StreamUsersPushSubscriptionsPushSubscription(qw422016 *qt422016.Writer, ctx *ViewContext, pushSubscription *PushSubscription) {
+	qw422016.N().S(`<li class="flex flex-column margin-none membership-item">
+  <span class="overflow-ellipsis txt-primary txt-undecorated">
+    <strong>`)
+	qw422016.E().S(pushSubscription.Browser)
+	qw422016.N().S(` `)
+	qw422016.E().S(pushSubscription.Version)
+	qw422016.N().S(` on `)
+	qw422016.E().S(pushSubscription.Platform)
+	qw422016.N().S(`</strong><br>
+  </span>
+
+  <span class="flex align-start gap txt-small">
+    <span>`)
+	qw422016.E().S(pushSubscription.Endpoint)
+	qw422016.N().S(`</span>
+
+    <span class="flex align-center gap">
+      `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+        `)
+	qw422016.N().S(string(ImageTag(ctx, "notification-bell-everything.svg", NewAttrs().AriaHidden().Size(20))))
+	qw422016.N().S(`
+        <span class="for-screen-reader">Send test notification</span>
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(ButtonToBlock(capture1, RouteUserPushSubscriptionTestNotifications(pushSubscription.ID), NewAttrs().Class("btn btn--reversed"))))
+	qw422016.N().S(`
+      `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+        `)
+	qw422016.N().S(string(ImageTag(ctx, "minus.svg", NewAttrs().AriaHidden().Size(20))))
+	qw422016.N().S(`
+        <span class="for-screen-reader">Delete subscription</span>
+`)
+	capture2 := EndCapture(qw422016)
+
+	qw422016.N().S(string(ButtonToBlock(capture2, RouteUserPushSubscription(pushSubscription.ID), NewAttrs().Method("delete").Class("btn btn--negative"))))
+	qw422016.N().S(`    </span>
+  </span>
+</li>
+`)
 }
 
 func WriteUsersPushSubscriptionsPushSubscription(qq422016 qtio422016.Writer, ctx *ViewContext, pushSubscription *PushSubscription) {

@@ -15,6 +15,30 @@ var (
 )
 
 func (p *UsersShow) StreamNav(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`  <div class="flex-item-justify-start">
+    `)
+	qw422016.N().S(string(LinkBack(p.Ctx)))
+	qw422016.N().S(`
+  </div>
+
+  <div class="flex align-center gap flex-item-justify-end">
+`)
+	if p.Ctx.IsCurrentUser(p.User.ID) {
+		qw422016.N().S(`      `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+        `)
+		qw422016.N().S(string(ImageTag(p.Ctx, "pencil.svg", NewAttrs().AriaHidden())))
+		qw422016.N().S(`
+        <span class="for-screen-reader">Edit my profile</span>
+`)
+		capture1 := EndCapture(qw422016)
+
+		qw422016.N().S(string(LinkToBlock(capture1, RouteUserProfile(), NewAttrs().Class("btn"))))
+	}
+	qw422016.N().S(`  </div>
+`)
 }
 
 func (p *UsersShow) WriteNav(qq422016 qtio422016.Writer) {
@@ -32,6 +56,106 @@ func (p *UsersShow) Nav() string {
 }
 
 func (p *UsersShow) StreamContent(qw422016 *qt422016.Writer) {
+	user := &p.User
+
+	qw422016.N().S(`<section class="panel txt-align-center">
+  <div class="flex flex-column gap `)
+	if user.Banned() {
+		qw422016.N().S(`banned`)
+	}
+	qw422016.N().S(`">
+    <div class="avatar txt-xx-large center" style="background: white">
+      `)
+	qw422016.N().S(string(ImageTag(p.Ctx, user.AvatarPath, NewAttrs().Alt("Profile avatar").Class("avatar"))))
+	qw422016.N().S(`
+    </div>
+
+`)
+	if user.Bot() {
+		qw422016.N().S(`      <div class="pad-double--inline push--inline push--block-start">
+`)
+		if user.Active() {
+			qw422016.N().S(`          `)
+			qw422016.N().S(string(ButtonToDirectRoomWith(p.Ctx, user.ID)))
+			qw422016.N().S(`
+`)
+		} else {
+			qw422016.N().S(`          <div>`)
+			qw422016.E().S(user.Name)
+			qw422016.N().S(` is no longer on this account</div>
+`)
+		}
+		qw422016.N().S(`      </div>
+`)
+	} else {
+		if !user.Deactivated() {
+			qw422016.N().S(`        <div class="flex flex-column gap" style="--row-gap: calc(var(--block-space) / 3)">
+          <h1 class="txt-x-large txt-tight-lines margin-none">`)
+			qw422016.E().S(user.Name)
+			qw422016.N().S(`</h1>
+`)
+			if p.Ctx.CanAdminister() {
+				qw422016.N().S(`            <div>`)
+				qw422016.N().S(string(MailTo(user.EmailAddressOrDefault())))
+				qw422016.N().S(`</div>
+`)
+			}
+			qw422016.N().S(`          <div>`)
+			qw422016.E().S(user.BioOrDefault())
+			qw422016.N().S(`</div>
+        </div>
+
+`)
+			if user.Active() {
+				qw422016.N().S(`          <div class="pad-inline-double margin-inline margin-block-start">
+            `)
+				BeginCapture(qw422016)
+
+				qw422016.N().S(`
+              `)
+				qw422016.N().S(string(ImageTag(p.Ctx, "messages.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Ping "+user.Name))))
+				qw422016.N().S(`
+`)
+				capture1 := EndCapture(qw422016)
+
+				qw422016.N().S(string(ButtonToBlock(capture1, RoomsDirectsWithUser(user.ID), NewAttrs().Class("btn btn--reversed full-width txt-large"))))
+				qw422016.N().S(`          </div>
+
+`)
+				if p.Ctx.CanAdminister() {
+					qw422016.N().S(`            <hr class="margin-block-start borderless">
+
+            `)
+					StreamUsersProfilesTransfer(qw422016, p.Ctx, user, p.TransferID)
+					qw422016.N().S(`
+`)
+				}
+			}
+			qw422016.N().S(`
+`)
+			if p.Ctx.CanAdminister() && !p.Ctx.IsCurrentUser(user.ID) {
+				qw422016.N().S(`          <div class="margin-block-start">
+            `)
+				StreamUsersBanButton(qw422016, p.Ctx, user)
+				qw422016.N().S(`
+          </div>
+`)
+			}
+		} else {
+			qw422016.N().S(`        <div>
+          <h1 class="txt-x-large margin-none">`)
+			qw422016.E().S(user.Name)
+			qw422016.N().S(`</h1>
+          <div>`)
+			qw422016.E().S(user.Name)
+			qw422016.N().S(` is no longer on this account</div>
+        </div>
+`)
+		}
+	}
+	qw422016.N().S(`  </div>
+</section>
+`)
 }
 
 func (p *UsersShow) WriteContent(qq422016 qtio422016.Writer) {

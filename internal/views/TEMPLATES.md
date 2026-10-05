@@ -974,7 +974,7 @@ golden/, messages_views.rs, rooms_views.rs, searches_views.rs, parity_a.rs).
   - users/_ban_button.html: `{%= UsersBanButton(p.Ctx, &p.User) %}`
   - users/profiles/_transfer.html: `{%= UsersProfilesTransfer(p.Ctx, &p.User, p.TransferID) %}`
 - Defines no head block (PageBase's empty one).
-- `h::rooms_directs_with_user(user.id)` → `RoomsDirectsWithUser(user.ID)`; `h::mail_to(user.email_address.as_deref().unwrap_or_default())` → `MailTo(deref or "")`.
+- `h::rooms_directs_with_user(user.id)` → `RoomsDirectsWithUser(user.ID)`; `h::mail_to(user.email_address.as_deref().unwrap_or_default())` → `MailTo(user.EmailAddressOrDefault())`; `user.bio.as_deref().unwrap_or_default()` → `user.BioOrDefault()`.
 
 ### users/sidebars/rooms/_direct.html
 

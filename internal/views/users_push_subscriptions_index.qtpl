@@ -1,4 +1,14 @@
-{% comment %}reference/crates/views/templates/users/push_subscriptions/index.html; TODO: body{% endcomment %}
+{% comment %}reference/crates/views/templates/users/push_subscriptions/index.html{% endcomment %}
 {% func (p *UsersPushSubscriptionsIndex) Head() %}{% endfunc %}
-{% func (p *UsersPushSubscriptionsIndex) Nav() %}{% endfunc %}
-{% func (p *UsersPushSubscriptionsIndex) Content() %}{% endfunc %}
+{% func (p *UsersPushSubscriptionsIndex) Nav() %}  <div class="flex-item-justify-start">
+    {%s= string(LinkBackToLastRoomVisited(p.Ctx)) %}
+  </div>
+{% endfunc %}
+{% func (p *UsersPushSubscriptionsIndex) Content() %}<section class="panel panel--wide flex flex-column gap">
+  <h1 class="txt-align-center txt-large margin-none">Push Notification Subscriptions</h1>
+  <div class="pad-inline fill-shade border-radius" id="push_subscriptions">
+    <menu class="pad flex flex-column gap">
+      {% for i := range p.PushSubscriptions %}{%= UsersPushSubscriptionsPushSubscription(p.Ctx, &p.PushSubscriptions[i]) %}{% endfor %}    </menu>
+  </div>
+</section>
+{% endfunc %}

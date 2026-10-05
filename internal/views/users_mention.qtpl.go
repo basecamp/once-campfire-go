@@ -15,6 +15,14 @@ var (
 )
 
 func StreamUsersMention(qw422016 *qt422016.Writer, ctx *ViewContext, user *MentionUser) {
+	qw422016.N().S(`<span class="mention" sgid="`)
+	qw422016.E().S(user.AttachableSgid)
+	qw422016.N().S(`">`)
+	qw422016.N().S(string(AvatarTag(ctx, user.Avatar(), NewAttrs())))
+	qw422016.N().S(` `)
+	qw422016.E().S(user.Name)
+	qw422016.N().S(`</span>
+`)
 }
 
 func WriteUsersMention(qq422016 qtio422016.Writer, ctx *ViewContext, user *MentionUser) {

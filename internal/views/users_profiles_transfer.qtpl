@@ -1,2 +1,35 @@
-{% comment %}reference/crates/views/templates/users/profiles/_transfer.html; TODO: body{% endcomment %}
-{% func UsersProfilesTransfer(ctx *ViewContext, user *UserSummary, transferID string) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/users/profiles/_transfer.html{% endcomment %}
+{% func UsersProfilesTransfer(ctx *ViewContext, user *UserSummary, transferID string) %}{% code url := ctx.URL(RouteSessionTransfer(transferID)) %}
+<fieldset>
+  <legend class="gap">
+    {%s= string(ImageTag(ctx, "laptop.svg", NewAttrs().AriaHidden().Size(36).Class("colorize--black"))) %}
+    {%s= string(ImageTag(ctx, "transfer.svg", NewAttrs().AriaHidden().Size(36).Class("colorize--black"))) %}
+    {%s= string(ImageTag(ctx, "mobile-phone.svg", NewAttrs().AriaHidden().Size(36).Class("colorize--black"))) %}
+  </legend>
+
+
+  <div class="flex flex-column gap">
+{% if !ctx.IsCurrentUser(user.ID) %}      <div class="flex align-center gap justify-center">
+        {%s= string(ImageTag(ctx, "crown.svg", NewAttrs().Size(16).AriaHidden().Class("flex-item-no-shrink colorize--black"))) %}
+        <label for="session_transfer_url">Share to get them back into their account</label>
+      </div>
+{% else %}      <label for="session_transfer_url" class="for-screen-reader">Use this link to login automatically on another device</label>
+{% endif %}
+    <input type="text" class="input" value="{%s url %}" id="session_transfer_url" readonly>
+
+    <div class="flex align-center center gap">
+      {% code BeginCapture(qw422016) %}
+        <span class="for-screen-reader">Show auto-login QR code</span>
+        {%s= string(ImageTag(ctx, "qr-code.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))) %}
+{% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToZoomQrCode(capture1, url)) %}
+      {% code BeginCapture(qw422016) %}
+        <span class="for-screen-reader">Copy auto-login link</span>
+        {%s= string(ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20).Class("flex-item-no-shrink colorize--black"))) %}
+{% code capture2 := EndCapture(qw422016) %}{%s= string(ButtonToCopyToClipboard(capture2, url)) %}
+      {% code BeginCapture(qw422016) %}
+        <span class="for-screen-reader">Share auto-login link</span>
+        {%s= string(ImageTag(ctx, "share.svg", NewAttrs().AriaHidden().Size(20).Class("flex-item-no-shrink colorize--black"))) %}
+{% code capture3 := EndCapture(qw422016) %}{%s= string(WebShareSessionButton(capture3, url, "Your sign-in link", "This is your own private sign-in URL, DO NOT SHARE IT. Use it to sign-in on another device or if you get locked out.")) %}    </div>
+  </div>
+</fieldset>
+{% endfunc %}

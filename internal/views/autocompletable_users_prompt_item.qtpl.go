@@ -15,6 +15,28 @@ var (
 )
 
 func StreamAutocompletableUsersPromptItem(qw422016 *qt422016.Writer, ctx *ViewContext, user *MentionUser) {
+	qw422016.N().S(`<lexxy-prompt-item search="`)
+	qw422016.E().S(user.Name)
+	qw422016.N().S(`" sgid="`)
+	qw422016.E().S(user.AttachableSgid)
+	qw422016.N().S(`">
+  <template type="menu">
+    <span class="autocomplete__item flex align-center gap unpad">
+      `)
+	qw422016.N().S(string(AvatarTag(ctx, user.Avatar(), NewAttrs())))
+	qw422016.N().S(`
+      <span class="autocompletable__name">`)
+	qw422016.E().S(user.Name)
+	qw422016.N().S(`</span>
+    </span>
+  </template>
+  <template type="editor">
+    `)
+	StreamUsersMention(qw422016, ctx, user)
+	qw422016.N().S(`
+  </template>
+</lexxy-prompt-item>
+`)
 }
 
 func WriteAutocompletableUsersPromptItem(qq422016 qtio422016.Writer, ctx *ViewContext, user *MentionUser) {

@@ -15,6 +15,11 @@ var (
 )
 
 func StreamAutocompletableUsersIndex(qw422016 *qt422016.Writer, ctx *ViewContext, users []MentionUser) {
+	for i := range users {
+		StreamAutocompletableUsersPromptItem(qw422016, ctx, &users[i])
+	}
+	qw422016.N().S(`
+`)
 }
 
 func WriteAutocompletableUsersIndex(qq422016 qtio422016.Writer, ctx *ViewContext, users []MentionUser) {

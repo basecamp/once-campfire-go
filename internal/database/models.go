@@ -19,6 +19,8 @@ type User struct {
 	Bio, BotToken         string
 	UpdatedAt             time.Time
 	Role, Status          int
+	// Whether email_address / bio are NULL (set by ScanReferenceUser).
+	NullEmail, NullBio bool
 }
 
 func (u User) Title() string {

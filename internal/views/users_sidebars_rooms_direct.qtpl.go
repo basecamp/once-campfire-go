@@ -15,6 +15,55 @@ var (
 )
 
 func StreamUsersSidebarsRoomsDirect(qw422016 *qt422016.Writer, ctx *ViewContext, membership *SidebarDirect) {
+	qw422016.N().S(`
+  `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+`)
+	if len(membership.Members) > 1 {
+		qw422016.N().S(`      <div class="avatar__group">
+`)
+		for i := range min(4, len(membership.Members)) {
+			qw422016.N().S(`          <span class="avatar">
+            `)
+			qw422016.N().S(string(ImageTag(ctx, membership.Members[i].AvatarPath, NewAttrs().Size(20).AriaHidden())))
+			qw422016.N().S(`
+          </span>
+`)
+		}
+		qw422016.N().S(`      </div>
+`)
+	} else {
+		qw422016.N().S(`      <span class="avatar">
+        `)
+		qw422016.N().S(string(ImageTag(ctx, membership.Members[0].AvatarPath, NewAttrs().Size(48).AriaHidden())))
+		qw422016.N().S(`
+      </span>
+`)
+	}
+	qw422016.N().S(`
+    <span class="direct__author flex align-center gap max-width min-width border-radius txt-small">
+      <span class="txt-nowrap overflow-ellipsis">
+        <span class="for-screen-reader">Ping with</span>
+`)
+	if len(membership.Members) > 1 {
+		qw422016.N().S(`          `)
+		qw422016.E().S(membership.MemberInitials())
+		qw422016.N().S(`
+`)
+	} else {
+		qw422016.N().S(`          `)
+		qw422016.E().S(membership.Members[0].FirstName())
+		qw422016.N().S(`
+`)
+	}
+	qw422016.N().S(`      </span>
+    </span>
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(LinkToRoom(capture1, membership.RoomID, NewAttrs().Class(membership.ClassNames()).ID(DomID("rooms_direct", membership.RoomID, "list")).Data("sorted_list_number", membership.UpdatedAtEpoch))))
 }
 
 func WriteUsersSidebarsRoomsDirect(qq422016 qtio422016.Writer, ctx *ViewContext, membership *SidebarDirect) {

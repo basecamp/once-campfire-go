@@ -1,2 +1,4 @@
-{% comment %}reference/crates/views/templates/users/sidebars/rooms/_shared.html; TODO: body{% endcomment %}
-{% func UsersSidebarsRoomsShared(room *SidebarRoom) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/users/sidebars/rooms/_shared.html{% endcomment %}
+{% func UsersSidebarsRoomsShared(room *SidebarRoom) %}{% code BeginCapture(qw422016) %}
+  <span class="overflow-ellipsis">{%s room.Name %}</span>
+{% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToRoom(capture1, room.ID, NewAttrs().ID(DomID(room.ParamKey, room.ID, "list")).Data("sorted_list_name", room.Name).Style("--column-gap: 0.5em").Class(room.ClassNames()))) %}{% endfunc %}

@@ -1,2 +1,21 @@
-{% comment %}reference/crates/views/templates/users/push_subscriptions/_push_subscription.html; TODO: body{% endcomment %}
-{% func UsersPushSubscriptionsPushSubscription(ctx *ViewContext, pushSubscription *PushSubscription) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/users/push_subscriptions/_push_subscription.html{% endcomment %}
+{% func UsersPushSubscriptionsPushSubscription(ctx *ViewContext, pushSubscription *PushSubscription) %}<li class="flex flex-column margin-none membership-item">
+  <span class="overflow-ellipsis txt-primary txt-undecorated">
+    <strong>{%s pushSubscription.Browser %} {%s pushSubscription.Version %} on {%s pushSubscription.Platform %}</strong><br>
+  </span>
+
+  <span class="flex align-start gap txt-small">
+    <span>{%s pushSubscription.Endpoint %}</span>
+
+    <span class="flex align-center gap">
+      {% code BeginCapture(qw422016) %}
+        {%s= string(ImageTag(ctx, "notification-bell-everything.svg", NewAttrs().AriaHidden().Size(20))) %}
+        <span class="for-screen-reader">Send test notification</span>
+{% code capture1 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture1, RouteUserPushSubscriptionTestNotifications(pushSubscription.ID), NewAttrs().Class("btn btn--reversed"))) %}
+      {% code BeginCapture(qw422016) %}
+        {%s= string(ImageTag(ctx, "minus.svg", NewAttrs().AriaHidden().Size(20))) %}
+        <span class="for-screen-reader">Delete subscription</span>
+{% code capture2 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture2, RouteUserPushSubscription(pushSubscription.ID), NewAttrs().Method("delete").Class("btn btn--negative"))) %}    </span>
+  </span>
+</li>
+{% endfunc %}

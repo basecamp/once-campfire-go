@@ -89,37 +89,35 @@ func (s *Server) sidebarRooms(ctx context.Context, user database.User) ([]sideba
 	return result, nil
 }
 
+// broadcastRoom streams a created or updated room's sidebar entry: users/sidebars/rooms/_shared
+// to `:rooms` for an open room or to each member's `[user, :rooms]` for a closed one, and
+// users/sidebars/rooms/_direct, rendered per membership, to each member of a direct room.
 func (s *Server) broadcastRoom(ctx context.Context, room database.Room, update bool) error {
 	action, target := "prepend", "shared_rooms"
 	if update {
 		action, target = "replace", room.DOM("list")
 	}
-	if room.Type == "Rooms::Open" {
-		markup, err := s.markup("sidebar-shared", sidebarRoom{Room: room})
+	reference := database.ReferenceRoom{ID: room.ID, CreatorID: room.CreatorID, Name: database.NullString{String: room.Name, Valid: true}, Type: room.Type, UpdatedAt: room.UpdatedAt}
+	switch room.Type {
+	case "Rooms::Open":
+		s.Cable.PublishStream(ctx, "rooms", stream(action, target, sharedRoomPartial(reference)))
+	case "Rooms::Direct":
+		partials, err := s.directRoomPartials(ctx, rendererBaseURLFrom(ctx), reference)
 		if err != nil {
 			return err
 		}
-		s.Cable.PublishStream(ctx, "rooms", stream(action, target, markup))
-		return nil
-	}
-	members, err := s.DB.Users(ctx, room.ID, false)
-	if err != nil {
-		return err
-	}
-	for _, user := range members {
-		view, err := s.displayRoom(ctx, room, user)
+		for _, partial := range partials {
+			s.Cable.PublishStream(ctx, rails.UserRoomsStream(partial.Membership.UserID), stream("prepend", "direct_rooms", partial.HTML.HTML))
+		}
+	default:
+		members, err := s.DB.Users(ctx, room.ID, false)
 		if err != nil {
 			return err
 		}
-		name := "sidebar-shared"
-		if room.Type == "Rooms::Direct" {
-			name, target, action = "sidebar-direct", "direct_rooms", "prepend"
+		markup := sharedRoomPartial(reference)
+		for _, user := range members {
+			s.Cable.PublishStream(ctx, rails.UserRoomsStream(user.ID), stream(action, target, markup))
 		}
-		markup, err := s.markup(name, view)
-		if err != nil {
-			return err
-		}
-		s.Cable.PublishStream(ctx, rails.UserRoomsStream(user.ID), stream(action, target, markup))
 	}
 	return nil
 }
