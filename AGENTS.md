@@ -4,8 +4,11 @@ Port of the Rust Campfire in `reference/`, pinned as a submodule. The Rails sour
 `reference/reference/`. Preserve the SQLite schema, storage layout, cookies, frontend,
 and behavior of the Rust app. Record intentional differences in README.md.
 
-Use the Go standard library first: net/http, html/template, crypto, encoding/json, testing, and
-embed. SQLite goes through the vendored crawshaw.io/sqlite (third_party/sqlite), not database/sql.
+Use the Go standard library first: net/http, crypto, encoding/json, testing, and embed. SQLite goes
+through the vendored crawshaw.io/sqlite (third_party/sqlite), not database/sql. Views are
+quicktemplate files in internal/views converted from reference/crates/views/templates with
+bin/askama2qtpl (never retype template text); `go generate ./internal/views` compiles them, and
+bench/parity must stay byte-identical for every URL in bench/parity-urls/.
 No web framework, ORM, dependency injection framework, or JavaScript build framework. Small
 protocol/algorithm libraries are appropriate where stdlib has no implementation (SQLite, bcrypt,
 WebSockets, HTML parsing).

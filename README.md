@@ -13,13 +13,18 @@ front server, automatic certificates, production packaging and backup/restore ho
 
 SQLite schema, storage keys/layout, password hashes and Rails signed/encrypted cookies are preserved.
 An upgrade test checks Go and Rust cookies in both directions and Rust reading/searching Go-written
-messages. The port is functionally implemented; **strict HTML/network parity is not complete**.
-See [validation](plans/validation.md) and the known differences below before replacing an installation.
+messages. Pages, turbo streams and JSON views render byte-identically to the reference: `bench/parity`
+compares both applications' responses on one seed for every URL in `bench/parity-urls/`. See
+[validation](plans/validation.md) and the known differences below before replacing an installation.
 The pinned Rust source is in `reference/`, with its Rails source in `reference/reference/`.
 
 ## Dependencies
 
-- Go 1.27.1: `net/http`, `html/template`, `crypto`, `encoding/json`, `embed`, `testing`.
+- Go 1.27.1: `net/http`, `crypto`, `encoding/json`, `embed`, `testing`.
+- `github.com/valyala/quicktemplate`: templates compiled to Go. `internal/views` mirrors the
+  reference's askama view crate: each template is converted with `bin/askama2qtpl`, which keeps
+  every byte of the askama template's text, and its view models, helpers, fragment cache and
+  recorded pages (page parts and part-based ETags) are ports of the reference's.
 - `crawshaw.io/sqlite`, vendored in `third_party/sqlite` with the reference's SQLite 3.53.2 and
   build options: SQLite's C API through CGO, without `database/sql` (see its `README.campfire`).
   As in the reference, one writer goroutine owns the write connection and runs writes in order,
@@ -150,23 +155,18 @@ throughput is not measured. `bench/health` remains available for the much narrow
 
 ## Known differences
 
-- Templates use `html/template`. Whitespace, attribute serialization, some canonical form-action
-  URLs, and response headers/validators differ from Rust. Strict server/live DOM and network layers
-  therefore still fail in many inventory cells, even when screenshots, accessibility and workflows
-  match. These failures remain visible in the validation report. Exact protocol parity for malformed
-  parameters and every content-negotiation edge case is not claimed.
+- Response headers can differ where the reference's kit and Go's net/http differ: Go adds no `Vary:
+  Accept-Encoding` to empty bodies, and net/http writes a page's parts from one buffer rather than
+  with vectored writes. Exact protocol parity for malformed parameters and every content-negotiation
+  edge case is not claimed.
 - WebSockets share serialized and compressed broadcast payloads through a small extension to
   coder/websocket v1.8.15 (see `third_party/websocket/README.campfire`). Outgoing queues hold 256
   frames; slow clients are disconnected. Authorization is checked afresh for each publication,
   batching distinct sessions per room. Rust uses different stream queues.
 - Go ignores typing commands for rooms that have been deleted; Rust can still echo them to an
   already subscribed socket. The composer shows the same deleted-room message.
-- The response cache uses least-recently-used eviction instead of Rust's sampled eviction. The Go
-  message-fragment cache is also independently implemented. It retains versioned message lists
-  and sidebar HTML; current membership and permission data are read before cache lookup.
-  Room pages also cache their surrounding HTML keyed by fresh page data, inserting the current
-  messages and refresh timestamp on every request. Responses assemble cached message bytes with fresh page HTML and derive validators from part
-  lengths and hashes, so ETag values differ from both the original Go implementation and Rust.
+- The public front server's response cache uses least-recently-used eviction instead of Rust's
+  sampled eviction.
 - The default version label and fallback VAPID subject identify `once-campfire-go`. Explicit version,
   VAPID keys and subject settings remain supported.
 - Native host media output can differ with installed library versions. All byte-golden media tests
