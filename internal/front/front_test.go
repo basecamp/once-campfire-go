@@ -1,6 +1,7 @@
 package front
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/tls"
@@ -16,6 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/basecamp/once-campfire-go/internal/splice"
 )
 
 func TestCompressionNegotiation(t *testing.T) {
@@ -48,6 +51,45 @@ func TestCompressionNegotiation(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != 406 {
 		t.Fatal(response.Code)
+	}
+}
+func TestDeflateSplicesPieces(t *testing.T) {
+	cached, stamp := splice.Deflate([]byte(strings.Repeat("<p>cached fragment</p>", 500))), splice.Stored([]byte("1759680000000"))
+	pieces := []splice.Piece{{Plain: []byte("<main>")}, cached, stamp, cached, {Plain: []byte("</main>")}}
+	var want []byte
+	for _, piece := range pieces {
+		want = append(want, piece.Plain...)
+	}
+	handler := Deflate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		if err := w.(interface{ WritePieces([]splice.Piece) error }).WritePieces(pieces); err != nil {
+			t.Error(err)
+		}
+	}))
+	get := func(method, encoding string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(method, "/", nil)
+		request.Header.Set("Accept-Encoding", encoding)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	if plain := get("GET", "identity"); plain.Header().Get("Content-Encoding") != "" || !bytes.Equal(plain.Body.Bytes(), want) {
+		t.Fatal("identity body changed", plain.Header())
+	}
+	response := get("GET", "gzip")
+	// Two copies of the cached blocks and little else: nothing was compressed again.
+	if size := response.Body.Len(); response.Header().Get("Content-Encoding") != "gzip" || size > 2*len(cached.Blocks)+100 {
+		t.Fatal(response.Header(), size)
+	}
+	reader, err := gzip.NewReader(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body, err := io.ReadAll(reader); err != nil || !bytes.Equal(body, want) {
+		t.Fatal("spliced body changed", err)
+	}
+	if head := get("HEAD", "gzip"); head.Header().Get("Content-Encoding") != "gzip" || head.Body.Len() != 0 {
+		t.Fatal(head.Header(), head.Body.Len())
 	}
 }
 func TestCacheVariantsLimitsAndCookies(t *testing.T) {

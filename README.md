@@ -163,6 +163,12 @@ throughput is not measured. `bench/health` remains available for the much narrow
   Room pages also cache their surrounding HTML keyed by fresh page data, inserting the current
   messages and refresh timestamp on every request. Responses assemble cached message bytes with fresh page HTML and derive validators from part
   lengths and hashes, so ETag values differ from both the original Go implementation and Rust.
+- For clients that accept gzip, cached message lists, sidebars and room-page shells are deflated
+  once, when they enter the fragment cache, and their blocks are copied into each response as one
+  gzip member with a combined CRC; the refresh timestamp goes out as a stored block. Page text
+  of 1 KB or more around a message list (the search page) is kept deflated by its SHA-256 while
+  it repeats. Rust splices per message fragment. Decoded bodies are unchanged; gzip bytes differ
+  from compressing the whole body.
 - The default version label and fallback VAPID subject identify `once-campfire-go`. Explicit version,
   VAPID keys and subject settings remain supported.
 - Native host media output can differ with installed library versions. All byte-golden media tests

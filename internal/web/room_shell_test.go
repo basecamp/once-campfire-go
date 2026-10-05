@@ -2,10 +2,14 @@ package web
 
 import (
 	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
 	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/splice"
 	"html/template"
-	"strings"
+	"io"
 	"testing"
+	"time"
 )
 
 func TestRoomShellPreservesBytesAndRequestData(t *testing.T) {
@@ -17,13 +21,26 @@ func TestRoomShellPreservesBytesAndRequestData(t *testing.T) {
 		if err := app.templates.ExecuteTemplate(&expected, "room", p); err != nil {
 			t.Fatal(err)
 		}
-		shell, marker, err := app.roomShell(p)
+		parts, err := app.roomShell(p, fragmentEntry{html: p.MessagesHTML, digest: sha256.Sum256([]byte(p.MessagesHTML))})
 		if err != nil {
 			t.Fatal(err)
 		}
-		actual := strings.ReplaceAll(shell, marker, string(p.MessagesHTML))
-		if actual != expected.String() {
+		var actual, member bytes.Buffer
+		writer := splice.NewWriter(&member, time.Time{})
+		for _, part := range parts {
+			actual.Write(part.Plain)
+			writer.WritePiece(part.Piece)
+		}
+		if actual.String() != expected.String() {
 			t.Fatal("cached room shell differs from uncached template")
+		}
+		writer.Close()
+		reader, err := gzip.NewReader(&member)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if spliced, err := io.ReadAll(reader); err != nil || string(spliced) != expected.String() {
+			t.Fatal("spliced room shell differs from uncached template", err)
 		}
 	}
 	check(base)

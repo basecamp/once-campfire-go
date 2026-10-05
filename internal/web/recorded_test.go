@@ -36,7 +36,7 @@ func TestRecordedMessagesPreserveBodyAndInvalidate(t *testing.T) {
 	request := httptest.NewRequest("GET", "/", nil)
 	first := httptest.NewRecorder()
 	buffered := &responseBuffer{ResponseWriter: first}
-	writeRecorded(buffered, 200, "before\x00marker\x00after", "\x00marker\x00", fragment)
+	app.writeRecorded(buffered, 200, "before\x00marker\x00after", "\x00marker\x00", fragment)
 	buffered.finish(request)
 	if first.Body.String() != "before"+original.String()+"after" {
 		t.Fatal("recorded rendering changed bytes")
@@ -44,7 +44,7 @@ func TestRecordedMessagesPreserveBodyAndInvalidate(t *testing.T) {
 	request.Header.Set("If-None-Match", first.Header().Get("ETag"))
 	second := httptest.NewRecorder()
 	buffered = &responseBuffer{ResponseWriter: second}
-	writeRecorded(buffered, 200, "before\x00marker\x00after", "\x00marker\x00", fragment)
+	app.writeRecorded(buffered, 200, "before\x00marker\x00after", "\x00marker\x00", fragment)
 	buffered.finish(request)
 	if second.Code != 304 || second.Body.Len() != 0 {
 		t.Fatal("unchanged parts were not conditional", second.Code)
