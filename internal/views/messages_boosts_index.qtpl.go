@@ -15,6 +15,7 @@ var (
 )
 
 func StreamMessagesBoostsIndex(qw422016 *qt422016.Writer, ctx *ViewContext, message *MessageView) {
+	StreamMessagesBoostsBoosts(qw422016, ctx, message)
 }
 
 func WriteMessagesBoostsIndex(qq422016 qtio422016.Writer, ctx *ViewContext, message *MessageView) {

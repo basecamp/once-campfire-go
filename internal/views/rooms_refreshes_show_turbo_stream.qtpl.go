@@ -15,6 +15,28 @@ var (
 )
 
 func StreamRoomsRefreshesShowTurboStream(qw422016 *qt422016.Writer, ctx *ViewContext, refresh *RefreshView) {
+	if len(refresh.NewMessages) > 0 {
+		qw422016.N().S(`<turbo-stream action="append" target="`)
+		qw422016.E().S(RoomDomID(refresh.RoomKind, refresh.RoomID, "messages"))
+		qw422016.N().S(`"><template>
+  `)
+		for _, message := range refresh.NewMessages {
+			StreamFragment(qw422016, CachedMessageItem(ctx, message))
+		}
+		qw422016.N().S(`
+</template></turbo-stream>`)
+	}
+	qw422016.N().S(`
+`)
+	for _, message := range refresh.UpdatedMessages {
+		qw422016.E().S("  ")
+		qw422016.N().S(`<turbo-stream action="replace" target="`)
+		qw422016.E().S(message.DomID(""))
+		qw422016.N().S(`"><template>`)
+		StreamFragment(qw422016, CachedMessageItem(ctx, message))
+		qw422016.N().S(`</template></turbo-stream>
+`)
+	}
 }
 
 func WriteRoomsRefreshesShowTurboStream(qq422016 qtio422016.Writer, ctx *ViewContext, refresh *RefreshView) {

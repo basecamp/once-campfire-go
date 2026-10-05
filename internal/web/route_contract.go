@@ -155,7 +155,7 @@ func (s *Server) routeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if route.bot {
-		if !s.botRequest(w, r) {
+		if !s.botRequestViews(w, r, route.Action) {
 			publicError(w, r, 404)
 		}
 		return

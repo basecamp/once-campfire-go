@@ -1,2 +1,6 @@
-{% comment %}reference/crates/views/templates/messages/room_not_found.html; TODO: body{% endcomment %}
-{% func MessagesRoomNotFound() %}{% endfunc %}
+{% comment %}reference/crates/views/templates/messages/room_not_found.html{% endcomment %}
+{% func MessagesRoomNotFound() %}<turbo-frame id="composer-frame">
+  <span class="composer__input input input--actor shake margin-block-end txt-negative txt-align-center" style="--input-border-color: var(--color-negative)">
+      <span>This room was deleted.</span>
+  </span>
+</turbo-frame>{% endfunc %}

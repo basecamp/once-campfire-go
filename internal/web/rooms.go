@@ -25,10 +25,10 @@ func (s *Server) registerRoomRoutes() {
 		s.mux.HandleFunc("DELETE "+prefix+"/{id}", s.auth(forms.destroy))
 	}
 	s.mux.HandleFunc("DELETE /rooms/{id}", s.auth(s.deleteRoom))
-	s.mux.HandleFunc("GET /rooms/{id}/involvement", s.auth(s.involvement))
-	s.mux.HandleFunc("PATCH /rooms/{id}/involvement", s.auth(s.involvement))
-	s.mux.HandleFunc("PUT /rooms/{id}/involvement", s.auth(s.involvement))
-	s.mux.HandleFunc("GET /rooms/{id}/{anchor}", s.auth(s.roomAt))
+	s.mux.HandleFunc("GET /rooms/{room_id}/involvement", s.auth(s.involvementShow))
+	s.mux.HandleFunc("PATCH /rooms/{room_id}/involvement", s.auth(s.involvementUpdate))
+	s.mux.HandleFunc("PUT /rooms/{room_id}/involvement", s.auth(s.involvementUpdate))
+	s.mux.HandleFunc("GET /rooms/{id}/{anchor}", s.auth(s.roomShow))
 }
 func (s *Server) roomLookupFailure(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, database.ErrNoRows) || errors.Is(err, database.ErrForbidden) {

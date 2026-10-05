@@ -15,6 +15,29 @@ var (
 )
 
 func StreamRoomsShowInvitation(qw422016 *qt422016.Writer, ctx *ViewContext, joinCode string) {
+	qw422016.N().S(`<div id="system_welcome" class="message message--formatted txt-align-center center">
+    <div class="message__body center">
+      <div class="message__body-content position-relative">
+        `)
+	qw422016.N().S(string(AccountLogoTag(ctx, "center margin-block-end txt-large")))
+	qw422016.N().S(`
+        <div class="flex align-center gap">
+          <div class="system-welcome--translation">
+            `)
+	qw422016.N().S(string(TranslationButton(ctx, "invite_message")))
+	qw422016.N().S(`
+          </div>
+          <p>
+            <strong>Welcome to Campfire</strong><br>
+            To invite people to chat, share the join link below.
+          </p>
+        </div>
+        `)
+	StreamAccountsInvite(qw422016, ctx, joinCode)
+	qw422016.N().S(`
+      </div>
+    </div>
+  </div>`)
 }
 
 func WriteRoomsShowInvitation(qq422016 qtio422016.Writer, ctx *ViewContext, joinCode string) {

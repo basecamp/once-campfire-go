@@ -1,2 +1,18 @@
-{% comment %}reference/crates/views/templates/rooms/show/_nav.html; TODO: body{% endcomment %}
-{% func RoomsShowNav(ctx *ViewContext, room *RoomView) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/rooms/show/_nav.html{% endcomment %}
+{% func RoomsShowNav(ctx *ViewContext, room *RoomView) %}{% if ctx.Account.HasLogo %}
+  {%s= string(AccountLogoTag(ctx, "")) %}{% endif %}
+
+  <span class="btn btn--reversed btn--faux room--current">
+    <h1 class="room__contents txt-medium overflow-ellipsis">{% if room.IsDirect() %}
+        <span class="for-screen-reader">Ping with</span>{% endif %}
+
+      {%s room.DisplayName %}
+    </h1>
+</span>
+
+  <a class="btn" style="view-transition-name: edit-room-{%dl room.ID %}" data-room-id="{%dl room.ID %}" href="{%s room.EditPath() %}">
+    <img aria-hidden="true" src="{%s ctx.Asset("menu-dots-horizontal.svg") %}" width="20" height="20" />
+    <span class="for-screen-reader">Settings for this {%s room.Noun() %}</span>
+</a>
+
+  {%= RoomsInvolvementsBell(ctx, room) %}{% endfunc %}

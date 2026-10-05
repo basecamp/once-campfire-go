@@ -1,2 +1,3 @@
-{% comment %}reference/crates/views/templates/messages/index.html; TODO: body{% endcomment %}
-{% func MessagesIndex(ctx *ViewContext, messages []MessageItem) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/messages/index.html{% endcomment %}
+{% func MessagesIndex(ctx *ViewContext, messages []MessageItem) %}{% for _, message := range messages %}
+{%= Fragment(CachedMessageItem(ctx, message)) %}{% endfor %}{% endfunc %}

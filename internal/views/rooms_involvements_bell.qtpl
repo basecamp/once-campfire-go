@@ -1,2 +1,37 @@
-{% comment %}reference/crates/views/templates/rooms/involvements/_bell.html; TODO: body{% endcomment %}
-{% func RoomsInvolvementsBell(ctx *ViewContext, room *RoomView) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/rooms/involvements/_bell.html{% endcomment %}
+{% func RoomsInvolvementsBell(ctx *ViewContext, room *RoomView) %}<span>
+  <span class="button_to_change_notifying"
+      data-controller="notifications" data-notifications-subscriptions-url-value="{%s RouteUserPushSubscriptions() %}" data-notifications-attention-class="btn--pulsing">
+    <turbo-frame data-controller="turbo-frame" data-action="notifications:ready@window-&gt;turbo-frame#load" data-turbo-frame-url-param="{%s RouteRoomInvolvement(room.ID) %}" id="{%s room.DomID("involvement") %}">
+      <button class="btn" data-action="click->notifications#attemptToSubscribe" data-notifications-target="bell">
+        <img aria-hidden="true" src="{%s ctx.Asset("notification-bell-loading.svg") %}" width="20" height="20" />
+        <img aria-hidden="true" hidden="hidden" src="{%s ctx.Asset("notification-bell-alert.svg") %}" width="20" height="20" />
+        <span class="for-screen-reader">Notification settings for this {%s room.Noun() %}</span>
+      </button>
+</turbo-frame>
+    <dialog data-notifications-target="notAllowedNotice" class="dialog pad center center-block border-radius border shadow" style="--inline-space: var(--block-space)">
+      <div class="flex flex-column txt-align-center">
+        <span class="btn btn--faux center txt-x-large">
+          <img aria-hidden="true" src="{%s ctx.Asset("notification-bell-alert.svg") %}" width="48" height="48" />
+          <span class="for-screen-reader">Notifications alert</span>
+        </span>
+
+        <section>
+          <h1 class="txt-large margin-none">Notifications aren’t allowed</h1>
+          <div class="txt-align-start margin-block-start">
+            {%= PwaBrowserSettings(ctx) %}
+            {%= PwaSystemSettings(ctx) %}
+            {%= PwaInstallInstructions(ctx) %}
+          </div>
+        </section>
+
+        <form method="dialog" class="flex align-center gap center">
+          <button class="btn dialog__close" autofocus="true">
+            <span class="for-screen-reader">Close</span>
+            <img aria-hidden="true" src="{%s ctx.Asset("remove.svg") %}" width="20" height="20" />
+          </button>
+        </form>
+      </div>
+    </dialog>
+  </span>
+</span>{% endfunc %}

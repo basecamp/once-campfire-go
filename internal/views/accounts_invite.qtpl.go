@@ -15,6 +15,81 @@ var (
 )
 
 func StreamAccountsInvite(qw422016 *qt422016.Writer, ctx *ViewContext, joinCode string) {
+	qw422016.N().S(`<div class="flex flex-column align-center gap">
+`)
+	url := ctx.URL(RouteJoin(joinCode))
+
+	qw422016.N().S(`
+  <label class="flex flex-column gap full-width" style="--row-gap: 0.5em">
+    <strong id="invite_label" class="invite-label">Share to invite more people</strong>
+    <span class="flex align-center gap input input--actor fill-white">
+      `)
+	qw422016.N().S(string(ImageTag(ctx, "person-add.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))))
+	qw422016.N().S(`
+      <input type="text" class="input" id="invite_url" value="`)
+	qw422016.E().S(url)
+	qw422016.N().S(`" aria-labelledby="invite_label" readonly>
+    </span>
+  </label>
+
+  <div class="flex align-center gap">
+    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      <span class="for-screen-reader">Show join link QR code</span>
+      `)
+	qw422016.N().S(string(ImageTag(ctx, "qr-code.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))))
+	qw422016.N().S(`
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(LinkToZoomQrCode(capture1, url)))
+	qw422016.N().S(`
+    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      <span class="for-screen-reader">Copy join link</span>
+      `)
+	qw422016.N().S(string(ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))))
+	qw422016.N().S(`
+`)
+	capture2 := EndCapture(qw422016)
+
+	qw422016.N().S(string(ButtonToCopyToClipboard(capture2, url)))
+	qw422016.N().S(`
+    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      <span class="for-screen-reader">Share join link</span>
+      `)
+	qw422016.N().S(string(ImageTag(ctx, "share.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))))
+	qw422016.N().S(`
+`)
+	capture3 := EndCapture(qw422016)
+
+	qw422016.N().S(string(WebShareSessionButton(capture3, url, "Link to join Campfire", "Hit this link to join me in Campfire and start chatting.")))
+	qw422016.N().S(`
+`)
+	if ctx.CanAdminister() {
+		qw422016.N().S(`      `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+        `)
+		qw422016.N().S(string(ImageTag(ctx, "refresh.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))))
+		qw422016.N().S(`
+        <span class="for-screen-reader">Regenerate join link</span>
+`)
+		capture4 := EndCapture(qw422016)
+
+		qw422016.N().S(string(ButtonToBlock(capture4, RouteAccountJoinCode(), NewAttrs().Class("btn btn--regenerate"))))
+	}
+	qw422016.N().S(`  </div>
+</div>
+`)
 }
 
 func WriteAccountsInvite(qq422016 qtio422016.Writer, ctx *ViewContext, joinCode string) {

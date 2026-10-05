@@ -1,2 +1,31 @@
-{% comment %}reference/crates/views/templates/messages/_message.html; TODO: body{% endcomment %}
-{% func MessagesMessage(ctx *ViewContext, message *MessageView) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/messages/_message.html{% endcomment %}
+{% func MessagesMessage(ctx *ViewContext, message *MessageView) %}{% if message.IsUnrenderable() %}
+  {%= MessagesUnrenderable() %}{% else %}
+  <div id="{%s message.DomID("") %}" class="message {% if message.AllEmoji %}message--emoji{% endif %}" data-controller="reply" data-user-id="{%dl message.Creator.ID %}" data-message-id="{%dl message.ID %}" data-message-timestamp="{%dl message.CreatedAtEpoch() %}" data-message-updated-at="{%dl message.UpdatedAtEpoch() %}" data-sort-value="{%dl message.CreatedAtEpoch() %}" data-messages-target="message" data-search-results-target="message" data-refresh-room-target="message" data-reply-composer-outlet="#composer">
+    <h2 class="message__day-separator"><time datetime="{%s message.CreatedAtISO() %}" data-local-time-target="date"></time></h2>
+
+    <figure class="avatar message__avatar">
+      <a title="{%s message.Creator.Title %}" class="btn avatar" data-turbo-frame="_top" href="{%s message.Creator.Path() %}"><img aria-hidden="true" src="{%s message.Creator.AvatarURL %}" width="48" height="48" /></a>
+    </figure>
+
+    <turbo-frame id="{%s message.DomID("edit") %}">
+      <div class="message__body">
+        <div class="message__body-content">
+          <div class="message__meta">
+            <h3 class="message__heading">
+              <span class="message__author" title="{%s message.Creator.Title %}">
+                <strong data-reply-target="author">{%s message.Creator.Name %}</strong>
+              </span>
+              <a target="_top" class="message__permalink" href="{%s message.AtPath() %}"><time class="message__timestamp" datetime="{%s message.CreatedAtISO() %}" data-local-time-target="time"></time></a>
+              <span class="message__room">
+                <a target="_top" data-reply-target="link" href="{%s message.AtPath() %}">{%s message.RoomName %}</a>
+              </span>
+            </h3>
+            {%= MessagesActions(ctx, message) %}
+          </div>
+          {%= MessagesPresentation(ctx, message) %}
+          {%= MessagesBoostsBoosts(ctx, message) %}
+        </div>
+      </div>
+    </turbo-frame>
+</div>{% endif %}{% endfunc %}

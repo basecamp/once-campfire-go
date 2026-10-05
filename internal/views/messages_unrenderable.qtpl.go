@@ -15,6 +15,13 @@ var (
 )
 
 func StreamMessagesUnrenderable(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`<div class="message message--formatted message--failed center">
+  <div class="message__body">
+    <div class="message__body-content txt-align-center">
+      Failed to load message content
+    </div>
+  </div>
+</div>`)
 }
 
 func WriteMessagesUnrenderable(qq422016 qtio422016.Writer) {

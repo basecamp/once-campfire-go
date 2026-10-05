@@ -15,6 +15,189 @@ var (
 )
 
 func StreamPwaBrowserSettings(qw422016 *qt422016.Writer, ctx *ViewContext) {
+	if !((ctx.Platform.Safari || ctx.Platform.Chrome) && ctx.Platform.IOS) {
+		qw422016.N().S(`  <details class="notifications-help" data-notifications-target="details">
+    <summary class="btn">
+      `)
+		qw422016.N().S(string(ImageTag(ctx, "external/web.svg", NewAttrs().AriaHidden().Size(20))))
+		qw422016.N().S(`
+      <strong>Check your `)
+		qw422016.E().S(Capitalize(ctx.Platform.Browser))
+		qw422016.N().S(` settings</strong>
+      `)
+		qw422016.N().S(string(ImageTag(ctx, "disclosure.svg", NewAttrs().AriaHidden().Size(10).Class("disclosure"))))
+		qw422016.N().S(`
+    </summary>
+
+`)
+		if ctx.Platform.Firefox && ctx.Platform.Android {
+			qw422016.N().S(`        <ol>
+          <li>Tap <em>`)
+			qw422016.N().S(string(ImageTag(ctx, "lock.svg", NewAttrs().Alt("the View site information button").Size(20))))
+			qw422016.N().S(`</em> in the address bar.</li>
+          <li>Tap <em>Notification</em> to change to <em>Allowed</em>.</li>
+        </ol>
+`)
+		} else if ctx.Platform.Edge && ctx.Platform.Desktop {
+			qw422016.N().S(`        <h2 class="txt-normal txt-medium margin-block-start">Turn on notifications for this website.</h2>
+        <ol>
+          <li>Click <em>`)
+			qw422016.N().S(string(ImageTag(ctx, "lock.svg", NewAttrs().Alt("the View site information button").Size(20))))
+			qw422016.N().S(`</em> left of the address bar.</li>
+          <li>Under <em>Permissions for this site &gt; Notifications</em>, choose <em>Allow</em>.</li>
+        </ol>
+        <h2 class="txt-normal txt-medium margin-block-start">Turn on notifications for `)
+			qw422016.E().S(Capitalize(ctx.Platform.Browser))
+			qw422016.N().S(`.</h2>
+        <ol>
+`)
+			if ctx.Platform.Windows {
+				qw422016.N().S(`            <li>Click <em>Start</em>, then <em>Settings</em>.</li>
+            <li>Go to <em>System &gt; Notification</em>.</li>
+            <li>Click <em>`)
+				qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the switch").Size(22))))
+				qw422016.N().S(`</em> <em>ON</em> for `)
+				qw422016.E().S(Capitalize(ctx.Platform.Browser))
+				qw422016.N().S(`.</li>
+`)
+			} else {
+				qw422016.N().S(`            <li>Click <em aria-label="the Apple menu"></em> in the top left.</li>
+            <li>Click <em>System Settings…</em>.</li>
+            <li>Click <em>Notifications</em>.</li>
+            <li>Click <em>`)
+				qw422016.E().S(Capitalize(ctx.Platform.Browser))
+				qw422016.N().S(`</em>.</li>
+            <li>Click <em>`)
+				qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the switch").Size(22))))
+				qw422016.N().S(`</em> to <em>Allow notifications</em>.</li>
+`)
+			}
+			qw422016.N().S(`        </ol>
+`)
+		} else if ctx.Platform.Firefox && ctx.Platform.Desktop {
+			qw422016.N().S(`        <h2 class="txt-normal txt-medium margin-block-start">Turn on notifications for this website.</h2>
+        <ol>
+          <li>Click <em>`)
+			qw422016.E().S(Capitalize(ctx.Platform.Browser))
+			qw422016.N().S(`</em> in the top left.</li>
+          <li>Click <em>Settings…</em>.</li>
+          <li>Click <em>Privacy & Security</em> in the sidebar.</li>
+          <li>Scroll down to <em>Permissions</em>.</li>
+          <li>Click <em>Settings</em> next to <em>Notifications</em>.</li>
+          <li>Select <em>Allow</em> next to <em>`)
+			qw422016.E().S(ctx.URL("/"))
+			qw422016.N().S(`</em>.</li>
+        </ol>
+
+        <h2 class="txt-normal txt-medium margin-block-start">Turn on notifications for `)
+			qw422016.E().S(Capitalize(ctx.Platform.Browser))
+			qw422016.N().S(`.</h2>
+        <ol>
+`)
+			if ctx.Platform.Windows {
+				qw422016.N().S(`            <li>Click <em>Start</em>, then <em>Settings</em>.</li>
+            <li>Go to <em>System &gt; Notification</em>.</li>
+            <li>Click <em>`)
+				qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the toggle button").Size(22))))
+				qw422016.N().S(`</em> <em>ON</em> for `)
+				qw422016.E().S(Capitalize(ctx.Platform.Browser))
+				qw422016.N().S(`.</li>
+`)
+			} else {
+				qw422016.N().S(`            <li>Click <em aria-label="the Apple menu"></em> in the top left.</li>
+            <li>Click <em>System Settings…</em>.</li>
+            <li>Click <em>Notifications</em>.</li>
+            <li>Click <em>`)
+				qw422016.E().S(Capitalize(ctx.Platform.Browser))
+				qw422016.N().S(`</em>.</li>
+            <li>Click <em>`)
+				qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the switch").Size(22))))
+				qw422016.N().S(`</em> to <em>Allow notifications</em>.</li>
+`)
+			}
+			qw422016.N().S(`        </ol>
+`)
+		} else if ctx.Platform.Chrome && ctx.Platform.Desktop {
+			qw422016.N().S(`        <h2 class="txt-normal txt-medium margin-block-start">Turn on notifications for this website.</h2>
+        <ol>
+          <li>Click the <em>`)
+			qw422016.N().S(string(ImageTag(ctx, "external/sliders.svg", NewAttrs().Alt("View site information").Size(20))))
+			qw422016.N().S(`</em> icon in the address bar.</li>
+          <li>Click <em>Site Settings</em>.</li>
+          <li>Ensure notifications are <em>Allowed</em>.</li>
+        </ol>
+
+        <h2 class="txt-normal txt-medium margin-block-start">Turn on notifications for `)
+			qw422016.E().S(Capitalize(ctx.Platform.Browser))
+			qw422016.N().S(`.</h2>
+        <ol>
+`)
+			if ctx.Platform.Windows {
+				qw422016.N().S(`            <li>Click <em>Start</em>, then <em>Settings</em>.</li>
+            <li>Go to <em>System &gt; Notification</em>.</li>
+            <li>Click <em>`)
+				qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the switch").Size(22))))
+				qw422016.N().S(`</em> <em>ON</em> for `)
+				qw422016.E().S(Capitalize(ctx.Platform.Browser))
+				qw422016.N().S(`.</li>
+`)
+			} else {
+				qw422016.N().S(`            <li>Click <em aria-label="the Apple menu"></em> in the top left.</li>
+            <li>Click <em>System Settings…</em>.</li>
+            <li>Click <em>Notifications</em>.</li>
+            <li>Click <em>`)
+				qw422016.E().S(Capitalize(ctx.Platform.Browser))
+				qw422016.N().S(`</em>.</li>
+            <li>Click <em>`)
+				qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the switch").Size(22))))
+				qw422016.N().S(`</em> to <em>Allow notifications</em>.</li>
+`)
+			}
+			qw422016.N().S(`        </ol>
+`)
+		} else if ctx.Platform.Chrome && ctx.Platform.Android {
+			qw422016.N().S(`        <ol>
+          <li>Tap the <em>`)
+			qw422016.N().S(string(ImageTag(ctx, "menu-dots-vertical.svg", NewAttrs().Alt("More options").Size(16))))
+			qw422016.N().S(`</em> menu button.</li>
+          <li>Tap <em>Settings</em>.</li>
+          <li>Tap <em>Notifications</em>.</li>
+          <li>Tap <em>`)
+			qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the switch").Size(22))))
+			qw422016.N().S(`</em> to <em>Allow `)
+			qw422016.E().S(Capitalize(ctx.Platform.Browser))
+			qw422016.N().S(` notifications</em>.</li>
+          <li>Tap <em>`)
+			qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the switch").Size(22))))
+			qw422016.N().S(`</em> next to <em>Web apps</em>.</li>
+          <li>Tap <em>`)
+			qw422016.N().S(string(ImageTag(ctx, "notification-bell-alert.svg", NewAttrs().Alt("the notification bell").Size(16))))
+			qw422016.N().S(`</em> and select <em>Allow</em>.</li>
+        </ol>
+`)
+		} else if ctx.Platform.Safari && ctx.Platform.Desktop {
+			qw422016.N().S(`        <ol>
+          <li>Click <em>`)
+			qw422016.E().S(Capitalize(ctx.Platform.Browser))
+			qw422016.N().S(`</em> in the top left.</li>
+          <li>Click <em>Settings…</em>.</li>
+          <li>Click the <em>Websites</em> tab.</li>
+          <li>Click <em>Notifications</em> in the sidebar.</li>
+          <li>Click <em>`)
+			qw422016.E().S(ctx.URL("/"))
+			qw422016.N().S(`</em> in the list.</li>
+          <li>Select <em>Allow</em>.</li>
+        </ol>
+`)
+		} else {
+			qw422016.N().S(`        <p>Ensure notifications are enabled for <em>`)
+			qw422016.E().S(ctx.URL("/"))
+			qw422016.N().S(`</em> in your web browser settings.</p>
+`)
+		}
+		qw422016.N().S(`  </details>
+`)
+	}
 }
 
 func WritePwaBrowserSettings(qq422016 qtio422016.Writer, ctx *ViewContext) {

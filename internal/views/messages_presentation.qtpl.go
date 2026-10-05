@@ -15,6 +15,13 @@ var (
 )
 
 func StreamMessagesPresentation(qw422016 *qt422016.Writer, ctx *ViewContext, message *MessageView) {
+	qw422016.N().S(`<div id="`)
+	qw422016.E().S(message.DomID("presentation"))
+	qw422016.N().S(`" dir="auto" data-reply-target="body" data-messages-target="body">
+  `)
+	qw422016.N().S(string(MessagePresentation(ctx, message)))
+	qw422016.N().S(`
+</div>`)
 }
 
 func WriteMessagesPresentation(qq422016 qtio422016.Writer, ctx *ViewContext, message *MessageView) {

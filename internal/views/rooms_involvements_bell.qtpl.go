@@ -15,6 +15,64 @@ var (
 )
 
 func StreamRoomsInvolvementsBell(qw422016 *qt422016.Writer, ctx *ViewContext, room *RoomView) {
+	qw422016.N().S(`<span>
+  <span class="button_to_change_notifying"
+      data-controller="notifications" data-notifications-subscriptions-url-value="`)
+	qw422016.E().S(RouteUserPushSubscriptions())
+	qw422016.N().S(`" data-notifications-attention-class="btn--pulsing">
+    <turbo-frame data-controller="turbo-frame" data-action="notifications:ready@window-&gt;turbo-frame#load" data-turbo-frame-url-param="`)
+	qw422016.E().S(RouteRoomInvolvement(room.ID))
+	qw422016.N().S(`" id="`)
+	qw422016.E().S(room.DomID("involvement"))
+	qw422016.N().S(`">
+      <button class="btn" data-action="click->notifications#attemptToSubscribe" data-notifications-target="bell">
+        <img aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("notification-bell-loading.svg"))
+	qw422016.N().S(`" width="20" height="20" />
+        <img aria-hidden="true" hidden="hidden" src="`)
+	qw422016.E().S(ctx.Asset("notification-bell-alert.svg"))
+	qw422016.N().S(`" width="20" height="20" />
+        <span class="for-screen-reader">Notification settings for this `)
+	qw422016.E().S(room.Noun())
+	qw422016.N().S(`</span>
+      </button>
+</turbo-frame>
+    <dialog data-notifications-target="notAllowedNotice" class="dialog pad center center-block border-radius border shadow" style="--inline-space: var(--block-space)">
+      <div class="flex flex-column txt-align-center">
+        <span class="btn btn--faux center txt-x-large">
+          <img aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("notification-bell-alert.svg"))
+	qw422016.N().S(`" width="48" height="48" />
+          <span class="for-screen-reader">Notifications alert</span>
+        </span>
+
+        <section>
+          <h1 class="txt-large margin-none">Notifications aren’t allowed</h1>
+          <div class="txt-align-start margin-block-start">
+            `)
+	StreamPwaBrowserSettings(qw422016, ctx)
+	qw422016.N().S(`
+            `)
+	StreamPwaSystemSettings(qw422016, ctx)
+	qw422016.N().S(`
+            `)
+	StreamPwaInstallInstructions(qw422016, ctx)
+	qw422016.N().S(`
+          </div>
+        </section>
+
+        <form method="dialog" class="flex align-center gap center">
+          <button class="btn dialog__close" autofocus="true">
+            <span class="for-screen-reader">Close</span>
+            <img aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("remove.svg"))
+	qw422016.N().S(`" width="20" height="20" />
+          </button>
+        </form>
+      </div>
+    </dialog>
+  </span>
+</span>`)
 }
 
 func WriteRoomsInvolvementsBell(qq422016 qtio422016.Writer, ctx *ViewContext, room *RoomView) {

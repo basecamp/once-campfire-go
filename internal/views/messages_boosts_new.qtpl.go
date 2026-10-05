@@ -15,6 +15,49 @@ var (
 )
 
 func StreamMessagesBoostsNew(qw422016 *qt422016.Writer, ctx *ViewContext, message *MessageView, user *UserView) {
+	qw422016.N().S(`<turbo-frame id="`)
+	qw422016.E().S(message.DomID("new_boost"))
+	qw422016.N().S(`">
+  <div class="boost flex-inline postion--relative max-width fill-white" style="--column-gap: var(--inline-space-half)">
+    <form class="boost__form flex align-center gap expanded" data-controller="form scroll-into-view" data-turbo-frame="`)
+	qw422016.E().S(message.DomID("boosting"))
+	qw422016.N().S(`" data-action="keydown.esc-&gt;form#cancel" action="`)
+	qw422016.E().S(message.BoostsPath())
+	qw422016.N().S(`" accept-charset="UTF-8" method="post">
+      <label class="boost__form-label flex gap" style="--column-gap: 0.7ch;" role="button" tabindex="0" aria-label="Add a boost">
+        <figure class="avatar boost__avatar flex-item-no-shrink">
+          <a title="`)
+	qw422016.E().S(user.Title)
+	qw422016.N().S(`" class="btn avatar" data-turbo-frame="_top" href="`)
+	qw422016.E().S(user.Path())
+	qw422016.N().S(`"><img aria-hidden="true" src="`)
+	qw422016.E().S(user.AvatarURL)
+	qw422016.N().S(`" width="48" height="48" /></a>
+          <span class="for-screen-reader">`)
+	qw422016.E().S(user.Name)
+	qw422016.N().S(`</span>
+        </figure>
+
+        <input autofocus="autofocus" autocomplete="off" autocorrect="off" maxlength="16" required="required" pattern="\S+.*" data-boost-form-target="input" class="input input--boost txt-small" size="16" type="text" name="boost[content]" />
+      </label>
+
+      <button name="button" type="submit" class="btn btn--reversed">
+        <img aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("check.svg"))
+	qw422016.N().S(`" />
+        <span class="for-screen-reader">Submit</span>
+</button>
+      <a data-turbo-frame="`)
+	qw422016.E().S(message.DomID("boosts"))
+	qw422016.N().S(`" data-form-target="cancel" class="btn btn--negative" href="`)
+	qw422016.E().S(message.BoostsPath())
+	qw422016.N().S(`">
+        <img aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("minus.svg"))
+	qw422016.N().S(`" />
+        <span class="for-screen-reader">Cancel</span>
+</a></form>  </div>
+</turbo-frame>`)
 }
 
 func WriteMessagesBoostsNew(qq422016 qtio422016.Writer, ctx *ViewContext, message *MessageView, user *UserView) {

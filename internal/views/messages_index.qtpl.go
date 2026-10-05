@@ -15,6 +15,11 @@ var (
 )
 
 func StreamMessagesIndex(qw422016 *qt422016.Writer, ctx *ViewContext, messages []MessageItem) {
+	for _, message := range messages {
+		qw422016.N().S(`
+`)
+		StreamFragment(qw422016, CachedMessageItem(ctx, message))
+	}
 }
 
 func WriteMessagesIndex(qq422016 qtio422016.Writer, ctx *ViewContext, messages []MessageItem) {

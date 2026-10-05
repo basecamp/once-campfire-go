@@ -1,2 +1,30 @@
-{% comment %}reference/crates/views/templates/accounts/_invite.html; TODO: body{% endcomment %}
-{% func AccountsInvite(ctx *ViewContext, joinCode string) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/accounts/_invite.html{% endcomment %}
+{% func AccountsInvite(ctx *ViewContext, joinCode string) %}<div class="flex flex-column align-center gap">
+{% code url := ctx.URL(RouteJoin(joinCode)) %}
+  <label class="flex flex-column gap full-width" style="--row-gap: 0.5em">
+    <strong id="invite_label" class="invite-label">Share to invite more people</strong>
+    <span class="flex align-center gap input input--actor fill-white">
+      {%s= string(ImageTag(ctx, "person-add.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))) %}
+      <input type="text" class="input" id="invite_url" value="{%s url %}" aria-labelledby="invite_label" readonly>
+    </span>
+  </label>
+
+  <div class="flex align-center gap">
+    {% code BeginCapture(qw422016) %}
+      <span class="for-screen-reader">Show join link QR code</span>
+      {%s= string(ImageTag(ctx, "qr-code.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))) %}
+{% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToZoomQrCode(capture1, url)) %}
+    {% code BeginCapture(qw422016) %}
+      <span class="for-screen-reader">Copy join link</span>
+      {%s= string(ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))) %}
+{% code capture2 := EndCapture(qw422016) %}{%s= string(ButtonToCopyToClipboard(capture2, url)) %}
+    {% code BeginCapture(qw422016) %}
+      <span class="for-screen-reader">Share join link</span>
+      {%s= string(ImageTag(ctx, "share.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))) %}
+{% code capture3 := EndCapture(qw422016) %}{%s= string(WebShareSessionButton(capture3, url, "Link to join Campfire", "Hit this link to join me in Campfire and start chatting.")) %}
+{% if ctx.CanAdminister() %}      {% code BeginCapture(qw422016) %}
+        {%s= string(ImageTag(ctx, "refresh.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))) %}
+        <span class="for-screen-reader">Regenerate join link</span>
+{% code capture4 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture4, RouteAccountJoinCode(), NewAttrs().Class("btn btn--regenerate"))) %}{% endif %}  </div>
+</div>
+{% endfunc %}

@@ -32,6 +32,25 @@ func (p *SearchesIndex) Head() string {
 }
 
 func (p *SearchesIndex) StreamNav(qw422016 *qt422016.Writer) {
+	if p.Index.Query != nil {
+		qw422016.N().S(`
+    <div class="searches__query flex align-center gap pad-block-start-half">
+      <div class="btn btn--reversed btn--faux align-center gap txt-nowrap">
+        <span class="overflow-ellipsis">“`)
+		qw422016.E().S(*p.Index.Query)
+		qw422016.N().S(`”</span>
+        <span class="flex-item-no-shrink">`)
+		qw422016.N().D(len(p.Index.Messages))
+		qw422016.N().S(`</span>
+</div>    </div>`)
+	}
+	qw422016.N().S(`
+
+  <div class="searches__recents align-center gap pad-block-half overflow-y overflow-hide-scrollbar">
+    `)
+	StreamSearchesRecents(qw422016, p.Ctx, p.Index)
+	qw422016.N().S(`
+  </div>`)
 }
 
 func (p *SearchesIndex) WriteNav(qq422016 qtio422016.Writer) {
@@ -49,6 +68,12 @@ func (p *SearchesIndex) Nav() string {
 }
 
 func (p *SearchesIndex) StreamSidebar(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`
+  <div class="rooms position-relative flex flex-column gap overflow-y overflow-hide-scrollbar">
+    `)
+	StreamSearchesRecents(qw422016, p.Ctx, p.Index)
+	qw422016.N().S(`
+  </div>`)
 }
 
 func (p *SearchesIndex) WriteSidebar(qq422016 qtio422016.Writer) {
@@ -66,6 +91,24 @@ func (p *SearchesIndex) Sidebar() string {
 }
 
 func (p *SearchesIndex) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`
+<div id="message-area" class="message-area">
+  <div class="message-area--empty min-width center">
+    <figure class="center pad">
+      <img aria-hidden="true" class="colorize--black translucent" src="`)
+	qw422016.E().S(p.Ctx.Asset("search.svg"))
+	qw422016.N().S(`" />
+    </figure>
+  </div>
+
+  <div id="search-results" class="messages searches__results" data-controller="search-results" data-search-results-target="messages" data-search-results-me-class="message--me" data-search-results-threaded-class="message--threaded" data-search-results-mentioned-class="message--mentioned" data-search-results-formatted-class="message--formatted">`)
+	for _, message := range p.Index.Messages {
+		qw422016.N().S(`
+    `)
+		StreamFragment(qw422016, CachedMessageItem(p.Ctx, message))
+	}
+	qw422016.N().S(`
+  </div></div>`)
 }
 
 func (p *SearchesIndex) WriteContent(qq422016 qtio422016.Writer) {
@@ -83,6 +126,47 @@ func (p *SearchesIndex) Content() string {
 }
 
 func (p *SearchesIndex) StreamFooter(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`
+  <div class="composer flex align-end gap">
+    <a class="btn flex-item-no-shrink margin-block-end" style="view-transition-name: input-switcher; --btn-border-radius: 0.5em" href="`)
+	qw422016.E().S(RouteRoom(p.Index.ReturnToRoomID))
+	qw422016.N().S(`">
+      <img aria-hidden="true" src="`)
+	qw422016.E().S(p.Ctx.Asset("arrow-left.svg"))
+	qw422016.N().S(`" />
+      <span class="for-screen-reader">Exit search </span>
+</a>
+    <form class="margin-block flex-item-grow contain flex align-center gap" data-controller="form" data-action="keydown.esc-&gt;form#cancel" action="`)
+	qw422016.E().S(RouteSearches())
+	qw422016.N().S(`" accept-charset="UTF-8" method="post">
+      <div class="composer__input flex align-center flex-item-grow gap full-width input input--actor min-width">
+        <img aria-hidden="true" class="composer__input-hint colorize--black" style="view-transition-name: input-btn;" src="`)
+	qw422016.E().S(p.Ctx.Asset("search.svg"))
+	qw422016.N().S(`" width="20" height="20" />
+
+        <input`)
+	if p.Index.Q != nil {
+		qw422016.N().S(` value="`)
+		qw422016.E().S(*p.Index.Q)
+		qw422016.N().S(`"`)
+	}
+	qw422016.N().S(` class="searches__input input flex-item-grow" role="searchbox" aria-label="search" autofocus="autofocus" required="required" type="text" name="q" id="q" />
+
+        <a data-form-target="cancel" role="button" class="searches__reset" href="`)
+	qw422016.E().S(RouteSearches())
+	qw422016.N().S(`">
+          <img aria-hidden="true" class="colorize--black" src="`)
+	qw422016.E().S(p.Ctx.Asset("remove.svg"))
+	qw422016.N().S(`" width="14" height="14" />
+          <span class="for-screen-reader">Clear search field</span>
+</a>
+        <button name="button" type="submit" class="btn btn--reversed flex-item-no-shrink txt-small" style="--btn-border-radius: 0.5em">
+          <img aria-hidden="true" src="`)
+	qw422016.E().S(p.Ctx.Asset("arrow-up.svg"))
+	qw422016.N().S(`" />
+          <span class="for-screen-reader">Search</span>
+</button>      </div>
+</form>  </div>`)
 }
 
 func (p *SearchesIndex) WriteFooter(qq422016 qtio422016.Writer) {

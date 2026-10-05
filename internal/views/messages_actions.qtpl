@@ -1,2 +1,41 @@
-{% comment %}reference/crates/views/templates/messages/_actions.html; TODO: body{% endcomment %}
-{% func MessagesActions(ctx *ViewContext, message *MessageView) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/messages/_actions.html{% endcomment %}
+{% func MessagesActions(ctx *ViewContext, message *MessageView) %}<div class="message__actions" data-controller="soft-keyboard">
+  <details class="position-relative" data-controller="popup" data-action="keydown.esc-&gt;popup#close toggle-&gt;popup#toggle click@document-&gt;popup#closeOnClickOutside" data-popup-orientation-top-class="popup-orientation-top">
+    <summary class="btn message__action-btn message__options-btn">
+      <img class="colorize--black" aria-hidden="true" src="{%s ctx.Asset("menu-dots-horizontal.svg") %}" width="20" height="20" />
+      <span class="for-screen-reader">Message options</span>
+    </summary>
+
+    <div class="message__actions-menu border shadow" data-popup-target="menu">
+      <div class="quick-boosts">{% for _, reaction := range Reactions %}
+          <form data-turbo-frame="{%s message.DomID("boosting") %}" data-action="popup#close" action="{%s message.BoostsPath() %}" accept-charset="UTF-8" method="post">
+            <input type="hidden" name="boost[content]" id="boost_content" value="{%s reaction.Character %}" />
+            <button name="button" type="submit" title="{%s reaction.Title %}" class="btn message__action-btn" data-emoji="{%s reaction.Character %}">
+              <figure class="margin-none boost-character">{%s reaction.Character %}</figure>
+              <span class="for-screen-reader">{%s reaction.Title %}</span>
+</button></form>{% endfor %}
+
+        <a class="btn message__action-btn message__boost-btn" data-turbo-frame="{%s message.DomID("new_boost") %}" data-action="soft-keyboard#open popup#close" href="{%s message.NewBoostPath() %}">
+          <img class="colorize--black" aria-hidden="true" src="{%s ctx.Asset("boost.svg") %}" width="20" height="20" />
+          <span class="for-screen-reader">New boost</span>
+</a>      </div>
+
+      <div class="flex flex-wrap border-top margin-block-start-half pad-block-start-half message__actions-grid">{% if attachment := message.Attachment(); attachment != nil %}
+          <a class="btn message__action-btn center full-width hide-in-ios-pwa" title="Download" aria-label="Download" href="{%s attachment.DownloadPath %}">
+            <img class="colorize--black" aria-hidden="true" src="{%s ctx.Asset("download.svg") %}" width="20" height="20" />
+</a>
+          <button class="btn message__action-btn center full-width" data-controller="web-share" data-action="web-share#share" data-web-share-files-value="{%s attachment.BlobPath %}" data-web-share-title-value="{%s attachment.Filename %}" title="Share" aria-label="Share">
+            <img class="colorize--black" aria-hidden="true" src="{%s ctx.Asset("share.svg") %}" width="20" height="20" />
+</button>{% else %}
+          <button class="btn message__action-btn center full-width" data-action="reply#reply" title="Reply" aria-label="Reply">
+            <img class="colorize--black" aria-hidden="true" src="{%s ctx.Asset("reply.svg") %}" width="20" height="20" />
+</button>{% endif %}
+
+        <button class="btn message__action-btn center full-width" title="Copy link" aria-label="Copy link" data-controller="copy-to-clipboard" data-action="copy-to-clipboard#copy" data-copy-to-clipboard-success-class="btn--success" data-copy-to-clipboard-url-value="{%s message.AtPath() %}">
+          <img class="colorize--black" aria-hidden="true" src="{%s ctx.Asset("link.svg") %}" width="20" height="20" />
+</button>
+        <a class="btn message__action-btn center full-width message__edit-btn" data-turbo-frame="{%s message.DomID("edit") %}" title="Edit" aria-label="Edit" href="{%s message.EditPath() %}">
+          <img class="colorize--black" aria-hidden="true" src="{%s ctx.Asset("pencil.svg") %}" width="20" height="20" />
+</a>      </div>
+    </div>
+</details></div>{% endfunc %}

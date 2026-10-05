@@ -1,2 +1,2 @@
-{% comment %}reference/crates/views/templates/messages/create.turbo_stream.html; TODO: body{% endcomment %}
-{% func MessagesCreateTurboStream(ctx *ViewContext, message MessageItem, roomKind RoomKind) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/messages/create.turbo_stream.html{% endcomment %}
+{% func MessagesCreateTurboStream(ctx *ViewContext, message MessageItem, roomKind RoomKind) %}<turbo-stream action="append" target="{%s RoomDomID(roomKind, message.RoomID(), "messages") %}"><template>{%= Fragment(CachedMessageItem(ctx, message)) %}</template></turbo-stream>{% endfunc %}

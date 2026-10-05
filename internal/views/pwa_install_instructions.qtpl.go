@@ -15,6 +15,79 @@ var (
 )
 
 func StreamPwaInstallInstructions(qw422016 *qt422016.Writer, ctx *ViewContext) {
+	if !(ctx.Platform.Chrome || (ctx.Platform.Firefox && !ctx.Platform.Android)) {
+		qw422016.N().S(`  <details class="notifications-help pwa__instructions hide-in-pwa" data-controller="pwa-install" data-pwa-install-prompting-class="pwa--can-install" data-notifications-target="details">
+    <summary class="btn">
+      `)
+		qw422016.N().S(string(ImageTag(ctx, "external/install.svg", NewAttrs().AriaHidden().Size(20))))
+		qw422016.N().S(`
+      <strong>Install Campfire as a web app.</strong>
+      `)
+		qw422016.N().S(string(ImageTag(ctx, "disclosure.svg", NewAttrs().AriaHidden().Size(10).Class("disclosure"))))
+		qw422016.N().S(`
+    </summary>
+
+`)
+		if ctx.Platform.Edge {
+			qw422016.N().S(`        <ol>
+          <li>Click <em>`)
+			qw422016.N().S(string(ImageTag(ctx, "install-edge.svg", NewAttrs().Alt("the app available - install Campfire chat button").Size(16))))
+			qw422016.N().S(`</em>in the address bar.</li>
+          <li>Click <em>Install</em>.</li>
+        </ol>
+`)
+		} else if ctx.Platform.Chrome && ctx.Platform.Android {
+			qw422016.N().S(`        <ol>
+          <li>Tap the <em>`)
+			qw422016.N().S(string(ImageTag(ctx, "menu-dots-vertical.svg", NewAttrs().Alt("More options").Size(16))))
+			qw422016.N().S(`</em> menu button.</li>
+          <li>Tap <em>Install app</em> in the menu.</li>
+        </ol>
+`)
+		} else if ctx.Platform.Firefox && ctx.Platform.Android {
+			qw422016.N().S(`        <ol>
+          <li>Tap the <em>`)
+			qw422016.N().S(string(ImageTag(ctx, "menu-dots-vertical.svg", NewAttrs().Alt("More options").Size(16))))
+			qw422016.N().S(`</em> menu button.</li>
+          <li>Tap <em>Install</em> in the menu.</li>
+        </ol>
+`)
+		} else if ctx.Platform.Safari && ctx.Platform.Desktop {
+			qw422016.N().S(`        <ol>
+          <li>Click <em>File</em> in the top left.</li>
+          <li>Click <em>Add to Dock…</em>.</li>
+        </ol>
+`)
+		} else if (ctx.Platform.Safari || ctx.Platform.Chrome) && ctx.Platform.IOS {
+			qw422016.N().S(`        <p>To receive push notifications in `)
+			qw422016.E().S(Capitalize(ctx.Platform.Browser))
+			qw422016.N().S(` for `)
+			qw422016.E().S(ctx.Platform.OperatingSystem)
+			qw422016.N().S(`, you must install Campfire as a web app.</p>
+        <ol>
+          <li>Tap <em>`)
+			qw422016.N().S(string(ImageTag(ctx, "external/share.svg", NewAttrs().Alt("the share button").Size(20))))
+			qw422016.N().S(`</em></li>
+          <li>Tap <em>Add to Home Screen</em>.</li>
+        </ol>
+`)
+		} else {
+			qw422016.N().S(`        <p>Some platforms require you to install Campfire as a web app to receive push notifications.</p>
+`)
+		}
+		qw422016.N().S(`
+    <div class="margin-block-start txt-align-center pwa__installer">
+      <hr class="separator margin-block">
+      <button class="btn btn--reversed center" data-action="pwa-install#promptInstall">
+        `)
+		qw422016.N().S(string(ImageTag(ctx, "external/install.svg", NewAttrs().AriaHidden())))
+		qw422016.N().S(`
+        Install now
+      </button>
+    </div>
+  </details>
+`)
+	}
 }
 
 func WritePwaInstallInstructions(qq422016 qtio422016.Writer, ctx *ViewContext) {

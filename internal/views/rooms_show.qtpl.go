@@ -15,6 +15,11 @@ var (
 )
 
 func (p *RoomsShow) StreamHead(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`
+  <meta name="turbo-cache-control" content="no-preview">
+  <meta name="current-room-id" content="`)
+	qw422016.N().DL(p.Show.Room.ID)
+	qw422016.N().S(`">`)
 }
 
 func (p *RoomsShow) WriteHead(qq422016 qtio422016.Writer) {
@@ -32,6 +37,7 @@ func (p *RoomsShow) Head() string {
 }
 
 func (p *RoomsShow) StreamNav(qw422016 *qt422016.Writer) {
+	StreamRoomsShowNav(qw422016, p.Ctx, &p.Show.Room)
 }
 
 func (p *RoomsShow) WriteNav(qq422016 qtio422016.Writer) {
@@ -49,6 +55,7 @@ func (p *RoomsShow) Nav() string {
 }
 
 func (p *RoomsShow) StreamSidebar(qw422016 *qt422016.Writer) {
+	qw422016.N().S(string(SidebarTurboFrameTag(Ptr(RouteUserSidebar()), "")))
 }
 
 func (p *RoomsShow) WriteSidebar(qq422016 qtio422016.Writer) {
@@ -66,6 +73,41 @@ func (p *RoomsShow) Sidebar() string {
 }
 
 func (p *RoomsShow) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`
+<div id="message-area" class="message-area" contents="true" data-controller="messages presence drop-target" data-action="turbo:before-stream-render@document-&gt;messages#beforeStreamRender keydown.up@document-&gt;messages#editMyLastMessage dragenter-&gt;drop-target#dragenter dragover-&gt;drop-target#dragover drop-&gt;drop-target#drop visibilitychange@document-&gt;presence#visibilityChanged" data-messages-first-of-day-class="message--first-of-day" data-messages-formatted-class="message--formatted" data-messages-me-class="message--me" data-messages-mentioned-class="message--mentioned" data-messages-threaded-class="message--threaded" data-messages-page-url-value="`)
+	qw422016.E().S(p.Ctx.URL(RouteRoomMessages(p.Show.Room.ID)))
+	qw422016.N().S(`">
+  `)
+	StreamMessagesTemplate(qw422016, p.Ctx, &p.Show.User)
+	qw422016.N().S(`
+
+  <div id="`)
+	qw422016.E().S(p.Show.Room.DomID("messages"))
+	qw422016.N().S(`" class="messages" data-controller="maintain-scroll refresh-room" data-action="turbo:before-stream-render@document-&gt;maintain-scroll#beforeStreamRender visibilitychange@document-&gt;refresh-room#visibilityChanged online@window-&gt;refresh-room#online" data-messages-target="messages" data-refresh-room-loaded-at-value="`)
+	qw422016.N().DL(p.LoadedAt())
+	qw422016.N().S(`" data-refresh-room-url-value="`)
+	qw422016.E().S(p.Ctx.URL(RouteRoomRefresh(p.Show.Room.ID)))
+	qw422016.N().S(`">`)
+	if p.Show.Invitation {
+		qw422016.N().S(`
+    `)
+		StreamRoomsShowInvitation(qw422016, p.Ctx, p.Show.JoinCode)
+	}
+	for _, message := range p.Show.Messages {
+		qw422016.N().S(`
+    `)
+		StreamFragment(qw422016, CachedMessageItem(p.Ctx, message))
+	}
+	qw422016.N().S(`
+  </div>
+
+  <turbo-cable-stream-source channel="RoomMessagesChannel" signed-stream-name="`)
+	qw422016.E().S(p.Show.MessagesStreamName)
+	qw422016.N().S(`"></turbo-cable-stream-source>
+  <button class="message-area__return-to-latest btn" data-action="messages#returnToLatest" data-messages-target="latest" hidden="hidden"><img aria-hidden="true" src="`)
+	qw422016.E().S(p.Ctx.Asset("arrow-down.svg"))
+	qw422016.N().S(`" width="20" height="20" /><span class="for-screen-reader">Jump to newest message</span></button>
+</div>`)
 }
 
 func (p *RoomsShow) WriteContent(qq422016 qtio422016.Writer) {
@@ -83,6 +125,7 @@ func (p *RoomsShow) Content() string {
 }
 
 func (p *RoomsShow) StreamFooter(qw422016 *qt422016.Writer) {
+	StreamRoomsShowComposer(qw422016, p.Ctx, &p.Show.Room)
 }
 
 func (p *RoomsShow) WriteFooter(qq422016 qtio422016.Writer) {

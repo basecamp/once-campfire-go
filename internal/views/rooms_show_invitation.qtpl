@@ -1,2 +1,18 @@
-{% comment %}reference/crates/views/templates/rooms/show/_invitation.html; TODO: body{% endcomment %}
-{% func RoomsShowInvitation(ctx *ViewContext, joinCode string) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/rooms/show/_invitation.html{% endcomment %}
+{% func RoomsShowInvitation(ctx *ViewContext, joinCode string) %}<div id="system_welcome" class="message message--formatted txt-align-center center">
+    <div class="message__body center">
+      <div class="message__body-content position-relative">
+        {%s= string(AccountLogoTag(ctx, "center margin-block-end txt-large")) %}
+        <div class="flex align-center gap">
+          <div class="system-welcome--translation">
+            {%s= string(TranslationButton(ctx, "invite_message")) %}
+          </div>
+          <p>
+            <strong>Welcome to Campfire</strong><br>
+            To invite people to chat, share the join link below.
+          </p>
+        </div>
+        {%= AccountsInvite(ctx, joinCode) %}
+      </div>
+    </div>
+  </div>{% endfunc %}

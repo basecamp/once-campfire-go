@@ -15,6 +15,7 @@ var (
 )
 
 func StreamMessagesShow(qw422016 *qt422016.Writer, ctx *ViewContext, message *MessageView) {
+	qw422016.N().S(CachedMessage(ctx, message).HTML)
 }
 
 func WriteMessagesShow(qq422016 qtio422016.Writer, ctx *ViewContext, message *MessageView) {

@@ -1,2 +1,15 @@
-{% comment %}reference/crates/views/templates/messages/boosts/_boost.html; TODO: body{% endcomment %}
-{% func MessagesBoostsBoost(ctx *ViewContext, boost *BoostView) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/messages/boosts/_boost.html{% endcomment %}
+{% func MessagesBoostsBoost(ctx *ViewContext, boost *BoostView) %}<div id="{%s boost.DomID() %}"
+      class="boost boost-item flex-inline postion--relative max-width align-center fill-white gap"
+      data-controller="boost-delete" data-boost-delete-perform-class="boost--deleting" data-boost-delete-reveal-class="expanded" data-boost-delete-booster-id-value="{%dl boost.Booster.ID %}">
+    <figure class="avatar boost__avatar flex-item-no-shrink">
+      <a title="{%s boost.Booster.Title %}" class="btn avatar" data-turbo-frame="_top" href="{%s boost.Booster.Path() %}"><img aria-label="{%s boost.Booster.Name %} boosted {%s boost.Content %}" src="{%s boost.Booster.AvatarURL %}" width="48" height="48" /></a>
+    </figure>
+
+    <span role="button" class="{% if boost.AllEmoji %}txt-small txt-medium{% else %}txt-small{% endif %}" data-action="click-&gt;boost-delete#reveal keydown.enter-&gt;boost-delete#reveal:prevent" data-boost-delete-target="content">{%s boost.Content %}</span>
+
+    <form class="button_to" method="post" action="{%s boost.Path() %}"><input type="hidden" name="_method" value="delete" /><button data-action="boost-delete#perform" data-boost-delete-target="button" class="btn btn--negative flex-item-justify-end boost__delete" type="submit">
+      <img aria-hidden="true" src="{%s ctx.Asset("minus.svg") %}" width="20" height="20" />
+      <span class="for-screen-reader">Delete this boost</span>
+</button></form>  </div>
+  <span id="delete_boost_accessible_label" class="for-screen-reader">Press enter to delete this boost</span>{% endfunc %}

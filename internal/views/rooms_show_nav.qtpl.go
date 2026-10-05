@@ -15,6 +15,44 @@ var (
 )
 
 func StreamRoomsShowNav(qw422016 *qt422016.Writer, ctx *ViewContext, room *RoomView) {
+	if ctx.Account.HasLogo {
+		qw422016.N().S(`
+  `)
+		qw422016.N().S(string(AccountLogoTag(ctx, "")))
+	}
+	qw422016.N().S(`
+
+  <span class="btn btn--reversed btn--faux room--current">
+    <h1 class="room__contents txt-medium overflow-ellipsis">`)
+	if room.IsDirect() {
+		qw422016.N().S(`
+        <span class="for-screen-reader">Ping with</span>`)
+	}
+	qw422016.N().S(`
+
+      `)
+	qw422016.E().S(room.DisplayName)
+	qw422016.N().S(`
+    </h1>
+</span>
+
+  <a class="btn" style="view-transition-name: edit-room-`)
+	qw422016.N().DL(room.ID)
+	qw422016.N().S(`" data-room-id="`)
+	qw422016.N().DL(room.ID)
+	qw422016.N().S(`" href="`)
+	qw422016.E().S(room.EditPath())
+	qw422016.N().S(`">
+    <img aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("menu-dots-horizontal.svg"))
+	qw422016.N().S(`" width="20" height="20" />
+    <span class="for-screen-reader">Settings for this `)
+	qw422016.E().S(room.Noun())
+	qw422016.N().S(`</span>
+</a>
+
+  `)
+	StreamRoomsInvolvementsBell(qw422016, ctx, room)
 }
 
 func WriteRoomsShowNav(qq422016 qtio422016.Writer, ctx *ViewContext, room *RoomView) {

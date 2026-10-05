@@ -15,6 +15,52 @@ var (
 )
 
 func StreamMessagesTemplate(qw422016 *qt422016.Writer, ctx *ViewContext, user *UserView) {
+	qw422016.N().S(`<script type="text/template" data-messages-target="template">
+  <div class="message message--me $messageClasses$"
+      id="message_$clientMessageId$"
+      data-format-message-target="message"
+      data-user-id="`)
+	qw422016.N().DL(user.ID)
+	qw422016.N().S(`"
+      data-message-timestamp="$messageTimestamp$"
+      data-messages-target="message">
+    <div class="message__day-separator"><time class="message__timestamp" datetime="$messageDatetime$" data-local-time-target="date"></time></div>
+
+    <figure class="avatar message__avatar">
+      <a title="`)
+	qw422016.E().S(user.Title)
+	qw422016.N().S(`" class="btn avatar" data-turbo-frame="_top" href="`)
+	qw422016.E().S(user.Path())
+	qw422016.N().S(`"><img aria-hidden="true" src="`)
+	qw422016.E().S(user.AvatarURL)
+	qw422016.N().S(`" width="48" height="48" /></a>
+    </figure>
+
+    <div class="message__body">
+      <div class="message__body-content">
+        <div class="message__meta">
+          <h3 class="message__heading">
+            <span class="message__author"><strong>`)
+	qw422016.E().S(user.Name)
+	qw422016.N().S(`</strong></span>
+            <span class="message__permalink"><time class="message__timestamp" datetime="$messageDatetime$" data-local-time-target="time"></time></span>
+          </h3>
+          <div class="message__actions">
+            <div class="position-relative">
+              <span class="btn message__action-btn message__options-btn">
+                <img class="colorize--black" aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("menu-dots-horizontal.svg"))
+	qw422016.N().S(`" />
+                <span class="for-screen-reader">Message options</span>
+              </span>
+            </div class="position-relative">
+          </div>
+        </div>
+        $body$
+      </div>
+    </div>
+  </div>
+</script>`)
 }
 
 func WriteMessagesTemplate(qq422016 qtio422016.Writer, ctx *ViewContext, user *UserView) {
