@@ -2,9 +2,9 @@ package web
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/storage"
 	"strings"
 	"testing"
@@ -40,7 +40,7 @@ func TestProfileAttachmentAssignments(t *testing.T) {
 	if response.StatusCode != 302 {
 		t.Fatal(response.Status)
 	}
-	if _, err = app.Storage.Attached(ctx, "User", user.ID, "avatar"); !errors.Is(err, sql.ErrNoRows) {
+	if _, err = app.Storage.Attached(ctx, "User", user.ID, "avatar"); !errors.Is(err, database.ErrNoRows) {
 		t.Fatal("empty string must delete", err)
 	}
 }

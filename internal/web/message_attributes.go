@@ -2,12 +2,12 @@ package web
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/richtext"
 	"github.com/basecamp/once-campfire-go/internal/storage"
 )
 
@@ -65,7 +65,7 @@ func (s *Server) updateMessageAttributes(r *http.Request, user database.User, me
 			blob, err := s.Storage.Attached(r.Context(), "Message", message.ID, "attachment")
 			if err == nil {
 				plain = storage.Filename(blob.Filename)
-			} else if !errors.Is(err, sql.ErrNoRows) {
+			} else if !errors.Is(err, database.ErrNoRows) {
 				return message, err
 			}
 		}
@@ -93,16 +93,13 @@ func (s *Server) saveNewMessage(ctx context.Context, user, room int64, client st
 	if staged != nil {
 		defer staged.Discard()
 	}
-	plain := ""
+	// Only the canonical body here: the search index's plain text is extracted on the writer
+	// after commit, from the stored body (database.DB.PlainText), as the reference does.
 	if body != nil {
-		value, text := s.canonicalMessage(ctx, *body)
+		value := richtext.Canonical(*body)
 		body = &value
-		plain = text
 	}
-	if strings.TrimSpace(plain) == "" && staged != nil {
-		plain = storage.Filename(staged.Blob.Filename)
-	}
-	message, err := s.DB.CreateMessageWithUpload(ctx, user, room, client, body, plain, pendingBlob(staged), webhook)
+	message, err := s.DB.CreateMessageWithUpload(ctx, user, room, client, body, "", pendingBlob(staged), webhook)
 	if err != nil {
 		return message, err
 	}

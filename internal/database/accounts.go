@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -34,7 +33,7 @@ func (a Account) RestrictRooms() bool {
 }
 func (d *DB) UpdateAccount(ctx context.Context, name *string, styles *string, restrict *bool, resetJoin bool, uploads ...BlobStager) error {
 	var id int64
-	return d.recordWithUpload(ctx, "Account", &id, uploads, func(tx *sql.Tx) error {
+	return d.recordWithUpload(ctx, "Account", &id, uploads, func(tx *Tx) error {
 		var settings string
 		if err := tx.QueryRowContext(ctx, "SELECT id,coalesce(settings,'{}') FROM accounts ORDER BY id LIMIT 1").Scan(&id, &settings); err != nil {
 			return err
@@ -93,7 +92,7 @@ func RandomToken(length int) string {
 func (d *DB) User(ctx context.Context, id int64) (User, error) {
 	return userRow(d.Read.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users u WHERE u.id=?", id))
 }
-func usersRows(rows *sql.Rows) ([]User, error) {
+func usersRows(rows *Rows) ([]User, error) {
 	defer rows.Close()
 	users := []User{}
 	for rows.Next() {
@@ -124,7 +123,7 @@ func (d *DB) Users(ctx context.Context, room int64, botsOnly bool) ([]User, erro
 }
 func (d *DB) CreateUser(ctx context.Context, name, email, password, bio string, role int, webhook *string, uploads ...BlobStager) (User, error) {
 	var u User
-	err := d.recordWithUpload(ctx, "User", &u.ID, uploads, func(tx *sql.Tx) error {
+	err := d.recordWithUpload(ctx, "User", &u.ID, uploads, func(tx *Tx) error {
 		now := Stamp(d.Now())
 		var address, digest, bot any = email, password, nil
 		if role == 2 {
@@ -157,7 +156,7 @@ func (d *DB) CreateUser(ctx context.Context, name, email, password, bio string, 
 	return u, err
 }
 func (d *DB) UpdateUser(ctx context.Context, id int64, attributes map[string]string, webhook *string, uploads ...BlobStager) error {
-	return d.recordWithUpload(ctx, "User", &id, uploads, func(tx *sql.Tx) error {
+	return d.recordWithUpload(ctx, "User", &id, uploads, func(tx *Tx) error {
 		sets := []string{"updated_at=?"}
 		args := []any{Stamp(d.Now())}
 		for _, key := range []string{"name", "email_address", "password_digest", "bio", "role", "bot_token"} {
@@ -176,7 +175,7 @@ func (d *DB) UpdateUser(ctx context.Context, id int64, attributes map[string]str
 			return err
 		}
 		if count == 0 {
-			return sql.ErrNoRows
+			return ErrNoRows
 		}
 		if webhook != nil {
 			if strings.TrimSpace(*webhook) == "" {
@@ -201,14 +200,14 @@ func (d *DB) UpdateUser(ctx context.Context, id int64, attributes map[string]str
 func (d *DB) Bot(ctx context.Context, key string) (User, error) {
 	id, token, ok := strings.Cut(strings.TrimSpace(key), "-")
 	if !ok {
-		return User{}, sql.ErrNoRows
+		return User{}, ErrNoRows
 	}
 	return userRow(d.Read.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users u WHERE u.id=? AND u.bot_token=? AND u.role=2 AND u.status=0", id, token))
 }
 func (d *DB) DeactivateUser(ctx context.Context, id int64) error {
-	return d.Transaction(ctx, func(tx *sql.Tx) error {
+	return d.Transaction(ctx, func(tx *Tx) error {
 		now := Stamp(d.Now())
-		var email sql.NullString
+		var email NullString
 		if err := tx.QueryRowContext(ctx, "SELECT email_address FROM users WHERE id=?", id).Scan(&email); err != nil {
 			return err
 		}
@@ -229,7 +228,7 @@ func (d *DB) DeactivateUser(ctx context.Context, id int64) error {
 	})
 }
 func (d *DB) BanUser(ctx context.Context, id int64, ban bool) error {
-	err := d.Transaction(ctx, func(tx *sql.Tx) error {
+	err := d.Transaction(ctx, func(tx *Tx) error {
 		now := Stamp(d.Now())
 		status := 0
 		if ban {

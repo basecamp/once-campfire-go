@@ -3,7 +3,6 @@ package web
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"html"
@@ -43,14 +42,14 @@ func pathInt(r *http.Request, key string) int64 {
 }
 func (s *Server) findMessage(r *http.Request, u database.User, administer bool) (database.Message, error) {
 	if route, _, _ := recognize(r.Method, r.URL.EscapedPath()); route != nil && strings.HasPrefix(route.Endpoint, "messages#") && roomID(r) == 0 {
-		return database.Message{}, sql.ErrNoRows
+		return database.Message{}, database.ErrNoRows
 	}
 	m, err := s.DB.ReachableMessage(r.Context(), u.ID, pathInt(r, "message"))
 	if err != nil {
 		return m, err
 	}
 	if (r.PathValue("room_id") != "" || r.Form.Has("room_id")) && m.RoomID != roomID(r) {
-		return m, sql.ErrNoRows
+		return m, database.ErrNoRows
 	}
 	if administer && u.Role != 1 && u.ID != m.CreatorID {
 		return m, database.ErrForbidden
@@ -82,7 +81,7 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 		if !found {
 			var err error
 			creator, err = s.DB.User(ctx, views[i].CreatorID)
-			if errors.Is(err, sql.ErrNoRows) {
+			if errors.Is(err, database.ErrNoRows) {
 				views[i].Fragment = unrenderableMessage
 				continue
 			}
@@ -124,7 +123,7 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 			}
 
 			views[i].HTML = template.HTML(attachmentHTML(blob, views[i].BlobURL, views[i].DownloadURL, views[i].PreviewURL))
-		} else if !errors.Is(err, sql.ErrNoRows) {
+		} else if !errors.Is(err, database.ErrNoRows) {
 			return nil, err
 		}
 		key := messageCacheKey(views[i].Message)

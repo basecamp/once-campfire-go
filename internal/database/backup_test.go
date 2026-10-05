@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,12 +24,12 @@ func TestOnlineBackupReplacesAtomically(t *testing.T) {
 		if err = d.Backup(ctx, destination); err != nil {
 			t.Fatal(err)
 		}
-		snapshot, err := sql.Open("sqlite3", destination)
+		snapshot, err := openConn(destination, true)
 		if err != nil {
 			t.Fatal(err)
 		}
 		var name string
-		err = snapshot.QueryRow("SELECT name FROM users WHERE id=?", u.ID).Scan(&name)
+		err = (&Tx{conn: snapshot}).QueryRow("SELECT name FROM users WHERE id=?", u.ID).Scan(&name)
 		snapshot.Close()
 		want := "Backup User"
 		if i == 1 {

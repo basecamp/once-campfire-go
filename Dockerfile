@@ -113,7 +113,7 @@ COPY reference/reference reference/reference
 RUN python3 bin/build-assets
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -tags sqlite_fts5 -trimpath -ldflags='-s -w' -o /out/campfire ./cmd/campfire
+    go build -trimpath -ldflags='-s -w' -o /out/campfire ./cmd/campfire
 
 
 # The shared libraries and executables that go into the runtime, in one directory tree.

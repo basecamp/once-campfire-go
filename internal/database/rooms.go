@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"slices"
 	"strings"
@@ -47,7 +46,7 @@ func uniqueIDs(ids []int64) []int64 {
 	slices.Sort(out)
 	return slices.Compact(out)
 }
-func grant(ctx context.Context, tx *sql.Tx, room, user int64, involvement, now string) error {
+func grant(ctx context.Context, tx *Tx, room, user int64, involvement, now string) error {
 	_, err := tx.ExecContext(ctx, "INSERT INTO memberships(room_id,user_id,involvement,created_at,updated_at) SELECT ?,id,?,?,? FROM users WHERE id=? ON CONFLICT(room_id,user_id) DO NOTHING", room, involvement, now, now, user)
 	return err
 }
@@ -60,7 +59,7 @@ func (d *DB) CreateRoom(ctx context.Context, creator int64, kind, name string, u
 		users = append(users, creator)
 	}
 	users = uniqueIDs(users)
-	err := d.Transaction(ctx, func(tx *sql.Tx) error {
+	err := d.Transaction(ctx, func(tx *Tx) error {
 		now := Stamp(d.Now())
 		if kind == "Rooms::Direct" {
 			rows, err := tx.QueryContext(ctx, "SELECT r.id,m.user_id FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE r.type='Rooms::Direct' ORDER BY r.id,m.user_id")
@@ -130,7 +129,7 @@ func (d *DB) CreateRoom(ctx context.Context, creator int64, kind, name string, u
 }
 func (d *DB) UpdateRoom(ctx context.Context, id int64, kind, name string, users []int64) error {
 	var revoked []int64
-	err := d.Transaction(ctx, func(tx *sql.Tx) error {
+	err := d.Transaction(ctx, func(tx *Tx) error {
 		var old string
 		if err := tx.QueryRowContext(ctx, "SELECT type FROM rooms WHERE id=?", id).Scan(&old); err != nil {
 			return err
@@ -197,7 +196,7 @@ func (d *DB) UpdateRoom(ctx context.Context, id int64, kind, name string, users 
 }
 func (d *DB) DeleteRoom(ctx context.Context, id int64) error {
 	var blobs []int64
-	err := d.Transaction(ctx, func(tx *sql.Tx) error {
+	err := d.Transaction(ctx, func(tx *Tx) error {
 		var err error
 		blobs, err = AttachmentBlobIDs(ctx, tx, "(record_type='Message' AND record_id IN (SELECT id FROM messages WHERE room_id=?)) OR (record_type='ActionText::RichText' AND record_id IN (SELECT id FROM action_text_rich_texts WHERE record_type='Message' AND record_id IN (SELECT id FROM messages WHERE room_id=?)))", id, id)
 		if err != nil {
@@ -240,12 +239,12 @@ func (d *DB) SetInvolvement(ctx context.Context, user, room int64, value string)
 		return err
 	}
 	if count == 0 {
-		return sql.ErrNoRows
+		return ErrNoRows
 	}
 	return nil
 }
 func (d *DB) Presence(ctx context.Context, user, room int64, action string) error {
-	return d.Transaction(ctx, func(tx *sql.Tx) error {
+	return d.Transaction(ctx, func(tx *Tx) error {
 		now := d.Now()
 		stamp, cutoff := Stamp(now), Stamp(now.Add(-60*time.Second))
 		var query string

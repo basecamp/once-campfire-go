@@ -2,8 +2,8 @@ package web
 
 import (
 	"context"
-	"database/sql"
 	"errors"
+	"github.com/basecamp/once-campfire-go/internal/database"
 )
 
 func (s *Server) initCleanup() {
@@ -19,7 +19,7 @@ func (s *Server) initCleanup() {
 				return err
 			}
 			for _, message := range messages {
-				if err = s.DB.RemoveBannedMessage(ctx, message.ID); errors.Is(err, sql.ErrNoRows) {
+				if err = s.DB.RemoveBannedMessage(ctx, message.ID); errors.Is(err, database.ErrNoRows) {
 					continue
 				} else if err != nil {
 					return err

@@ -1,0 +1,16 @@
+crawshaw.io/sqlite v0.3.2 (ISC, see LICENSE), vendored as the SQLite binding in place of
+database/sql and github.com/mattn/go-sqlite3, so queries prepare, bind, step and read columns
+through SQLite's C API directly, as the reference (rusqlite) does.
+
+Changes from upstream:
+
+- c/sqlite3.c, sqlite3.h and sqlite3ext.h are SQLite 3.53.2, copied from the reference's
+  libsqlite3-sys 0.38.2 (its sqlite3/ directory), so both applications run the same SQLite.
+  3.53 includes 3.51.3's fix for the WAL-reset bug a checkpointer next to the writer could hit.
+- The cgo CFLAGS in sqlite.go are libsqlite3-sys's "bundled" options (build.rs), plus
+  SQLITE_ENABLE_UNLOCK_NOTIFY for blocking_step.c, compiled at -O3 as cargo's release profile does.
+- wal.go adds NoteWALPages/TakeWALPages: a C WAL hook that records the WAL size after each
+  commit, in place of the auto-checkpoint (internal/database runs checkpoints off the writer).
+- Removed: the sqlitex package, sessions, snapshots, blob I/O, user-defined functions,
+  authorizers, extension loading and the incrementor, which Campfire doesn't use, with their
+  C trampolines in wrappers.c, and the upstream tests that depended on them.

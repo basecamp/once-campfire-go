@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -147,6 +146,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 	}
 	s.Storage = storage.New(db, secrets, storageRoot)
 	s.DB.ResetConnections = s.Cable.Reconnect
+	s.DB.PlainText = func(body string) string { return s.plainText(context.Background(), body) }
 	s.registerStorageRoutes()
 	s.Unfurler = integrations.NewUnfurler()
 	s.Webhooks = integrations.NewWebhookClient()
@@ -332,7 +332,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 		return
 	}
 	a, err := s.DB.Account(r.Context())
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.fail(w, err)
 		return
 	}
@@ -451,7 +451,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 }
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	status := 500
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		status = 404
 	} else if errors.Is(err, database.ErrForbidden) {
 		status = 403
@@ -476,7 +476,7 @@ func (s *Server) auth(next func(http.ResponseWriter, *http.Request, database.Use
 			return
 		}
 		u, err := s.DB.SessionUser(r.Context(), token)
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, database.ErrNoRows) {
 			s.requestAuthentication(w, r)
 			return
 		}
@@ -562,7 +562,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := s.DB.UserByEmail(r.Context(), r.Form.Get("email_address"))
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.fail(w, err)
 		return
 	}
@@ -667,7 +667,7 @@ func (s *Server) lastRoom(r *http.Request, user int64) (int64, error) {
 }
 func (s *Server) home(w http.ResponseWriter, r *http.Request, u database.User) {
 	id, err := s.lastRoom(r, u.ID)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		s.render(w, r, "welcome", 200, page{Title: "No rooms yet", User: u})
 		return
 	}
@@ -703,7 +703,7 @@ func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
 	}
 	anchor, _ := strconv.ParseInt(strings.TrimPrefix(r.PathValue("anchor"), "@"), 10, 64)
 	messages, err := s.DB.MessagePageReferences(r.Context(), room.ID, anchor, "around")
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		messages, err = s.DB.MessagePageReferences(r.Context(), room.ID, 0, "around")
 	}
 	if err != nil {
@@ -754,8 +754,9 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 	if !requireMessage(w, r) {
 		return
 	}
-	if _, err := s.DB.Room(r.Context(), u.ID, roomID(r)); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
+	if err != nil {
+		if errors.Is(err, database.ErrNoRows) {
 			s.render(w, r, "room-not-found", 200, page{User: u})
 			return
 		}
@@ -763,7 +764,6 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 		return
 	}
 	var staged *storage.Staged
-	var err error
 	if r.MultipartForm != nil && len(r.MultipartForm.File["message[attachment]"]) > 0 {
 		staged, err = s.stageAttachment(r, "message[attachment]")
 		if err != nil {
@@ -779,7 +779,7 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 		value := r.Form.Get("message[body]")
 		body = &value
 	}
-	m, err := s.saveNewMessage(r.Context(), u.ID, roomID(r), r.Form.Get("message[client_message_id]"), body, staged, false)
+	m, err := s.saveNewMessage(r.Context(), u.ID, room.ID, r.Form.Get("message[client_message_id]"), body, staged, false)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -793,11 +793,6 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 		return
 	}
 	if err = s.templates.ExecuteTemplate(b, "messages", page{Messages: views}); err != nil {
-		s.fail(w, err)
-		return
-	}
-	room, err := s.DB.Room(r.Context(), u.ID, m.RoomID)
-	if err != nil {
 		s.fail(w, err)
 		return
 	}

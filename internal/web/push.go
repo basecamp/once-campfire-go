@@ -3,7 +3,6 @@ package web
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,7 +26,7 @@ func (s *Server) initJobs() {
 	if concurrency < 1 {
 		concurrency = 2
 	}
-	s.Jobs = jobs.New(concurrency, "push", "webhook", "purge", "ban", "analyze")
+	s.Jobs = jobs.New(concurrency, "push_message", "push", "webhook", "purge", "ban", "analyze")
 	s.initCleanup()
 	var vapid *integrations.VAPID
 	if public, private := os.Getenv("VAPID_PUBLIC_KEY"), os.Getenv("VAPID_PRIVATE_KEY"); public != "" && private != "" {
@@ -110,12 +109,12 @@ func (s *Server) pushSubscriptions(w http.ResponseWriter, r *http.Request, u dat
 		return
 	}
 	existing, err := s.DB.FindPushSubscription(r.Context(), u.ID, attrs)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.fail(w, err)
 		return
 	}
 	endpoint := existing.Endpoint
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		if value := attrs["endpoint"]; value != nil {
 			endpoint = *value
 		}
@@ -204,14 +203,27 @@ func (s *Server) messageCreated(message database.Message, room database.Room) {
 	if s.Push.VAPID == nil {
 		return
 	}
+	// Room::PushMessageJob: recipients are selected off the request, as the reference's
+	// PushMessage event does after commit.
+	id := message.ID
+	s.Jobs.Enqueue("push_message", func(ctx context.Context) error { return s.pushMessage(ctx, id, room) })
+}
+
+func (s *Server) pushMessage(ctx context.Context, id int64, room database.Room) error {
+	message, err := s.DB.Message(ctx, id)
+	if errors.Is(err, database.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 	mentions := s.mentionedIDs(ctx, message.Body)
 	subscriptions, err := s.DB.PushRecipients(ctx, room.ID, message.CreatorID, mentions)
 	if err != nil {
-		slog.Error("push recipients failed", "error", err)
-		return
+		return err
 	}
 	if len(subscriptions) == 0 {
-		return
+		return nil
 	}
 	body := s.plainText(ctx, message.Body)
 	if attachment, err := s.Storage.Attached(ctx, "Message", message.ID, "attachment"); err == nil && attachment.ID != 0 && strings.TrimSpace(body) == "" {
@@ -240,4 +252,5 @@ func (s *Server) messageCreated(message database.Message, room database.Room) {
 			return err
 		})
 	}
+	return nil
 }

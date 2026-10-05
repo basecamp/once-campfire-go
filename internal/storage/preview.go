@@ -3,7 +3,6 @@ package storage
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -21,7 +20,7 @@ func Previewable(ct string) bool { return strings.HasPrefix(ct, "video") && ffmp
 func (s *Store) PreviewImage(ctx context.Context, b Blob) (Blob, error) {
 	if image, err := s.Attached(ctx, "ActiveStorage::Blob", b.ID, "preview_image"); err == nil {
 		return image, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	} else if !errors.Is(err, database.ErrNoRows) {
 		return Blob{}, err
 	}
 	if !Previewable(b.Type()) {
@@ -57,7 +56,7 @@ func (s *Store) PreviewImage(ctx context.Context, b Blob) (Blob, error) {
 		return Blob{}, err
 	}
 	won := false
-	err = s.DB.Transaction(ctx, func(tx *sql.Tx) error {
+	err = s.DB.Transaction(ctx, func(tx *database.Tx) error {
 		var count int
 		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM active_storage_attachments WHERE record_type='ActiveStorage::Blob' AND record_id=? AND name='preview_image'", b.ID).Scan(&count); err != nil {
 			return err

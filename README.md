@@ -19,8 +19,12 @@ The pinned Rust source is in `reference/`, with its Rails source in `reference/r
 
 ## Dependencies
 
-- Go 1.27.1: `net/http`, `html/template`, `database/sql`, `crypto`, `encoding/json`, `embed`, `testing`.
-- `github.com/mattn/go-sqlite3`: SQLite with FTS5, through CGO.
+- Go 1.27.1: `net/http`, `html/template`, `crypto`, `encoding/json`, `embed`, `testing`.
+- `crawshaw.io/sqlite`, vendored in `third_party/sqlite` with the reference's SQLite 3.53.2 and
+  build options: SQLite's C API through CGO, without `database/sql` (see its `README.campfire`).
+  As in the reference, one writer goroutine owns the write connection and runs writes in order,
+  WAL checkpoints run on a connection of their own, and reads take one of `RAILS_MAX_THREADS`
+  (default 5) reader connections.
 - `github.com/coder/websocket`: WebSocket transport; the Action Cable protocol and channels are local code.
 - `golang.org/x/crypto`: bcrypt and ACME. The pinned revision includes the upstream ACME missing-Location fix.
 - `golang.org/x/net`: HTTP/2 and HTML tokenization; a local tree-builder fork matches the reference parser.
@@ -90,7 +94,7 @@ mkdir -p .cache/tmp .cache/docker-go-build .cache/docker-go-mod
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src \
   -e GOCACHE=/src/.cache/docker-go-build -e GOMODCACHE=/src/.cache/docker-go-mod \
   -e TMPDIR=/src/.cache/tmp once-campfire-go:toolchain \
-  go test -tags 'sqlite_fts5 media_vectors' ./internal/storage
+  go test -tags media_vectors ./internal/storage
 ```
 
 `bin/build` and `bin/check` use mise when Go is absent from PATH and keep temporary build files in

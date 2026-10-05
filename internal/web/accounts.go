@@ -1,7 +1,6 @@
 package web
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -161,7 +160,7 @@ func (s *Server) profile(w http.ResponseWriter, r *http.Request, u database.User
 		p := page{Title: "My settings", User: u, Rooms: rooms, Transfer: s.origin(r) + s.transferPath(u)}
 		_, err = s.Storage.Attached(r.Context(), "User", u.ID, "avatar")
 		p.AvatarAttached = err == nil
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if err != nil && !errors.Is(err, database.ErrNoRows) {
 			s.fail(w, err)
 			return
 		}
@@ -376,7 +375,7 @@ func (s *Server) botForm(w http.ResponseWriter, r *http.Request, u database.User
 			return
 		}
 		err = s.DB.Read.QueryRowContext(r.Context(), "SELECT url FROM webhooks WHERE user_id=?", id).Scan(&webhook)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if err != nil && !errors.Is(err, database.ErrNoRows) {
 			s.fail(w, err)
 			return
 		}
@@ -386,7 +385,7 @@ func (s *Server) botForm(w http.ResponseWriter, r *http.Request, u database.User
 		blob, e := s.Storage.Attached(r.Context(), "User", bot.ID, "avatar")
 		if e == nil {
 			avatarURL = s.Storage.BlobURL(blob)
-		} else if !errors.Is(e, sql.ErrNoRows) {
+		} else if !errors.Is(e, database.ErrNoRows) {
 			s.fail(w, e)
 			return
 		}

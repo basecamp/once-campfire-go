@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net"
@@ -57,7 +56,7 @@ func (s *Server) richContext(ctx context.Context) richtext.Context {
 			return m, nil
 		}
 		u, err := s.DB.User(ctx, id)
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, database.ErrNoRows) {
 			cache[id] = nil
 			return nil, nil
 		}

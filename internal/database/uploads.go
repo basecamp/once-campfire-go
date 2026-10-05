@@ -2,13 +2,12 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 )
 
 // recordWithUpload commits the record and its avatar/logo together. Files staged
 // before the transaction are removed on failure; old blobs are purged after commit.
-func (d *DB) recordWithUpload(ctx context.Context, kind string, id *int64, uploads []BlobStager, update func(*sql.Tx) error) error {
+func (d *DB) recordWithUpload(ctx context.Context, kind string, id *int64, uploads []BlobStager, update func(*Tx) error) error {
 	var staged BlobStager
 	if len(uploads) > 0 {
 		staged = uploads[0]
@@ -24,7 +23,7 @@ func (d *DB) recordWithUpload(ctx context.Context, kind string, id *int64, uploa
 		return fmt.Errorf("invalid upload record type %q", kind)
 	}
 	var purged []int64
-	err := d.Transaction(ctx, func(tx *sql.Tx) error {
+	err := d.Transaction(ctx, func(tx *Tx) error {
 		if err := update(tx); err != nil {
 			return err
 		}

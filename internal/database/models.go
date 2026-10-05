@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -63,7 +62,7 @@ func UUID() string {
 
 const userColumns = "u.id,u.name,coalesce(u.email_address,''),coalesce(u.password_digest,''),u.role,u.status,coalesce(u.bio,''),u.updated_at,coalesce(u.bot_token,'')"
 
-func userRow(row *sql.Row) (User, error) {
+func userRow(row *Row) (User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Name, &u.Email, &u.Password, &u.Role, &u.Status, &u.Bio, timestamp{&u.UpdatedAt}, &u.BotToken)
 	return u, err
@@ -84,7 +83,7 @@ func (d *DB) Setup(ctx context.Context, name, email, passwordDigest string, uplo
 	if strings.TrimSpace(name) == "" || strings.TrimSpace(email) == "" || passwordDigest == "" {
 		return u, ErrValidation
 	}
-	err := d.recordWithUpload(ctx, "User", &u.ID, uploads, func(tx *sql.Tx) error {
+	err := d.recordWithUpload(ctx, "User", &u.ID, uploads, func(tx *Tx) error {
 		now := Stamp(d.Now())
 		var n int
 		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM accounts").Scan(&n); err != nil {
@@ -150,7 +149,7 @@ func (d *DB) Room(ctx context.Context, user, id int64) (Room, error) {
 
 const messageSelect = "SELECT m.id,m.room_id,m.creator_id,m.client_message_id,coalesce(t.body,''),coalesce(u.name,''),m.created_at,m.updated_at FROM messages m LEFT JOIN users u ON u.id=m.creator_id LEFT JOIN action_text_rich_texts t ON t.record_type='Message' AND t.record_id=m.id AND t.name='body' "
 
-func scanMessages(rows *sql.Rows) ([]Message, error) {
+func scanMessages(rows *Rows) ([]Message, error) {
 	defer rows.Close()
 	result := []Message{}
 	for rows.Next() {
@@ -198,7 +197,7 @@ func (d *DB) CreateWebhookReply(ctx context.Context, user, room int64, body, pla
 // BlobStager keeps file copying outside the SQLite writer while committing the blob
 // and its owning record together.
 type BlobStager interface {
-	Insert(context.Context, *sql.Tx) (int64, error)
+	Insert(context.Context, *Tx) (int64, error)
 	Keep()
 	Discard()
 }
@@ -206,7 +205,7 @@ type BlobStager interface {
 func (d *DB) CreateMessageWithUpload(ctx context.Context, user, room int64, client string, body *string, plain string, staged BlobStager, webhook bool) (Message, error) {
 	return d.createMessage(ctx, user, room, client, body, plain, 0, staged, !webhook)
 }
-func (d *DB) createMessage(ctx context.Context, user, room int64, client string, body *string, plain string, blob int64, staged BlobStager, checkMembership bool) (Message, error) {
+func (d *DB) createMessage(ctx context.Context, user, room int64, client string, body *string, plain string, blob int64, staged BlobStager, _ bool) (Message, error) {
 	if staged != nil {
 		defer staged.Discard()
 	}
@@ -218,19 +217,11 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 	if body != nil {
 		m.Body = *body
 	}
-	err := d.Transaction(ctx, func(tx *sql.Tx) error {
-		if checkMembership {
-			var n int
-			if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.room_id=? AND m.user_id=? AND u.status=0", room, user).Scan(&n); err != nil {
-				return err
-			}
-			if n != 1 {
-				return ErrForbidden
-			}
-		}
-		if err := tx.QueryRowContext(ctx, "SELECT name FROM users WHERE id=?", user).Scan(&m.Creator); err != nil {
-			return err
-		}
+	// The reference's Message::create: inside the transaction the message, its body (which
+	// touches the message), its attachment and the room touch; after commit the search index,
+	// then Room::receive's unread memberships. Callers have already checked the room membership,
+	// as the reference's controllers do before writing.
+	err := d.Transaction(ctx, func(tx *Tx) error {
 		if staged != nil {
 			var err error
 			blob, err = staged.Insert(ctx, tx)
@@ -239,7 +230,7 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 			}
 		}
 		stamp := Stamp(now)
-		r, err := tx.ExecContext(ctx, "INSERT INTO messages(client_message_id,creator_id,room_id,created_at,updated_at) VALUES (?,?,?,?,?)", client, user, room, stamp, stamp)
+		r, err := tx.ExecContext(ctx, "INSERT INTO messages(client_message_id,created_at,creator_id,room_id,updated_at) VALUES (?,?,?,?,?)", client, stamp, user, room, stamp)
 		if err != nil {
 			return err
 		}
@@ -247,34 +238,71 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 		if err != nil {
 			return err
 		}
-		for _, q := range []struct {
-			sql  string
-			args []any
-		}{
-			{"UPDATE rooms SET updated_at=? WHERE id=?", []any{stamp, room}},
-			{"UPDATE memberships SET unread_at=?,updated_at=? WHERE room_id=? AND user_id!=? AND involvement!='invisible' AND (connected_at IS NULL OR connected_at < ?)", []any{stamp, stamp, room, user, Stamp(now.Add(-60 * time.Second))}},
-			{"INSERT INTO message_search_index(rowid,body) VALUES (?,?)", []any{m.ID, plain}},
-		} {
-			if _, err = tx.ExecContext(ctx, q.sql, q.args...); err != nil {
-				return err
-			}
-		}
+		touched := false
 		if body != nil {
-			if _, err = tx.ExecContext(ctx, "INSERT INTO action_text_rich_texts(name,record_type,record_id,body,created_at,updated_at) VALUES ('body','Message',?,?,?,?)", m.ID, *body, stamp, stamp); err != nil {
+			if _, err = tx.ExecContext(ctx, "INSERT INTO action_text_rich_texts(body,created_at,name,record_id,record_type,updated_at) VALUES (?,?,'body',?,'Message',?)", *body, stamp, m.ID, stamp); err != nil {
 				return err
 			}
+			touched = true
 		}
 		if blob != 0 {
 			if _, err = tx.ExecContext(ctx, "INSERT INTO active_storage_attachments(blob_id,record_type,record_id,name,created_at) VALUES (?,'Message',?,'attachment',?)", blob, m.ID, stamp); err != nil {
 				return err
 			}
+			touched = true
 		}
+		if touched {
+			if _, err = tx.ExecContext(ctx, "UPDATE messages SET updated_at=? WHERE id=?", stamp, m.ID); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE rooms SET updated_at=? WHERE id=?", stamp, room); err != nil {
+			return err
+		}
+		id := m.ID
+		tx.AfterCommit(func(tx *Tx) error {
+			text, err := d.indexedText(tx, id, plain)
+			if err != nil {
+				return err
+			}
+			if _, err = tx.Exec("INSERT INTO message_search_index(rowid,body) VALUES (?,?)", id, text); err != nil {
+				return err
+			}
+			cutoff := Stamp(d.Now().Add(-60 * time.Second))
+			_, err = tx.Exec("UPDATE memberships SET unread_at=?,updated_at=? WHERE room_id=? AND involvement!='invisible' AND (connected_at IS NULL OR connected_at < ?) AND user_id!=?", stamp, Stamp(d.Now()), room, cutoff, user)
+			return err
+		})
 		return nil
 	})
 	if err == nil && staged != nil {
 		staged.Keep()
 	}
 	return m, err
+}
+
+// indexedText is the reference's Message#plain_text_body, read on the writer after commit: the
+// stored body's plain text, else the attachment's filename. Without a PlainText converter (the
+// database package's own tests) it's the caller's plain text.
+func (d *DB) indexedText(tx *Tx, id int64, plain string) (string, error) {
+	if d.PlainText == nil {
+		return plain, nil
+	}
+	var body NullString
+	err := tx.QueryRow("SELECT body FROM action_text_rich_texts WHERE record_type='Message' AND record_id=? AND name='body' LIMIT 1", id).Scan(&body)
+	if err != nil && err != ErrNoRows {
+		return "", err
+	}
+	if body.Valid {
+		if text := d.PlainText(body.String); strings.TrimSpace(text) != "" {
+			return text, nil
+		}
+	}
+	var filename string
+	err = tx.QueryRow("SELECT b.filename FROM active_storage_attachments a JOIN active_storage_blobs b ON b.id=a.blob_id WHERE a.record_type='Message' AND a.record_id=? AND a.name='attachment' LIMIT 1", id).Scan(&filename)
+	if err == ErrNoRows {
+		return "", nil
+	}
+	return filename, err
 }
 func (d *DB) Search(ctx context.Context, user int64, query string) ([]Message, error) {
 	words := strings.Fields(SearchQuery(query))

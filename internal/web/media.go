@@ -2,7 +2,6 @@ package web
 
 import (
 	"bytes"
-	"database/sql"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -86,7 +85,7 @@ func (s *Server) avatar(w http.ResponseWriter, r *http.Request, _ database.User)
 }
 func (s *Server) serveVariant(w http.ResponseWriter, r *http.Request, kind string, id int64, name string, size int64, format string) bool {
 	b, err := s.Storage.Attached(r.Context(), kind, id, name)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, database.ErrNoRows) {
 		return false
 	}
 	if err != nil {
@@ -121,7 +120,7 @@ func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request, name, ct str
 }
 func (s *Server) logo(w http.ResponseWriter, r *http.Request) {
 	a, err := s.DB.Account(r.Context())
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.fail(w, err)
 		return
 	}

@@ -3,7 +3,6 @@ package web
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,7 +27,7 @@ func (s *Server) enqueueWebhooks(message database.Message, room database.Room) {
 		ids := s.mentionedIDs(ctx, message.Body)
 		for _, id := range ids {
 			u, e := s.DB.User(ctx, id)
-			if errors.Is(e, sql.ErrNoRows) {
+			if errors.Is(e, database.ErrNoRows) {
 				continue
 			}
 			if e != nil {
@@ -67,7 +66,7 @@ func (s *Server) deliverWebhook(ctx context.Context, botID, messageID int64) err
 	if err != nil {
 		return err
 	}
-	var endpoint sql.NullString
+	var endpoint database.NullString
 	err = s.DB.Read.QueryRowContext(ctx, "SELECT url FROM webhooks WHERE user_id=? LIMIT 1", bot.ID).Scan(&endpoint)
 	if err != nil {
 		return err
@@ -80,7 +79,7 @@ func (s *Server) deliverWebhook(ctx context.Context, botID, messageID int64) err
 	}
 	plain = strings.TrimSpace(strings.ReplaceAll(plain, "@"+bot.Name, ""))
 	var rawBody *string
-	if err := s.DB.Read.QueryRowContext(ctx, "SELECT body FROM action_text_rich_texts WHERE record_type='Message' AND record_id=? AND name='body' LIMIT 1", messageID).Scan(&rawBody); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := s.DB.Read.QueryRowContext(ctx, "SELECT body FROM action_text_rich_texts WHERE record_type='Message' AND record_id=? AND name='body' LIMIT 1", messageID).Scan(&rawBody); err != nil && !errors.Is(err, database.ErrNoRows) {
 		return err
 	}
 	var roomName *string

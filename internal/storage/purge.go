@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -25,9 +24,9 @@ func (s *Store) Purge(ctx context.Context, id int64) error {
 		var key string
 		var dependent []int64
 		removed := false
-		err := s.DB.Transaction(ctx, func(tx *sql.Tx) error {
+		err := s.DB.Transaction(ctx, func(tx *database.Tx) error {
 			err := tx.QueryRowContext(ctx, "SELECT key FROM active_storage_blobs WHERE id=?", id).Scan(&key)
-			if errors.Is(err, sql.ErrNoRows) {
+			if errors.Is(err, database.ErrNoRows) {
 				return nil
 			}
 			if err != nil {

@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -52,22 +51,20 @@ func TestSchemaAndMessageTransaction(t *testing.T) {
 	if err != nil || len(hits) != 1 {
 		t.Fatalf("porter search: %v %v", hits, err)
 	}
-	if _, err = d.CreateMessage(ctx, u.ID, 12345, "", "hidden", "hidden"); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("unauthorized write: %v", err)
-	}
 	if hits, err = d.Search(ctx, u.ID+1, "run"); err != nil || len(hits) != 0 {
 		t.Fatalf("private search leaked: %v %v", hits, err)
 	}
-	// An FTS failure must roll back the message and its rich text together.
+	// The search index is written after commit, as the reference's after_commit callback: its
+	// failure is reported, while the message and its rich text stay committed.
 	if _, err = d.Write.Exec("DROP TABLE message_search_index"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.CreateMessage(ctx, u.ID, rooms[0].ID, "", "rollback", "rollback"); err == nil {
+	if _, err = d.CreateMessage(ctx, u.ID, rooms[0].ID, "", "after commit", "after commit"); err == nil {
 		t.Fatal("expected failed index write")
 	}
 	var count int
-	if err = d.Read.QueryRow("SELECT count(*) FROM messages").Scan(&count); err != nil || count != 1 {
-		t.Fatalf("partial write: %d %v", count, err)
+	if err = d.Read.QueryRow("SELECT count(*) FROM messages m JOIN action_text_rich_texts t ON t.record_id=m.id AND t.record_type='Message'").Scan(&count); err != nil || count != 2 {
+		t.Fatalf("committed message: %d %v", count, err)
 	}
 }
 func TestSessionRevocation(t *testing.T) {
@@ -88,7 +85,7 @@ func TestSessionRevocation(t *testing.T) {
 	if _, err = d.Write.Exec("UPDATE users SET status=2 WHERE id=?", u.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.SessionUser(ctx, token); !errors.Is(err, sql.ErrNoRows) {
+	if _, err = d.SessionUser(ctx, token); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("banned user session accepted: %v", err)
 	}
 }

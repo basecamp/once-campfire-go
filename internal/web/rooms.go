@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -31,7 +30,7 @@ func (s *Server) registerRoomRoutes() {
 	s.mux.HandleFunc("GET /rooms/{id}/{anchor}", s.auth(s.roomAt))
 }
 func (s *Server) roomLookupFailure(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, database.ErrForbidden) {
+	if errors.Is(err, database.ErrNoRows) || errors.Is(err, database.ErrForbidden) {
 		s.flash(r, "alert", "Room not found or inaccessible")
 		http.Redirect(w, r, "/", http.StatusFound)
 	} else {
@@ -165,7 +164,7 @@ func (s *Server) saveRoom(w http.ResponseWriter, r *http.Request, u database.Use
 			return
 		}
 		if room.Type == "Rooms::Direct" || kind == "Rooms::Direct" {
-			s.roomLookupFailure(w, r, sql.ErrNoRows)
+			s.roomLookupFailure(w, r, database.ErrNoRows)
 			return
 		}
 		if u.Role != 1 && room.CreatorID != u.ID {
@@ -195,7 +194,7 @@ func (s *Server) redirectRoom(w http.ResponseWriter, r *http.Request, u database
 		return
 	}
 	if (namespaceKind(r) == "Rooms::Direct") != (room.Type == "Rooms::Direct") {
-		s.roomLookupFailure(w, r, sql.ErrNoRows)
+		s.roomLookupFailure(w, r, database.ErrNoRows)
 		return
 	}
 	http.Redirect(w, r, fmt.Sprintf("/rooms/%d", room.ID), 302)
@@ -208,7 +207,7 @@ func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request, u database.U
 	}
 	directNamespace := strings.HasPrefix(r.URL.Path, "/rooms/directs/")
 	if directNamespace && room.Type != "Rooms::Direct" {
-		s.roomLookupFailure(w, r, sql.ErrNoRows)
+		s.roomLookupFailure(w, r, database.ErrNoRows)
 		return
 	}
 	if !directNamespace && u.Role != 1 && room.CreatorID != u.ID {

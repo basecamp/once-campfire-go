@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/http"
 
@@ -24,7 +23,7 @@ func recordAttachment(r *http.Request, field string, upload *storage.Staged, com
 
 type attachmentAssignment struct{ invalid bool }
 
-func (a attachmentAssignment) Insert(context.Context, *sql.Tx) (int64, error) {
+func (a attachmentAssignment) Insert(context.Context, *database.Tx) (int64, error) {
 	if a.invalid {
 		return 0, errors.New("could not find or build blob: expected attachable")
 	}

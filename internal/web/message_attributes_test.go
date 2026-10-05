@@ -3,7 +3,6 @@ package web
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"mime/multipart"
@@ -58,7 +57,7 @@ func TestMessageAttachmentUpdatePreservesBodyAndIndexes(t *testing.T) {
 	if response.StatusCode != 302 {
 		t.Fatalf("remove attachment: %s %s", response.Status, data)
 	}
-	if _, err = app.Storage.Attached(ctx, "Message", message.ID, "attachment"); !errors.Is(err, sql.ErrNoRows) {
+	if _, err = app.Storage.Attached(ctx, "Message", message.ID, "attachment"); !errors.Is(err, database.ErrNoRows) {
 		t.Fatal(err)
 	}
 	hits, err = app.DB.Search(ctx, user.ID, "report")
@@ -66,7 +65,7 @@ func TestMessageAttachmentUpdatePreservesBodyAndIndexes(t *testing.T) {
 		t.Fatalf("stale search: %+v %v", hits, err)
 	}
 	app.Close()
-	if _, err = app.Storage.Blob(ctx, blob.ID); !errors.Is(err, sql.ErrNoRows) {
+	if _, err = app.Storage.Blob(ctx, blob.ID); !errors.Is(err, database.ErrNoRows) {
 		t.Fatalf("orphan blob: %v", err)
 	}
 }

@@ -29,6 +29,7 @@ def main():
     p.add_argument('--upload-reps',type=int,default=5)
     p.add_argument('--server-cpus',default='8-11')
     p.add_argument('--loadgen-cpus',default='12-15')
+    p.add_argument('--workers',type=int,default=4,help='GOMAXPROCS, TOKIO_WORKER_THREADS and RAILS_MAX_THREADS')
     p.add_argument('--apps',nargs='+',default=['rust','go'],choices=['rust','go','go-before'])
     a=p.parse_args(); rust=a.rust_root.resolve(); out=a.out.resolve(); out.mkdir(parents=True,exist_ok=a.resume)
     seed=rust/'parity/.seed/default'; labels=json.loads((seed/'labels.json').read_text())
@@ -40,7 +41,7 @@ def main():
     for line in (rust/'parity/.env.reference').read_text().splitlines():
         if line and not line.startswith('#') and '=' in line:
             k,v=line.split('=',1); env[k]=v
-    env.update(TMPDIR=str(ROOT/'.cache/tmp'),DISABLE_SSL='true',TARGET_BIND='127.0.0.1',GOMAXPROCS='4',TOKIO_WORKER_THREADS='4',RAILS_MAX_THREADS='4')
+    env.update(TMPDIR=str(ROOT/'.cache/tmp'),DISABLE_SSL='true',TARGET_BIND='127.0.0.1',GOMAXPROCS=str(a.workers),TOKIO_WORKER_THREADS=str(a.workers),RAILS_MAX_THREADS=str(a.workers))
     metadata={'time':datetime.datetime.now(datetime.timezone.utc).isoformat(),'host':platform.platform(),'cpu':text('lscpu'),
         'rust_commit':text('git','-C',str(rust),'rev-parse','HEAD'),'settings':{k:str(v) if isinstance(v,Path) else v for k,v in vars(a).items()},
         'binaries':{k:{'sha256':digest(v),'bytes':v.stat().st_size} for k,v in binaries.items()},'seed_sha256':digest(seed/'db/production.sqlite3'),

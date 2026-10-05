@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/rand"
-	"database/sql"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -86,10 +85,10 @@ func (s *Store) Path(key string) (string, error) {
 	}
 	return filepath.Join(s.Root, key[:2], key[2:4], key), nil
 }
-func scanBlob(row *sql.Row) (Blob, error) {
+func scanBlob(row *database.Row) (Blob, error) {
 	var b Blob
-	var metadata sql.NullString
-	var checksum sql.NullString
+	var metadata database.NullString
+	var checksum database.NullString
 	err := row.Scan(&b.ID, &b.Key, &b.Filename, &b.ContentType, &metadata, &b.ServiceName, &b.ByteSize, &checksum, &b.CreatedAt)
 	b.Metadata = json.RawMessage(metadata.String)
 	if !json.Valid(b.Metadata) {
@@ -135,7 +134,7 @@ func (s *Store) SignedID(b Blob) string {
 func (s *Store) FindSigned(ctx context.Context, token string) (Blob, error) {
 	var id int64
 	if err := s.Verifier.Verify(token, "blob_id", s.DB.Now(), &id); err != nil {
-		return Blob{}, sql.ErrNoRows
+		return Blob{}, database.ErrNoRows
 	}
 	return s.Blob(ctx, id)
 }
@@ -213,7 +212,7 @@ func (s *Store) StageFile(ctx context.Context, filename, contentType string, rea
 }
 func (s *Store) Attach(ctx context.Context, b Blob, kind string, id int64, name string) error {
 	var blobs []int64
-	err := s.DB.Transaction(ctx, func(tx *sql.Tx) error {
+	err := s.DB.Transaction(ctx, func(tx *database.Tx) error {
 		var err error
 		blobs, err = database.AttachmentBlobIDs(ctx, tx, "record_type=? AND record_id=? AND name=?", kind, id, name)
 		if err != nil {

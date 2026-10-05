@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"strings"
 	"unicode"
 )
@@ -16,11 +15,11 @@ func SearchQuery(query string) string {
 	}, query)
 }
 func (d *DB) RecordSearch(ctx context.Context, user int64, query string) error {
-	return d.Transaction(ctx, func(tx *sql.Tx) error {
+	return d.Transaction(ctx, func(tx *Tx) error {
 		now := Stamp(d.Now())
 		var id int64
 		err := tx.QueryRowContext(ctx, "SELECT id FROM searches WHERE user_id=? AND query=? LIMIT 1", user, query).Scan(&id)
-		if err == sql.ErrNoRows {
+		if err == ErrNoRows {
 			result, e := tx.ExecContext(ctx, "INSERT INTO searches(user_id,query,created_at,updated_at) VALUES (?,?,?,?)", user, query, now, now)
 			if e != nil {
 				return e

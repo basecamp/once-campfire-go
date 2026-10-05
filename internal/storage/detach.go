@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
@@ -26,7 +25,7 @@ func (s *Store) Detach(ctx context.Context, kind string, id int64, name string) 
 		return fmt.Errorf("unsupported attachment record %q", kind)
 	}
 	var blobs []int64
-	err := s.DB.Transaction(ctx, func(tx *sql.Tx) error {
+	err := s.DB.Transaction(ctx, func(tx *database.Tx) error {
 		var err error
 		blobs, err = database.AttachmentBlobIDs(ctx, tx, "record_type=? AND record_id=? AND name=?", kind, id, name)
 		if err != nil || len(blobs) == 0 {

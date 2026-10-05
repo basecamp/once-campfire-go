@@ -7,8 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"runtime/pprof"
+	"strconv"
 	"syscall"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
@@ -55,7 +55,12 @@ func run() error {
 	}
 	storage := env("CAMPFIRE_STORAGE_PATH", "storage")
 	path := env("CAMPFIRE_DATABASE_PATH", filepath.Join(storage, "db", env("RAILS_ENV", "production")+".sqlite3"))
-	db, err := database.Open(path, max(1, runtime.GOMAXPROCS(0)))
+	// One reader connection per RAILS_MAX_THREADS (default 5), as the reference's db_readers.
+	readers, err := strconv.Atoi(env("RAILS_MAX_THREADS", "5"))
+	if err != nil {
+		return fmt.Errorf("RAILS_MAX_THREADS: %w", err)
+	}
+	db, err := database.Open(path, max(1, readers))
 	if err != nil {
 		return err
 	}

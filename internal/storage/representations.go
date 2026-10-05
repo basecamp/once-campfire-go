@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -94,7 +93,7 @@ func (s *Store) Analyze(ctx context.Context, b Blob) (Blob, error) {
 	if err != nil {
 		return b, err
 	}
-	err = s.DB.Transaction(ctx, func(tx *sql.Tx) error {
+	err = s.DB.Transaction(ctx, func(tx *database.Tx) error {
 		if _, err := tx.ExecContext(ctx, "UPDATE active_storage_blobs SET metadata=? WHERE id=?", string(raw), b.ID); err != nil {
 			return err
 		}
@@ -122,7 +121,7 @@ func (s *Store) Variant(ctx context.Context, b Blob, variation Variation) (Blob,
 	digest := v.Digest()
 	if existing, err := s.existingVariant(ctx, b.ID, digest); err == nil {
 		return existing, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	} else if !errors.Is(err, database.ErrNoRows) {
 		return Blob{}, err
 	}
 	format, err := v.Format()
@@ -203,7 +202,7 @@ func (s *Store) Variant(ctx context.Context, b Blob, variation Variation) (Blob,
 		return Blob{}, err
 	}
 	won := false
-	err = s.DB.Transaction(ctx, func(tx *sql.Tx) error {
+	err = s.DB.Transaction(ctx, func(tx *database.Tx) error {
 		result, err := tx.ExecContext(ctx, "INSERT INTO active_storage_variant_records(blob_id,variation_digest) VALUES (?,?) ON CONFLICT(blob_id,variation_digest) DO NOTHING", b.ID, digest)
 		if err != nil {
 			return err

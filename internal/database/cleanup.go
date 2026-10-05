@@ -2,12 +2,11 @@ package database
 
 import (
 	"context"
-	"database/sql"
 )
 
 // AttachmentBlobIDs is called inside the transaction that removes the attachment
 // rows; its result is dispatched only after that transaction commits.
-func AttachmentBlobIDs(ctx context.Context, tx *sql.Tx, condition string, args ...any) ([]int64, error) {
+func AttachmentBlobIDs(ctx context.Context, tx *Tx, condition string, args ...any) ([]int64, error) {
 	rows, err := tx.QueryContext(ctx, "SELECT DISTINCT blob_id FROM active_storage_attachments WHERE "+condition, args...)
 	if err != nil {
 		return nil, err

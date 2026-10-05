@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"slices"
 	"time"
@@ -19,7 +18,7 @@ func (d *DB) ReachableMessage(ctx context.Context, user, id int64) (Message, err
 		return Message{}, err
 	}
 	if len(messages) == 0 {
-		return Message{}, sql.ErrNoRows
+		return Message{}, ErrNoRows
 	}
 	return messages[0], nil
 }
@@ -81,7 +80,7 @@ func (d *DB) RefreshedMessages(ctx context.Context, room int64, since time.Time)
 	return
 }
 
-func messagePermission(ctx context.Context, tx *sql.Tx, user, id int64, administer bool) (room int64, err error) {
+func messagePermission(ctx context.Context, tx *Tx, user, id int64, administer bool) (room int64, err error) {
 	var creator int64
 	var role int
 	err = tx.QueryRowContext(ctx, "SELECT m.room_id,m.creator_id,u.role FROM messages m JOIN memberships member ON member.room_id=m.room_id JOIN users u ON u.id=member.user_id WHERE m.id=? AND u.id=? AND u.status=0", id, user).Scan(&room, &creator, &role)
@@ -90,7 +89,7 @@ func messagePermission(ctx context.Context, tx *sql.Tx, user, id int64, administ
 	}
 	return
 }
-func touchMessage(ctx context.Context, tx *sql.Tx, id, room int64, now string) error {
+func touchMessage(ctx context.Context, tx *Tx, id, room int64, now string) error {
 	if _, err := tx.ExecContext(ctx, "UPDATE messages SET updated_at=? WHERE id=?", now, id); err != nil {
 		return err
 	}
@@ -111,7 +110,7 @@ func (d *DB) UpdateMessageWithUpload(ctx context.Context, user, id int64, body *
 		defer staged.Discard()
 	}
 	var purged []int64
-	err := d.Transaction(ctx, func(tx *sql.Tx) error {
+	err := d.Transaction(ctx, func(tx *Tx) error {
 		room, err := messagePermission(ctx, tx, user, id, true)
 		if err != nil {
 			return err
@@ -119,12 +118,12 @@ func (d *DB) UpdateMessageWithUpload(ctx context.Context, user, id int64, body *
 		now := Stamp(d.Now())
 		changed := false
 		if body != nil {
-			var old sql.NullString
+			var old NullString
 			err = tx.QueryRowContext(ctx, "SELECT body FROM action_text_rich_texts WHERE record_type='Message' AND record_id=? AND name='body'", id).Scan(&old)
-			if err != nil && err != sql.ErrNoRows {
+			if err != nil && err != ErrNoRows {
 				return err
 			}
-			if err == sql.ErrNoRows {
+			if err == ErrNoRows {
 				_, err = tx.ExecContext(ctx, "INSERT INTO action_text_rich_texts(name,record_type,record_id,body,created_at,updated_at) VALUES ('body','Message',?,?,?,?)", id, *body, now, now)
 				changed = true
 			} else if !old.Valid || old.String != *body {
@@ -182,7 +181,7 @@ func (d *DB) RemoveBannedMessage(ctx context.Context, id int64) error {
 }
 func (d *DB) deleteMessage(ctx context.Context, user, id int64, checkPermission bool) error {
 	var blobs []int64
-	err := d.Transaction(ctx, func(tx *sql.Tx) error {
+	err := d.Transaction(ctx, func(tx *Tx) error {
 		var room int64
 		var err error
 		if checkPermission {
@@ -247,7 +246,7 @@ func (d *DB) Boosts(ctx context.Context, message int64) ([]Boost, error) {
 func (d *DB) CreateBoost(ctx context.Context, user, message int64, content string) (Boost, error) {
 	now := d.Now()
 	b := Boost{MessageID: message, BoosterID: user, Content: content, CreatedAt: now, UpdatedAt: now}
-	err := d.Transaction(ctx, func(tx *sql.Tx) error {
+	err := d.Transaction(ctx, func(tx *Tx) error {
 		room, err := messagePermission(ctx, tx, user, message, false)
 		if err != nil {
 			return err
@@ -270,7 +269,7 @@ func (d *DB) CreateBoost(ctx context.Context, user, message int64, content strin
 	return b, err
 }
 func (d *DB) DeleteBoost(ctx context.Context, user, message, id int64) error {
-	return d.Transaction(ctx, func(tx *sql.Tx) error {
+	return d.Transaction(ctx, func(tx *Tx) error {
 		room, err := messagePermission(ctx, tx, user, message, false)
 		if err != nil {
 			return err
@@ -284,7 +283,7 @@ func (d *DB) DeleteBoost(ctx context.Context, user, message, id int64) error {
 			return err
 		}
 		if n == 0 {
-			return sql.ErrNoRows
+			return ErrNoRows
 		}
 		return touchMessage(ctx, tx, message, room, Stamp(d.Now()))
 	})
@@ -301,7 +300,7 @@ func (d *DB) Message(ctx context.Context, id int64) (Message, error) {
 		return Message{}, err
 	}
 	if len(messages) == 0 {
-		return Message{}, sql.ErrNoRows
+		return Message{}, ErrNoRows
 	}
 	return messages[0], nil
 }

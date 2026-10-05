@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -31,13 +30,13 @@ func TestMessageLifecyclePermissionsAndSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.ReachableMessage(ctx, outsider.ID, message.ID); !errors.Is(err, sql.ErrNoRows) {
+	if _, err = d.ReachableMessage(ctx, outsider.ID, message.ID); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("private message: %v", err)
 	}
-	if _, err = d.CreateBoost(ctx, outsider.ID, message.ID, "hidden"); !errors.Is(err, sql.ErrNoRows) {
+	if _, err = d.CreateBoost(ctx, outsider.ID, message.ID, "hidden"); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("private boost: %v", err)
 	}
-	if _, err = d.UpdateMessage(ctx, outsider.ID, message.ID, "hidden", "hidden"); !errors.Is(err, sql.ErrNoRows) {
+	if _, err = d.UpdateMessage(ctx, outsider.ID, message.ID, "hidden", "hidden"); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("private edit: %v", err)
 	}
 	other, err := d.CreateMessage(ctx, owner.ID, room.ID, "", "admin message", "admin message")
@@ -65,7 +64,7 @@ func TestMessageLifecyclePermissionsAndSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = d.DeleteBoost(ctx, owner.ID, message.ID, boost.ID); !errors.Is(err, sql.ErrNoRows) {
+	if err = d.DeleteBoost(ctx, owner.ID, message.ID, boost.ID); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("admin cannot delete someone else's boost: %v", err)
 	}
 	if err = d.DeleteBoost(ctx, member.ID, message.ID, boost.ID); err != nil {
@@ -105,7 +104,7 @@ func TestRoomConversionAndDeactivation(t *testing.T) {
 	if err = d.UpdateRoom(ctx, room.ID, "Rooms::Closed", "Private", []int64{owner.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.Room(ctx, member.ID, room.ID); !errors.Is(err, sql.ErrNoRows) {
+	if _, err = d.Room(ctx, member.ID, room.ID); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("revoked room access: %v", err)
 	}
 	if err = d.UpdateRoom(ctx, room.ID, "Rooms::Open", "Shared", nil); err != nil {
@@ -129,10 +128,10 @@ func TestRoomConversionAndDeactivation(t *testing.T) {
 	if err = d.DeactivateUser(ctx, member.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.SessionUser(ctx, token); !errors.Is(err, sql.ErrNoRows) {
+	if _, err = d.SessionUser(ctx, token); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("revoked session: %v", err)
 	}
-	if _, err = d.Room(ctx, member.ID, room.ID); !errors.Is(err, sql.ErrNoRows) {
+	if _, err = d.Room(ctx, member.ID, room.ID); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("deactivated shared membership: %v", err)
 	}
 	if _, err = d.Room(ctx, member.ID, direct.ID); err != nil {
