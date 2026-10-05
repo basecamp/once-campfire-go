@@ -99,7 +99,7 @@ func init() {
 	}
 }
 func (s *Server) routeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/cable" {
+	if r.URL.Path == "/cable" || r.URL.Path == "/debug/cache-stats" {
 		s.mux.ServeHTTP(w, r)
 		return
 	}

@@ -34,6 +34,8 @@ const MaxBody = 16 << 20
 
 type Server struct {
 	fragments  *fragmentCache
+	pages      *renderedPages
+	stats      cacheStats
 	Webhooks   *integrations.WebhookClient
 	Jobs       *jobs.Runner
 	Push       *integrations.PushSender
@@ -140,7 +142,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 			return nil, fmt.Errorf("invalid CAMPFIRE_FRAGMENT_CACHE_MB %q", raw)
 		}
 	}
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), pages: newRenderedPages(cacheMB << 20), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -159,6 +161,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 	s.mux.HandleFunc("GET /cable", s.auth(s.serveCable))
 	s.mux.HandleFunc("GET /up", s.health)
 	s.mux.HandleFunc("GET /up.json", s.health)
+	s.mux.HandleFunc("GET /debug/cache-stats", s.cacheStats)
 	s.mux.HandleFunc("GET /session/new", s.browserCheck(s.loginForm))
 	s.mux.HandleFunc("POST /session", s.browserCheck(s.login))
 	s.mux.HandleFunc("DELETE /session", s.auth(s.logout))
@@ -327,6 +330,10 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, HealthBody)
 }
+func (s *Server) cacheStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(s.cacheSnapshot())
+}
 func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, status int, p page) {
 	if name != "incompatible-browser" && respondFormat(w, r, "html") == "" {
 		return
@@ -413,13 +420,12 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 		p.ReturnRoom, _ = s.lastRoom(r, p.User.ID)
 	}
 	if name == "room" && recorded != nil {
-		shell, marker, err := s.roomShell(p)
+		entry, err := s.roomShellEntry(p)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		writeRecorded(w, status, shell, marker, *recorded)
+		writeRoom(w, r, status, entry, *recorded, p.LoadedAt)
 		return
 	}
 	sidebarKey := ""
@@ -792,7 +798,18 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 		s.fail(w, err)
 		return
 	}
-	if err = s.templates.ExecuteTemplate(b, "messages", page{Messages: views}); err != nil {
+	direct := true
+	for _, view := range views {
+		if view.Fragment == "" {
+			direct = false
+			break
+		}
+	}
+	if direct {
+		for _, view := range views {
+			b.WriteString(string(view.Fragment))
+		}
+	} else if err = s.templates.ExecuteTemplate(b, "messages", page{Messages: views}); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -813,6 +830,11 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 	}
 }
 func (s *Server) sidebar(w http.ResponseWriter, r *http.Request, u database.User) {
+	userGen, contentGen := s.DB.UserGeneration(u.ID)
+	key := fmt.Sprintf("sb/%d/%d/%d/%d/%d/%t", u.ID, u.Role, u.UpdatedAt.UnixMicro(), userGen, contentGen, r.Header.Get("Turbo-Frame") != "")
+	if s.writeCached(w, r, "sidebar", key) {
+		return
+	}
 	items, err := s.sidebarRooms(r.Context(), u)
 	if err != nil {
 		s.fail(w, err)
@@ -824,6 +846,7 @@ func (s *Server) sidebar(w http.ResponseWriter, r *http.Request, u database.User
 		return
 	}
 	s.render(w, r, "sidebar", 200, page{Placeholders: placeholders, SidebarRooms: items, User: u, RoomsStream: s.Secrets.SignStream("rooms"), UserRoomsStream: s.Secrets.SignStream(rails.UserRoomsStream(u.ID))})
+	s.saveCached(w, key)
 }
 func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User) {
 	q := database.SearchQuery(r.FormValue("q"))
@@ -840,7 +863,12 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 			s.fail(w, err)
 			return
 		}
+		s.DB.Changed()
 		http.Redirect(w, r, "/searches", 302)
+		return
+	}
+	key := fmt.Sprintf("se/%d/%d/%d/%d/%s/%t", u.ID, u.Role, u.UpdatedAt.UnixMicro(), s.DB.ContentGeneration(), q, r.Header.Get("Turbo-Frame") != "")
+	if s.writeCached(w, r, "search", key) {
 		return
 	}
 	recent, err := s.DB.RecentSearches(r.Context(), u.ID)
@@ -859,6 +887,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 		return
 	}
 	s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Rooms: rooms, Messages: viewMessages(messages), RecentSearches: recent})
+	s.saveCached(w, key)
 }
 
 func (s *Server) serveCable(w http.ResponseWriter, r *http.Request, u database.User) {

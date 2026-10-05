@@ -28,6 +28,7 @@ type DB struct {
 	Read                *readPool
 	Write               *sql.DB
 	Now                 func() time.Time
+	reads               *readState
 }
 
 func Open(path string, readers int) (*DB, error) {
@@ -77,7 +78,7 @@ func Open(path string, readers int) (*DB, error) {
 		}
 		now = func() time.Time { return frozen }
 	}
-	return &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, Now: now}, nil
+	return &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, Now: now, reads: newReadState()}, nil
 }
 func (d *DB) Close() error     { return errors.Join(d.Read.Close(), d.Write.Close()) }
 func Stamp(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05.000000") }

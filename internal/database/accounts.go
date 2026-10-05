@@ -19,11 +19,18 @@ type Account struct {
 }
 
 func (d *DB) Account(ctx context.Context) (Account, error) {
+	if a, ok := d.cachedAccount(); ok {
+		return a, nil
+	}
 	var a Account
 	var settings string
 	err := d.Read.QueryRowContext(ctx, "SELECT id,name,join_code,coalesce(custom_styles,''),coalesce(settings,'{}'),updated_at,EXISTS(SELECT 1 FROM active_storage_attachments WHERE record_type='Account' AND record_id=accounts.id AND name='logo') FROM accounts ORDER BY id LIMIT 1").Scan(&a.ID, &a.Name, &a.JoinCode, &a.CustomStyles, &settings, timestamp{&a.UpdatedAt}, &a.HasLogo)
+	if err != nil {
+		return a, err
+	}
 	a.Settings = json.RawMessage(settings)
-	return a, err
+	d.storeAccount(a)
+	return a, nil
 }
 func (a Account) RestrictRooms() bool {
 	var s struct {
@@ -34,7 +41,7 @@ func (a Account) RestrictRooms() bool {
 }
 func (d *DB) UpdateAccount(ctx context.Context, name *string, styles *string, restrict *bool, resetJoin bool, uploads ...BlobStager) error {
 	var id int64
-	return d.recordWithUpload(ctx, "Account", &id, uploads, func(tx *sql.Tx) error {
+	err := d.recordWithUpload(ctx, "Account", &id, uploads, func(tx *sql.Tx) error {
 		var settings string
 		if err := tx.QueryRowContext(ctx, "SELECT id,coalesce(settings,'{}') FROM accounts ORDER BY id LIMIT 1").Scan(&id, &settings); err != nil {
 			return err
@@ -70,6 +77,11 @@ func (d *DB) UpdateAccount(ctx context.Context, name *string, styles *string, re
 		_, err := tx.ExecContext(ctx, "UPDATE accounts SET "+strings.Join(sets, ",")+" WHERE id=?", args...)
 		return err
 	})
+	if err == nil {
+		d.clearAccount()
+		d.changed()
+	}
+	return err
 }
 func RandomToken(length int) string {
 	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"

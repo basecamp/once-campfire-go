@@ -17,7 +17,9 @@ type fragmentEntry struct {
 	bytes                       int
 	digest                      [32]byte
 	payload                     []byte
+	gzip, zstd                  []byte
 	messageMarker, loadedMarker string
+	slots                       []shellSlot
 }
 type fragmentCache struct {
 	mu           sync.Mutex
@@ -61,7 +63,14 @@ func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
 	var payload []byte
 	if strings.HasPrefix(key, "message-list/") {
 		payload = []byte(html)
-		size += len(payload)
+		if len(payload) >= 1024 {
+			entry.gzip = gzipMember(payload)
+			entry.zstd = zstdMember(payload)
+		}
+		size += len(payload) + len(entry.gzip) + len(entry.zstd)
+	}
+	for _, slot := range entry.slots {
+		size += len(slot.data) + len(slot.gzip) + len(slot.zstd)
 	}
 	if size > c.limit/4 {
 		return entry

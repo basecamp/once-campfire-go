@@ -125,6 +125,7 @@ func (d *DB) CreateRoom(ctx context.Context, creator int64, kind, name string, u
 	if err != nil {
 		return room, err
 	}
+	d.changed()
 	err = d.Read.QueryRowContext(ctx, "SELECT id,creator_id,coalesce(name,''),type,updated_at FROM rooms WHERE id=?", room.ID).Scan(&room.ID, &room.CreatorID, &room.Name, &room.Type, timestamp{&room.UpdatedAt})
 	return room, err
 }
@@ -188,12 +189,16 @@ func (d *DB) UpdateRoom(ctx context.Context, id int64, kind, name string, users 
 		}
 		return nil
 	})
-	if err == nil && d.ResetConnections != nil {
+	if err != nil {
+		return err
+	}
+	d.changed()
+	if d.ResetConnections != nil {
 		for _, user := range revoked {
 			d.ResetConnections(user)
 		}
 	}
-	return err
+	return nil
 }
 func (d *DB) DeleteRoom(ctx context.Context, id int64) error {
 	var blobs []int64
@@ -219,6 +224,7 @@ func (d *DB) DeleteRoom(ctx context.Context, id int64) error {
 	})
 	if err == nil {
 		d.PurgeDetached(blobs)
+		d.noteDelete(id)
 	}
 	return err
 }
@@ -242,10 +248,11 @@ func (d *DB) SetInvolvement(ctx context.Context, user, room int64, value string)
 	if count == 0 {
 		return sql.ErrNoRows
 	}
+	d.noteUser(user)
 	return nil
 }
 func (d *DB) Presence(ctx context.Context, user, room int64, action string) error {
-	return d.Transaction(ctx, func(tx *sql.Tx) error {
+	err := d.Transaction(ctx, func(tx *sql.Tx) error {
 		now := d.Now()
 		stamp, cutoff := Stamp(now), Stamp(now.Add(-60*time.Second))
 		var query string
@@ -267,6 +274,10 @@ func (d *DB) Presence(ctx context.Context, user, room int64, action string) erro
 		_, err := tx.ExecContext(ctx, query, cutoff, stamp, user, room)
 		return err
 	})
+	if err == nil && action == "present" {
+		d.noteUser(user)
+	}
+	return err
 }
 
 // OriginalRoom follows Room.original (creation order, not the fixture ID order).

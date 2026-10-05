@@ -92,6 +92,69 @@ func TestCacheVariantsLimitsAndCookies(t *testing.T) {
 		t.Fatal("large URI was cached")
 	}
 }
+func TestCacheServesCompressedAndIdentity(t *testing.T) {
+	var calls atomic.Int32
+	body := "<html>" + strings.Repeat("room ", 400) + "</html>"
+	c := NewCache(8<<20, 1<<20)
+	handler := c.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Cache-Control", "public, max-age=30")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("ETag", `"room"`)
+		io.WriteString(w, body)
+	}))
+	request := func(path, encoding string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", path, nil)
+		if encoding != "" {
+			r.Header.Set("Accept-Encoding", encoding)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	// A miss streams the handler's identity body. The compressed copies are
+	// stored beside it and served on the next request, so the outer compressor
+	// can skip a hit.
+	first := request("/room", "gzip")
+	if first.Header().Get("X-Cache") != "miss" || first.Header().Get("Content-Encoding") != "" || first.Body.String() != body {
+		t.Fatal(first.Header(), first.Body.Len())
+	}
+	gzipped := request("/room", "gzip")
+	if gzipped.Header().Get("X-Cache") != "hit" || gzipped.Header().Get("Content-Encoding") != "gzip" || calls.Load() != 1 {
+		t.Fatal(gzipped.Header(), calls.Load())
+	}
+	reader, err := gzip.NewReader(gzipped.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil || string(raw) != body {
+		t.Fatalf("gzip body: %q %v", raw, err)
+	}
+	plain := request("/room", "")
+	if plain.Header().Get("X-Cache") != "hit" || plain.Header().Get("Content-Encoding") != "" || plain.Body.String() != body || calls.Load() != 1 {
+		t.Fatalf("identity hit changed the body or recalled the handler: %s %d", plain.Header(), calls.Load())
+	}
+	if hits, misses := c.Stats(); hits != 2 || misses != 1 {
+		t.Fatalf("cache stats hits=%d misses=%d", hits, misses)
+	}
+
+	small := "<html>tiny</html>"
+	smallHandler := c.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Cache-Control", "public, max-age=30")
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, small)
+	}))
+	r := httptest.NewRequest("GET", "/small", nil)
+	r.Header.Set("Accept-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	smallHandler.ServeHTTP(w, r)
+	if w.Header().Get("Content-Encoding") != "" || w.Body.String() != small {
+		t.Fatalf("small body was compressed: %s %q", w.Header(), w.Body.String())
+	}
+}
+
 func TestHTTP2AndShutdown(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
