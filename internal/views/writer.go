@@ -2,6 +2,7 @@ package views
 
 import (
 	"crypto/sha256"
+	"io"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -66,6 +67,27 @@ func (p *RecordedPage) AppendTo(b []byte) []byte {
 		position = placed.Offset
 	}
 	return append(b, p.Text[position:]...)
+}
+
+// WriteTo writes the page's bytes to w, a text segment or fragment at a time.
+func (p *RecordedPage) WriteTo(w io.Writer) (int64, error) {
+	var total int64
+	write := func(b []byte) error {
+		n, err := w.Write(b)
+		total += int64(n)
+		return err
+	}
+	position := 0
+	for _, placed := range p.Fragments {
+		if err := write(p.Text[position:placed.Offset]); err != nil {
+			return total, err
+		}
+		if err := write(unsafe.Slice(unsafe.StringData(placed.Fragment.HTML), len(placed.Fragment.HTML))); err != nil {
+			return total, err
+		}
+		position = placed.Offset
+	}
+	return total, write(p.Text[position:])
 }
 
 // String is the page's bytes as a string.
