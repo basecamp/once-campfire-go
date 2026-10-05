@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/users/sidebars/rooms/_direct_placeholder.html; TODO: body{% endcomment %}
+{% func UsersSidebarsRoomsDirectPlaceholder(ctx *ViewContext, user *UserSummary) %}{% endfunc %}

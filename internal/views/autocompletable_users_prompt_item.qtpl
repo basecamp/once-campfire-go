@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/autocompletable/users/_prompt_item.html; TODO: body{% endcomment %}
+{% func AutocompletableUsersPromptItem(ctx *ViewContext, user *MentionUser) %}{% endfunc %}

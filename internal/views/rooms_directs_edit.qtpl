@@ -1,0 +1,4 @@
+{% comment %}reference/crates/views/templates/rooms/directs/edit.html; TODO: body{% endcomment %}
+{% func (p *RoomsDirectsEdit) Head() %}{% endfunc %}
+{% func (p *RoomsDirectsEdit) Nav() %}{% endfunc %}
+{% func (p *RoomsDirectsEdit) Content() %}{% endfunc %}

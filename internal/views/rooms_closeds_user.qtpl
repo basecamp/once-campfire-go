@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/rooms/closeds/_user.html; TODO: body{% endcomment %}
+{% func RoomsClosedsUser(ctx *ViewContext, form *ClosedFormView, user *UserView, selected bool) %}{% endfunc %}

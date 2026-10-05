@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/accounts/_invite.html; TODO: body{% endcomment %}
+{% func AccountsInvite(ctx *ViewContext, joinCode string) %}{% endfunc %}

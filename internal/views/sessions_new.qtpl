@@ -1,0 +1,3 @@
+{% comment %}reference/crates/views/templates/sessions/new.html; TODO: body{% endcomment %}
+{% func (p *SessionsNew) Head() %}{% endfunc %}
+{% func (p *SessionsNew) Content() %}{% endfunc %}

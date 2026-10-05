@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/users/sidebars/show.html; TODO: body{% endcomment %}
+{% func (p *UsersSidebarsShow) Content() %}{% endfunc %}

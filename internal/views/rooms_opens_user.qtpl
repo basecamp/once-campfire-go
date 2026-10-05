@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/rooms/opens/_user.html; TODO: body{% endcomment %}
+{% func RoomsOpensUser(ctx *ViewContext, form *OpenFormView, user *UserView) %}{% endfunc %}

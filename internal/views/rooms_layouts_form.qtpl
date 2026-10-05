@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/rooms/layouts/_form.html; TODO: body{% endcomment %}
+{% func RoomsLayoutsForm(ctx *ViewContext, room *FormRoom, canAdminister bool, kind RoomKind, content HTML) %}{% endfunc %}

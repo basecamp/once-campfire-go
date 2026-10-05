@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/users/sidebars/rooms/_direct.html; TODO: body{% endcomment %}
+{% func UsersSidebarsRoomsDirect(ctx *ViewContext, membership *SidebarDirect) %}{% endfunc %}

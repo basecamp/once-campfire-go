@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/rooms/closeds/_form.html; TODO: body{% endcomment %}
+{% func RoomsClosedsForm(ctx *ViewContext, form *ClosedFormView, typeChangePath string) %}{% endfunc %}

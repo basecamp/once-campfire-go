@@ -1,0 +1,5 @@
+{% comment %}reference/crates/views/templates/accounts/edit.html; TODO: body{% endcomment %}
+{% func (p *AccountsEdit) Head() %}{% endfunc %}
+{% func (p *AccountsEdit) Nav() %}{% endfunc %}
+{% func (p *AccountsEdit) Content() %}{% endfunc %}
+{% func (p *AccountsEdit) Footer() %}{% endfunc %}

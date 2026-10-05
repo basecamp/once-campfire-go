@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/accounts/users/_user.html; TODO: body{% endcomment %}
+{% func AccountsUsersUser(ctx *ViewContext, user *UserSummary) %}{% endfunc %}

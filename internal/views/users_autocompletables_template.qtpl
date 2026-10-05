@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/users/autocompletables/_template.html; TODO: body{% endcomment %}
+{% func UsersAutocompletablesTemplate(ctx *ViewContext) %}{% endfunc %}

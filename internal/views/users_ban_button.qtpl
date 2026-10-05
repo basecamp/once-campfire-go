@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/users/_ban_button.html; TODO: body{% endcomment %}
+{% func UsersBanButton(ctx *ViewContext, user *UserSummary) %}{% endfunc %}

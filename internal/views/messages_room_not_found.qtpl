@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/messages/room_not_found.html; TODO: body{% endcomment %}
+{% func MessagesRoomNotFound() %}{% endfunc %}

@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/rooms/show/_invitation.html; TODO: body{% endcomment %}
+{% func RoomsShowInvitation(ctx *ViewContext, joinCode string) %}{% endfunc %}

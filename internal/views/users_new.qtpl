@@ -1,0 +1,4 @@
+{% comment %}reference/crates/views/templates/users/new.html; TODO: body{% endcomment %}
+{% func (p *UsersNew) Head() %}{% endfunc %}
+{% func (p *UsersNew) Nav() %}{% endfunc %}
+{% func (p *UsersNew) Content() %}{% endfunc %}

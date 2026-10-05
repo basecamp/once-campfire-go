@@ -1,0 +1,6 @@
+{% comment %}reference/crates/views/templates/searches/index.html; TODO: body{% endcomment %}
+{% func (p *SearchesIndex) Head() %}{% endfunc %}
+{% func (p *SearchesIndex) Nav() %}{% endfunc %}
+{% func (p *SearchesIndex) Sidebar() %}{% endfunc %}
+{% func (p *SearchesIndex) Content() %}{% endfunc %}
+{% func (p *SearchesIndex) Footer() %}{% endfunc %}

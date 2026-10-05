@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/rooms/opens/_form.html; TODO: body{% endcomment %}
+{% func RoomsOpensForm(ctx *ViewContext, form *OpenFormView, typeChangePath string) %}{% endfunc %}

@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/messages/destroy.turbo_stream.html; TODO: body{% endcomment %}
+{% func MessagesDestroyTurboStream(message *MessageView) %}{% endfunc %}

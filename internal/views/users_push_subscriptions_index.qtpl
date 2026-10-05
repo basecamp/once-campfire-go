@@ -1,0 +1,4 @@
+{% comment %}reference/crates/views/templates/users/push_subscriptions/index.html; TODO: body{% endcomment %}
+{% func (p *UsersPushSubscriptionsIndex) Head() %}{% endfunc %}
+{% func (p *UsersPushSubscriptionsIndex) Nav() %}{% endfunc %}
+{% func (p *UsersPushSubscriptionsIndex) Content() %}{% endfunc %}

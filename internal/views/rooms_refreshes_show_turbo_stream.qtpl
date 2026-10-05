@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/rooms/refreshes/show.turbo_stream.html; TODO: body{% endcomment %}
+{% func RoomsRefreshesShowTurboStream(ctx *ViewContext, refresh *RefreshView) %}{% endfunc %}

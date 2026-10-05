@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/users/_mention.html; TODO: body{% endcomment %}
+{% func UsersMention(ctx *ViewContext, user *MentionUser) %}{% endfunc %}

@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/users/avatars/show.svg; TODO: body{% endcomment %}
+{% func UsersAvatarsShowSvg(userID int64, initials string) %}{% endfunc %}

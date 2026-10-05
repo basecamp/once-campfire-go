@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/messages/_message.html; TODO: body{% endcomment %}
+{% func MessagesMessage(ctx *ViewContext, message *MessageView) %}{% endfunc %}

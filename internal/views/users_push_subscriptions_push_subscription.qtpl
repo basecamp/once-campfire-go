@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/users/push_subscriptions/_push_subscription.html; TODO: body{% endcomment %}
+{% func UsersPushSubscriptionsPushSubscription(ctx *ViewContext, pushSubscription *PushSubscription) %}{% endfunc %}

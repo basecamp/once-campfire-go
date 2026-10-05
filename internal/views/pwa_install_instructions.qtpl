@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/pwa/_install_instructions.html; TODO: body{% endcomment %}
+{% func PwaInstallInstructions(ctx *ViewContext) %}{% endfunc %}

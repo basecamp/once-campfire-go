@@ -1,0 +1,4 @@
+{% comment %}reference/crates/views/templates/accounts/bots/new.html; TODO: body{% endcomment %}
+{% func (p *AccountsBotsNew) Head() %}{% endfunc %}
+{% func (p *AccountsBotsNew) Nav() %}{% endfunc %}
+{% func (p *AccountsBotsNew) Content() %}{% endfunc %}

@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/rooms/opens/new.html; TODO: body{% endcomment %}
+{% func (p *RoomsOpensNew) RoomForm() %}{% endfunc %}

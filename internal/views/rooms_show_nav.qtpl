@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/rooms/show/_nav.html; TODO: body{% endcomment %}
+{% func RoomsShowNav(ctx *ViewContext, room *RoomView) %}{% endfunc %}

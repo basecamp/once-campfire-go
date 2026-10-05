@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/pwa/manifest.json; TODO: body{% endcomment %}
+{% func PwaManifestJson(accountName *string, logoPathSmall, logoPath, baseURL string, assetPath func(string) string) %}{% endfunc %}

@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/accounts/users/index.turbo_stream.html; TODO: body{% endcomment %}
+{% func AccountsUsersIndexTurboStream(ctx *ViewContext, users []UserSummary, nextPage *string) %}{% endfunc %}

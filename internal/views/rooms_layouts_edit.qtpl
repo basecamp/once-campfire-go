@@ -1,0 +1,4 @@
+{% comment %}reference/crates/views/templates/rooms/layouts/_edit.html; TODO: body{% endcomment %}
+{% func (p *RoomsLayoutsEdit) Head() %}{% endfunc %}
+{% func (p *RoomsLayoutsEdit) Nav() %}{% endfunc %}
+{% func (p *RoomsLayoutsEdit) Content() %}{% endfunc %}

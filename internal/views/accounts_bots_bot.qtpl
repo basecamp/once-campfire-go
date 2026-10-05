@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/accounts/bots/_bot.html; TODO: body{% endcomment %}
+{% func AccountsBotsBot(ctx *ViewContext, bot *Bot) %}{% endfunc %}

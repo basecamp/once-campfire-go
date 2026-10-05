@@ -1,0 +1,4 @@
+{% comment %}reference/crates/views/templates/accounts/custom_styles/edit.html; TODO: body{% endcomment %}
+{% func (p *AccountsCustomStylesEdit) Head() %}{% endfunc %}
+{% func (p *AccountsCustomStylesEdit) Nav() %}{% endfunc %}
+{% func (p *AccountsCustomStylesEdit) Content() %}{% endfunc %}

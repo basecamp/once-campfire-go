@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/users/profiles/_membership.html; TODO: body{% endcomment %}
+{% func UsersProfilesMembership(ctx *ViewContext, membership *ProfileMembership) %}{% endfunc %}

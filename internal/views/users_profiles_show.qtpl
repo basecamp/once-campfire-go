@@ -1,0 +1,4 @@
+{% comment %}reference/crates/views/templates/users/profiles/show.html; TODO: body{% endcomment %}
+{% func (p *UsersProfilesShow) Head() %}{% endfunc %}
+{% func (p *UsersProfilesShow) Nav() %}{% endfunc %}
+{% func (p *UsersProfilesShow) Content() %}{% endfunc %}

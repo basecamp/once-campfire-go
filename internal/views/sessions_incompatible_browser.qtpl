@@ -1,0 +1,3 @@
+{% comment %}reference/crates/views/templates/sessions/incompatible_browser.html; TODO: body{% endcomment %}
+{% func (p *SessionsIncompatibleBrowser) Head() %}{% endfunc %}
+{% func (p *SessionsIncompatibleBrowser) Content() %}{% endfunc %}

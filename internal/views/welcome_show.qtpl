@@ -1,0 +1,4 @@
+{% comment %}reference/crates/views/templates/welcome/show.html; TODO: body{% endcomment %}
+{% func (p *WelcomeShow) Head() %}{% endfunc %}
+{% func (p *WelcomeShow) Sidebar() %}{% endfunc %}
+{% func (p *WelcomeShow) Content() %}{% endfunc %}

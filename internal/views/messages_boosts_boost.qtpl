@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/messages/boosts/_boost.html; TODO: body{% endcomment %}
+{% func MessagesBoostsBoost(ctx *ViewContext, boost *BoostView) %}{% endfunc %}

@@ -1,0 +1,6 @@
+{% comment %}reference/crates/views/templates/rooms/show.html; TODO: body{% endcomment %}
+{% func (p *RoomsShow) Head() %}{% endfunc %}
+{% func (p *RoomsShow) Nav() %}{% endfunc %}
+{% func (p *RoomsShow) Sidebar() %}{% endfunc %}
+{% func (p *RoomsShow) Content() %}{% endfunc %}
+{% func (p *RoomsShow) Footer() %}{% endfunc %}

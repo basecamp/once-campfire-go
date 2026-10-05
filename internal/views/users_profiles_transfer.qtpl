@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/users/profiles/_transfer.html; TODO: body{% endcomment %}
+{% func UsersProfilesTransfer(ctx *ViewContext, user *UserSummary, transferID string) %}{% endfunc %}

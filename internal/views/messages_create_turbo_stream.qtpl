@@ -1,0 +1,2 @@
+{% comment %}reference/crates/views/templates/messages/create.turbo_stream.html; TODO: body{% endcomment %}
+{% func MessagesCreateTurboStream(ctx *ViewContext, message MessageItem, roomKind RoomKind) %}{% endfunc %}
