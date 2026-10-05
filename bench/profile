@@ -4,27 +4,28 @@ import argparse,importlib.machinery,importlib.util,json,os,shutil,sqlite3,subpro
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 loader=importlib.machinery.SourceFileLoader('upgrade',str(ROOT/'bin/check-upgrade'));spec=importlib.util.spec_from_loader(loader.name,loader);u=importlib.util.module_from_spec(spec);loader.exec_module(u)
-p=argparse.ArgumentParser();p.add_argument('workload',choices=['sidebar','room','search','avatar','write','cable']);p.add_argument('--out',type=Path,required=True);p.add_argument('--seconds',type=int,default=10);a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True)
+p=argparse.ArgumentParser();p.add_argument('workload',choices=['sidebar','room','messages','search','avatar','write','cable']);p.add_argument('--out',type=Path,required=True);p.add_argument('--seconds',type=int,default=10);p.add_argument('--server-cpus',default='8-11');p.add_argument('--loadgen-cpus',default='12-15');p.add_argument('--workers',default='4');a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True)
 rust=ROOT.parent/'once-campfire-rust';seed=rust/'parity/.seed/default';labels=json.load(open(seed/'labels.json'))
 env=os.environ.copy()
 for line in (rust/'parity/.env.reference').read_text().splitlines():
  if line and not line.startswith('#') and '=' in line:k,v=line.split('=',1);env[k]=v
-env.update(DISABLE_SSL='1',TARGET_BIND='127.0.0.1',GOMAXPROCS='4',TMPDIR=str(ROOT/'.cache/tmp'),GO_CPU_PROFILE=str((a.out/(a.workload+'.pprof')).resolve()))
-os.sched_setaffinity(0,{8,9,10,11})
+env.update(DISABLE_SSL='1',TARGET_BIND='127.0.0.1',GOMAXPROCS=a.workers,RAILS_MAX_THREADS=a.workers,TMPDIR=str(ROOT/'.cache/tmp'),GO_CPU_PROFILE=str((a.out/(a.workload+'.pprof')).resolve()))
+cpus=lambda spec:{c for part in spec.split(',') for c in (range(int(part.split('-')[0]),int(part.split('-')[-1])+1))}
+os.sched_setaffinity(0,cpus(a.server_cpus))
 with tempfile.TemporaryDirectory(dir=ROOT/'.cache/tmp',prefix='profile-') as tmp:
  work=Path(tmp);db=work/'db.sqlite3'
  with sqlite3.connect(seed/'db/production.sqlite3') as src,sqlite3.connect(db) as dst:src.backup(dst)
  shutil.copytree(seed/'storage',work/'storage/files');env.update(CAMPFIRE_DATABASE_PATH=str(db),CAMPFIRE_STORAGE_PATH=str(work/'storage'),CAMPFIRE_FILES_PATH=str(work/'storage/files'))
  with u.server(ROOT/'campfire',env,work,'profile') as base:
   cookie=u.login(base,labels);room=labels['rooms.watercooler']
-  lg=['taskset','-c','12-15',str(rust/'target/bench/release/loadgen')]
+  lg=['taskset','-c',a.loadgen_cpus,str(rust/'target/bench/release/loadgen')]
   if a.workload=='cable':
    scrape=json.loads(subprocess.check_output(lg+['scrape','--base',base,'--cookie',cookie,'--room',str(room)]))
    cmd=['cable','--clients','1000','--room',str(room),'--streams',','.join(scrape['streams']),'--csrf',scrape['csrf'] or '', '--tput-secs',str(a.seconds),'--deflate','0']
   else:
    cmd=['http','--conc','16','--duration',str(a.seconds),'--gzip','0']
    if a.workload=='write':cmd+=['--post-room',str(labels['rooms.hq'])]
-   else:cmd+=['--path',{'sidebar':'/users/me/sidebar','room':f'/rooms/{room}','search':'/searches?q=coffee','avatar':f'/users/{labels["avatar_tokens.jason"]}/avatar'}[a.workload]]
+   else:cmd+=['--path',{'sidebar':'/users/me/sidebar','room':f'/rooms/{room}','search':'/searches?q=coffee','avatar':f'/users/{labels["avatar_tokens.jason"]}/avatar','messages':f'/rooms/{room}/messages?before={labels["messages.busy_060"]}'}[a.workload]]
   result=subprocess.check_output(lg+cmd+['--base',base,'--cookie',cookie],text=True)
   (a.out/(a.workload+'.json')).write_text(result)
   print(result)
