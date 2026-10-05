@@ -13,6 +13,7 @@ import (
 type router struct{ routes []route }
 type route struct {
 	method  string
+	prefix  string
 	pattern *regexp.Regexp
 	names   []string
 	handler http.HandlerFunc
@@ -38,14 +39,19 @@ func (m *router) HandleFunc(pattern string, handler http.HandlerFunc) {
 			parts[i] = regexp.QuoteMeta(part)
 		}
 	}
-	m.routes = append(m.routes, route{method, regexp.MustCompile("^" + strings.Join(parts, "/") + "$"), names, handler})
+	prefix, _, _ := strings.Cut(path, "{")
+	m.routes = append(m.routes, route{method: method, prefix: prefix, pattern: regexp.MustCompile("^" + strings.Join(parts, "/") + "$"), names: names, handler: handler})
 }
 func (m *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.EscapedPath()
 	for _, route := range m.routes {
 		if route.method != r.Method && !(r.Method == "HEAD" && route.method == "GET") {
 			continue
 		}
-		values := route.pattern.FindStringSubmatch(r.URL.EscapedPath())
+		if !strings.HasPrefix(path, route.prefix) {
+			continue
+		}
+		values := route.pattern.FindStringSubmatch(path)
 		if values == nil {
 			continue
 		}

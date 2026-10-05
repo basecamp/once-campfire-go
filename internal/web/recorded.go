@@ -8,6 +8,7 @@ import (
 	"html/template"
 
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
@@ -18,9 +19,14 @@ import (
 
 func (s *Server) messageList(ctx context.Context, messages []database.Message) (fragmentEntry, error) {
 	var key strings.Builder
+	key.Grow(13 + len(messages)*40)
 	key.WriteString("message-list/")
+	var number [32]byte
 	for _, message := range messages {
-		key.WriteString(messageCacheKey(message))
+		key.WriteString("message/")
+		key.Write(strconv.AppendInt(number[:0], message.UpdatedAt.UnixMicro(), 10))
+		key.WriteByte('/')
+		key.Write(strconv.AppendInt(number[:0], message.ID, 10))
 		key.WriteByte('/')
 	}
 	if entry, ok := s.fragments.entry(key.String()); ok {
@@ -35,11 +41,14 @@ func (s *Server) messageList(ctx context.Context, messages []database.Message) (
 		body.WriteString(string(view.Fragment))
 	}
 	html := template.HTML(body.String())
-	s.fragments.put(key.String(), html)
-	if entry, ok := s.fragments.entry(key.String()); ok {
-		return entry, nil
+	etag, modified := messageValidators(messages, false)
+	frameETag, _ := messageValidators(messages, true)
+	entry := s.fragments.putEntry(fragmentEntry{key: key.String(), html: html, messageETag: etag, frameETag: frameETag, modified: modified})
+	if entry.payload == nil {
+		entry.payload = []byte(html)
+		entry.digest = sha256.Sum256(entry.payload)
 	}
-	return fragmentEntry{html: html, digest: sha256.Sum256([]byte(html))}, nil
+	return entry, nil
 }
 
 func writeRecorded(w http.ResponseWriter, status int, rendered, marker string, fragment fragmentEntry) {
@@ -53,6 +62,33 @@ func writeRecorded(w http.ResponseWriter, status int, rendered, marker string, f
 		payload = []byte(fragment.html)
 	}
 	parts := [][]byte{[]byte(before), payload, []byte(after)}
+	digests := [][32]byte{sha256.Sum256(parts[0]), fragment.digest, sha256.Sum256(parts[2])}
+	writeParts(w, status, parts, digests)
+}
+
+func writePageShell(w http.ResponseWriter, status int, shell fragmentEntry, loadedAt string, fragment fragmentEntry) {
+	parts := make([][]byte, 0, len(shell.shell))
+	digests := make([][32]byte, 0, len(shell.shell))
+	stamp := []byte(loadedAt)
+	stampDigest := sha256.Sum256(stamp)
+	for _, part := range shell.shell {
+		payload, digest := part.payload, part.digest
+		switch part.slot {
+		case 1:
+			payload, digest = fragment.payload, fragment.digest
+			if payload == nil {
+				payload = []byte(fragment.html)
+			}
+		case 2:
+			payload, digest = stamp, stampDigest
+		}
+		parts = append(parts, payload)
+		digests = append(digests, digest)
+	}
+	writeParts(w, status, parts, digests)
+}
+
+func writeParts(w http.ResponseWriter, status int, parts [][]byte, digests [][32]byte) {
 	if w.Header().Get("ETag") == "" {
 		// Like Rust's Body::Parts, digest boundaries and cached fragment hashes.
 		hash := sha256.New()
@@ -60,11 +96,7 @@ func writeRecorded(w http.ResponseWriter, status int, rendered, marker string, f
 			var size [8]byte
 			binary.LittleEndian.PutUint64(size[:], uint64(len(part)))
 			hash.Write(size[:])
-			digest := fragment.digest
-			if i != 1 {
-				digest = sha256.Sum256(part)
-			}
-			hash.Write(digest[:])
+			hash.Write(digests[i][:])
 		}
 		w.Header().Set("ETag", fmt.Sprintf("W/\"%x\"", hash.Sum(nil)[:16]))
 	}

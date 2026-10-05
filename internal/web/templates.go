@@ -66,12 +66,11 @@ func parseTemplates(secrets *rails.Secrets) (*template.Template, error) {
 		"stylesheets": func() template.HTML { return assets.Stylesheets },
 		"importmap":   func() template.HTML { return assets.Importmap },
 		"avatar": func(id int64, updated ...time.Time) string {
-			token := secrets.SignedID("User", id, "avatar", time.Time{})
-			path := fmt.Sprintf("/users/%s/avatar", token)
-			if len(updated) > 0 && !updated[0].IsZero() {
-				path += "?v=" + updated[0].UTC().Format("20060102150405")
+			var stamp time.Time
+			if len(updated) > 0 {
+				stamp = updated[0]
 			}
-			return path
+			return avatarPath(secrets, id, stamp)
 		},
 		"versionTime": func(t time.Time) string { return t.UTC().Format("20060102150405") },
 		"epoch":       func(t time.Time) string { return fmt.Sprintf("%d", t.UnixMilli()) },

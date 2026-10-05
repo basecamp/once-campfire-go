@@ -9,10 +9,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type fragmentEntry struct {
 	key                         string
+	shell                       []shellPart
+	messageETag, frameETag      string
+	modified                    time.Time
 	html                        template.HTML
 	bytes                       int
 	digest                      [32]byte
@@ -57,7 +61,10 @@ func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
 		c.order.MoveToFront(e)
 		return e.Value.(fragmentEntry)
 	}
-	size := len(key) + len(html) + len(entry.messageMarker) + len(entry.loadedMarker) + 240
+	size := len(key) + len(html) + len(entry.messageMarker) + len(entry.loadedMarker) + len(entry.messageETag) + len(entry.frameETag) + 240
+	for _, part := range entry.shell {
+		size += len(part.payload) + 80
+	}
 	var payload []byte
 	if strings.HasPrefix(key, "message-list/") {
 		payload = []byte(html)
@@ -81,7 +88,7 @@ func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
 	return entry
 }
 func messageCacheKey(message database.Message) string {
-	return "message/" + database.Stamp(message.UpdatedAt) + "/" + strconv.FormatInt(message.ID, 10)
+	return "message/" + strconv.FormatInt(message.UpdatedAt.UnixMicro(), 10) + "/" + strconv.FormatInt(message.ID, 10)
 }
 func (s *Server) messageItems(ctx context.Context, messages []database.Message) ([]messageView, error) {
 	views := viewMessages(messages)

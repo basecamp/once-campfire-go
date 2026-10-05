@@ -128,9 +128,17 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 - The response cache uses least-recently-used eviction instead of Rust's sampled eviction. The Go
   message-fragment cache is also independently implemented. It retains versioned message lists
   and sidebar HTML; current membership and permission data are read before cache lookup.
-  Room pages also cache their surrounding HTML keyed by fresh page data, inserting the current
+  Room and search pages cache their surrounding HTML keyed by fresh page data, inserting the current
   messages and refresh timestamp on every request. Responses assemble cached message bytes with fresh page HTML and derive validators from part
   lengths and hashes, so ETag values differ from both the original Go implementation and Rust.
+- Decoded SQL snapshots are bounded and invalidated by SQLite `data_version`, including external
+  commits. Authentication and individual room authorization continue to query current rows.
+- Message rendering compiles scalar slots from `html/template`, retaining standard escaping and
+  URL filtering. Boosts and changed template checksums fall back to general template execution.
+- All eight quick reactions share one form per message; each button submits its own value.
+- SQLite uses `database/sql` connection serialization. WAL checkpoints use a separate connection
+  at 1,000 pending pages or one second, with a 10,000-page restart and automatic backstop.
+  `synchronous=NORMAL` is retained; checkpoint timing changes the power-loss exposure window.
 - The default version label and fallback VAPID subject identify `once-campfire-go`. Explicit version,
   VAPID keys and subject settings remain supported.
 - Native host media output can differ with installed library versions. All byte-golden media tests

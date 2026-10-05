@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -19,11 +20,21 @@ type Account struct {
 }
 
 func (d *DB) Account(ctx context.Context) (Account, error) {
-	var a Account
-	var settings string
-	err := d.Read.QueryRowContext(ctx, "SELECT id,name,join_code,coalesce(custom_styles,''),coalesce(settings,'{}'),updated_at,EXISTS(SELECT 1 FROM active_storage_attachments WHERE record_type='Account' AND record_id=accounts.id AND name='logo') FROM accounts ORDER BY id LIMIT 1").Scan(&a.ID, &a.Name, &a.JoinCode, &a.CustomStyles, &settings, timestamp{&a.UpdatedAt}, &a.HasLogo)
-	a.Settings = json.RawMessage(settings)
-	return a, err
+	accounts, err := snapshotRows(d, ctx, `SELECT json_group_array(json(value)) FROM (
+		SELECT json_object('ID',id,'Name',name,'JoinCode',join_code,'CustomStyles',coalesce(custom_styles,''),
+			'Settings',coalesce(settings,'{}'),'UpdatedAt',updated_at,'HasLogo',
+			EXISTS(SELECT 1 FROM active_storage_attachments WHERE record_type='Account' AND record_id=accounts.id AND name='logo')) AS value
+		FROM accounts ORDER BY id LIMIT 1
+	)`, decodeAccounts)
+	if err != nil {
+		return Account{}, err
+	}
+	if len(accounts) == 0 {
+		return Account{}, sql.ErrNoRows
+	}
+	a := accounts[0]
+	a.Settings = slices.Clone(a.Settings)
+	return a, nil
 }
 func (a Account) RestrictRooms() bool {
 	var s struct {
@@ -259,11 +270,15 @@ func (d *DB) BannedIP(ctx context.Context, ip string) (bool, error) {
 	return n > 0, err
 }
 func (d *DB) RefreshSession(ctx context.Context, token, agent, ip string) (bool, error) {
-	now := d.Now()
 	var active time.Time
 	if err := d.Read.QueryRowContext(ctx, "SELECT last_active_at FROM sessions WHERE token=?", token).Scan(timestamp{&active}); err != nil {
 		return false, err
 	}
+	return d.refreshSession(ctx, token, agent, ip, active)
+}
+
+func (d *DB) refreshSession(ctx context.Context, token, agent, ip string, active time.Time) (bool, error) {
+	now := d.Now()
 	if !active.Before(now.Add(-time.Hour)) {
 		return false, nil
 	}
@@ -289,37 +304,17 @@ func (d *DB) AccountUsers(ctx context.Context, includeBanned bool) ([]User, erro
 }
 
 func (d *DB) RoomMembers(ctx context.Context, room int64) ([]User, error) {
-	rows, err := d.Read.QueryContext(ctx, "SELECT "+userColumns+" FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.room_id=?", room)
-	if err != nil {
-		return nil, err
-	}
-	return usersRows(rows)
+	return snapshotRows(d, ctx, "SELECT json_group_array(json(value)) FROM (SELECT "+userJSON+" AS value FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.room_id=?)", decodeUsers, room)
 }
 
 func (d *DB) DirectPlaceholders(ctx context.Context, user int64) ([]User, error) {
-	rows, err := d.Read.QueryContext(ctx, "SELECT DISTINCT user_id FROM memberships WHERE room_id IN (SELECT r.id FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE r.type='Rooms::Direct' AND m.user_id=?)", user)
-	if err != nil {
-		return nil, err
-	}
-	ids := []any{}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	ids = append(ids, user)
-	marks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	rows, err = d.Read.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM users u WHERE u.status=0 AND u.id NOT IN (%s) ORDER BY u.created_at ASC LIMIT %d", userColumns, marks, max(0, 20-len(ids))), ids...)
-	if err != nil {
-		return nil, err
-	}
-	return usersRows(rows)
+	return snapshotRows(d, ctx, `WITH direct_users AS (
+		SELECT DISTINCT user_id FROM memberships WHERE room_id IN (
+			SELECT r.id FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE r.type='Rooms::Direct' AND m.user_id=?
+		)
+	), excluded AS (SELECT user_id AS id FROM direct_users UNION ALL SELECT ?)
+	SELECT json_group_array(json(value)) FROM (
+		SELECT `+userJSON+` AS value FROM users u WHERE u.status=0 AND u.id NOT IN (SELECT id FROM excluded)
+		ORDER BY u.created_at ASC LIMIT max(0,20-(SELECT count(*) FROM excluded))
+	)`, decodeUsers, user, user)
 }

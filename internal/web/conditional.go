@@ -33,6 +33,12 @@ func notModified(w http.ResponseWriter, r *http.Request, etag string, modified t
 	return fresh
 }
 func messageFreshness(w http.ResponseWriter, r *http.Request, messages []database.Message) bool {
+	etag, modified := messageValidators(messages, r.Header.Get("Turbo-Frame") != "")
+	return setMessageFreshness(w, r, etag, modified)
+}
+
+func messageValidators(messages []database.Message, frame bool) (string, time.Time) {
+
 	parts := make([]string, 0, len(messages)+2)
 	var modified time.Time
 	for _, m := range messages {
@@ -42,12 +48,16 @@ func messageFreshness(w http.ResponseWriter, r *http.Request, messages []databas
 			modified = m.UpdatedAt
 		}
 	}
-	if r.Header.Get("Turbo-Frame") != "" {
+	if frame {
 		parts = append(parts, "frame")
 	}
 	parts = append(parts, "messages/index")
 	hash := sha256.Sum256([]byte(strings.Join(parts, "/")))
 	etag := fmt.Sprintf("W/\"%x\"", hash[:16])
+	return etag, modified
+}
+
+func setMessageFreshness(w http.ResponseWriter, r *http.Request, etag string, modified time.Time) bool {
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Last-Modified", modified.UTC().Format(http.TimeFormat))
 	w.Header().Set("Cache-Control", "max-age=0, private, must-revalidate")

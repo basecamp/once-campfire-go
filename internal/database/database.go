@@ -22,6 +22,8 @@ var migrations = []string{"20231215043540", "20231220143106", "20240110071740", 
 
 // A single writer prevents pool starvation while WAL readers proceed independently.
 type DB struct {
+	snapshots           *snapshotCache
+	checkpoints         *checkpointer
 	ResetConnections    func(int64)
 	PurgeBlobs          func([]int64)
 	RemoveBannedContent func(int64)
@@ -42,10 +44,10 @@ func Open(path string, readers int) (*DB, error) {
 		return nil, err
 	}
 	uri := (&url.URL{Scheme: "file", Path: path}).String()
-	options := "?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_cache_size=2000"
+	options := "?_mutex=no&_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_cache_size=2000"
 	// Reuse transaction statements on the single writer connection. The driver
-	// resets bindings on reuse; results and authorization are never cached.
-	w, err := sql.Open("sqlite3", uri+options+"&_txlock=immediate&_stmt_cache_size=64")
+	// resets bindings on reuse; statement reuse does not cache results or authorization.
+	w, err := sql.Open("campfire-writer", uri+options+"&_txlock=immediate&_stmt_cache_size=64")
 	if err != nil {
 		return nil, err
 	}
@@ -65,8 +67,7 @@ func Open(path string, readers int) (*DB, error) {
 	r.SetMaxOpenConns(readers)
 	r.SetMaxIdleConns(readers)
 	if err = r.Ping(); err != nil {
-		r.Close()
-		return fail(err)
+		return fail(errors.Join(err, r.Close()))
 	}
 	now := time.Now
 	if raw := os.Getenv("CAMPFIRE_FROZEN_TIME"); raw != "" {
@@ -77,9 +78,23 @@ func Open(path string, readers int) (*DB, error) {
 		}
 		now = func() time.Time { return frozen }
 	}
-	return &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, Now: now}, nil
+	checkpoints, err := startCheckpoints(uri)
+	if err != nil {
+		return fail(errors.Join(err, r.Close()))
+	}
+	// Observation is separate from the query pool, so a single reader cannot
+	// deadlock on a cache miss. Match its parallelism to the application readers.
+	snapshots, err := openSnapshots(uri+options+"&mode=ro&_query_only=on", readers)
+	if err != nil {
+		checkpoints.close()
+		return fail(errors.Join(err, r.Close()))
+	}
+	return &DB{snapshots: snapshots, checkpoints: checkpoints, Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, Now: now}, nil
 }
-func (d *DB) Close() error     { return errors.Join(d.Read.Close(), d.Write.Close()) }
+func (d *DB) Close() error {
+	d.checkpoints.close()
+	return errors.Join(d.snapshots.close(), d.Read.Close(), d.Write.Close())
+}
 func Stamp(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05.000000") }
 func (d *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := d.Write.BeginTx(ctx, nil)

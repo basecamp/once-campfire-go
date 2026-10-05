@@ -2,8 +2,10 @@ package web
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"html/template"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -25,6 +27,19 @@ func TestRoomShellPreservesBytesAndRequestData(t *testing.T) {
 		if actual != expected.String() {
 			t.Fatal("cached room shell differs from uncached template")
 		}
+		entry, err := app.pageShellEntry("room", p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := httptest.NewRecorder()
+		buffered := &responseBuffer{ResponseWriter: response}
+		fragment := fragmentEntry{html: p.MessagesHTML, digest: sha256.Sum256([]byte(p.MessagesHTML))}
+		writePageShell(buffered, 200, entry, p.LoadedAt, fragment)
+		buffered.finish(httptest.NewRequest("GET", "/", nil))
+		if response.Body.String() != expected.String() {
+			t.Fatal("page parts changed bytes")
+		}
+
 	}
 	check(base)
 	check(base)
