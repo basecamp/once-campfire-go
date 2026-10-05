@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/engine"
 	"github.com/basecamp/once-campfire-go/internal/front"
 	"github.com/basecamp/once-campfire-go/internal/rails"
 	"github.com/basecamp/once-campfire-go/internal/web"
@@ -73,5 +74,15 @@ func run() error {
 	defer app.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return front.Serve(ctx, front.FromEnv(), app)
+
+	// Encoding composition (engine design §3.2): the engine wraps the legacy
+	// handler, which keeps the exact bodyLimit(Deflate(app)) chain, and
+	// front.Serve skips its own Deflate wrap. Engine-owned routes encode
+	// themselves; fallback routes stay byte-identical to the pre-engine chain.
+	mode := engine.ParseMode(os.Getenv("CAMPFIRE_ENGINE"))
+	slog.Info("engine", "mode", mode)
+	root := engine.New(front.Deflate(app), engine.Config{Mode: mode})
+	config := front.FromEnv()
+	config.SkipDeflate = true
+	return front.Serve(ctx, config, root)
 }
