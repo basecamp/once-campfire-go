@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 )
 
@@ -218,6 +219,158 @@ func TestAssembleNilPieceIsError(t *testing.T) {
 	}
 	if etag != ([32]byte{}) {
 		t.Fatalf("ETag on error = %x, want zero", etag)
+	}
+}
+
+// TestAssembleGzipRejectsRawOnlyPiece: a piece with raw bytes but no member
+// must fail gzip assembly loudly rather than contributing an empty member and
+// silently truncating the body. Identity assembly needs only Raw, so it still
+// renders the piece; an empty raw with a nil member is a no-op under both.
+func TestAssembleGzipRejectsRawOnlyPiece(t *testing.T) {
+	rawOnly := NewEntry([]byte("raw only"), nil)
+	tail := NewEntry([]byte("tail"), mustMember(t, []byte("tail")))
+
+	dst := []byte("keep")
+	out, etag, err := Assemble(dst, Gzip, rawOnly, tail)
+	if err != errNoMember {
+		t.Fatalf("Assemble(Gzip) err = %v, want errNoMember", err)
+	}
+	if !bytes.Equal(out, dst) {
+		t.Fatalf("dst changed on error: %q", out)
+	}
+	if etag != ([32]byte{}) {
+		t.Fatalf("ETag on error = %x, want zero", etag)
+	}
+
+	identity, _, err := Assemble(nil, Identity, rawOnly, tail)
+	if err != nil {
+		t.Fatalf("Assemble(Identity) with a raw-only piece: %v", err)
+	}
+	if want := []byte("raw onlytail"); !bytes.Equal(identity, want) {
+		t.Fatalf("Identity = %q, want %q", identity, want)
+	}
+
+	empty := NewEntry(nil, nil)
+	gzipOut, _, err := Assemble(nil, Gzip, empty, tail)
+	if err != nil {
+		t.Fatalf("Assemble(Gzip) with an empty piece: %v", err)
+	}
+	if !bytes.Equal(gzipOut, tail.Member) {
+		t.Fatal("an empty piece changed the gzip assembly")
+	}
+	identityOut, _, err := Assemble(nil, Identity, empty, tail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(identityOut, []byte("tail")) {
+		t.Fatalf("Identity = %q, want %q", identityOut, "tail")
+	}
+}
+
+// TestETagOfMatchesAssembleAndValidates: the ETag-only entry point (304 path)
+// returns exactly the digest Assemble returns and rejects the sets Assemble's
+// gzip encoding rejects. Identity assembly is the documented exception for a
+// raw-only piece, because raw bytes are all it needs.
+func TestETagOfMatchesAssembleAndValidates(t *testing.T) {
+	pieces, _ := fixturePieces(t)
+	want, err := ETagOf(pieces...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, encoding := range []Encoding{Identity, Gzip} {
+		_, got, err := Assemble(nil, encoding, pieces...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("%s ETag = %x, ETagOf = %x", encoding, got, want)
+		}
+	}
+
+	good := pieces[0]
+	if _, err := ETagOf(); err != errNoPieces {
+		t.Fatalf("ETagOf() err = %v, want errNoPieces", err)
+	}
+	if _, err := ETagOf(good, nil); err != errNilPiece {
+		t.Fatalf("ETagOf(nil piece) err = %v, want errNilPiece", err)
+	}
+	rawOnly := NewEntry([]byte("raw only"), nil)
+	if _, err := ETagOf(rawOnly); err != errNoMember {
+		t.Fatalf("ETagOf(raw-only) err = %v, want errNoMember", err)
+	}
+	if _, _, err := Assemble(nil, Gzip, rawOnly); err != errNoMember {
+		t.Fatalf("Assemble(Gzip, raw-only) err = %v, want errNoMember", err)
+	}
+	if _, _, err := Assemble(nil, Identity, rawOnly); err != nil {
+		t.Fatalf("Assemble(Identity, raw-only) err = %v, want nil", err)
+	}
+}
+
+// TestETagStableAcrossDynamicPieces pins the engine's room-route ETag scheme:
+// the validator covers the cache-stable pieces (shell + message list), not the
+// per-request loadedAt piece. Legacy's room ETag moves on every request because
+// loadedAt lives inside its hashed "before" part; exact parity would mean
+// hashing ~100 KB per request, which the design forbids. The room-route
+// differential therefore masks ETag as an intentional difference.
+func TestETagStableAcrossDynamicPieces(t *testing.T) {
+	cache := New(1 << 20)
+	raws := [][]byte{
+		[]byte("<!doctype html><html><body>"),
+		[]byte(`<main id="messages">` + strings.Repeat("<div>message</div>", 32)),
+		[]byte("</main></body></html>"),
+	}
+	keys := []string{"room/1/shell/v7", "room/1/messages/v42", "room/1/tail/v7"}
+	cached := make([]*Entry, len(raws))
+	for i, raw := range raws {
+		entry, ok := cache.Put(keys[i], raw, mustMember(t, raw))
+		if !ok {
+			t.Fatalf("Put(%s) rejected", keys[i])
+		}
+		cached[i] = entry
+	}
+
+	loadedAt := func(stamp string) *Entry {
+		raw := []byte(`<span data-loaded-at="` + stamp + `"></span>`)
+		return NewEntry(raw, mustMember(t, raw))
+	}
+	scene := func(dynamic *Entry) []*Entry {
+		return []*Entry{cached[0], dynamic, cached[1], cached[2]}
+	}
+
+	stable, err := ETagOf(cached...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := ETagOf(cached...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stable != again {
+		t.Fatal("ETagOf over cache-stable pieces is not stable")
+	}
+
+	body1, bodyTag1, err := Assemble(nil, Gzip, scene(loadedAt("2026-10-06T10:00:00Z"))...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body2, bodyTag2, err := Assemble(nil, Gzip, scene(loadedAt("2026-10-06T10:00:01Z"))...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(body1, body2) {
+		t.Fatal("fixture error: bodies must differ when loadedAt differs")
+	}
+	if bodyTag1 == bodyTag2 {
+		t.Fatal("fixture error: Assemble's whole-body digest must move with loadedAt")
+	}
+	for i, body := range [][]byte{body1, body2} {
+		decoded, err := decodeMember(body)
+		if err != nil {
+			t.Fatalf("scene %d: %v", i, err)
+		}
+		if !bytes.HasPrefix(decoded, raws[0]) || !bytes.HasSuffix(decoded, raws[2]) {
+			t.Fatalf("scene %d decoded body lost a cache-stable piece", i)
+		}
 	}
 }
 

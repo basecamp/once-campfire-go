@@ -20,19 +20,29 @@ func benchRaw(size int, seed int64) []byte {
 	return buf
 }
 
-// BenchmarkGet measures a warm hit: map lookup, LRU touch, immutable view.
+// BenchmarkGet measures warm hits over a rotating key set, so every iteration
+// also churns the LRU order: map lookup, MoveToFront, immutable view.
 // Contract: 0 allocs/op.
 func BenchmarkGet(b *testing.B) {
 	cache := New(64 << 20)
-	raw := benchRaw(80<<10, 1)
-	if _, ok := cache.Put("room/1/messages/v42", raw, mustMember(b, raw)); !ok {
-		b.Fatal("Put rejected the benchmark entry")
+	keys := []string{
+		"room/1/shell/v7",
+		"room/1/messages/v42",
+		"room/1/tail/v7",
+		"room/2/shell/v3",
+		"room/2/messages/v9",
+	}
+	for i, key := range keys {
+		raw := benchRaw(16<<10, int64(i+1))
+		if _, ok := cache.Put(key, raw, mustMember(b, raw)); !ok {
+			b.Fatalf("Put(%s) rejected", key)
+		}
 	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		benchSinkEntry = cache.Get("room/1/messages/v42")
+		benchSinkEntry = cache.Get(keys[i%len(keys)])
 	}
 	if benchSinkEntry == nil {
 		b.Fatal("Get missed")

@@ -15,6 +15,14 @@
 //   - X-Request-Start: front.forward stamps the request arrival time per
 //     exchange.
 //
+// Gzip differential cases compare decoded bodies. The engine assembles a
+// multi-member gzip body (one member per piece; RFC 1952 §2.2 concatenation)
+// where the legacy handler emits a single member, so the encoded bytes and
+// Content-Length differ even for semantically identical responses. Decompress
+// both bodies before the byte comparison, and mask validators (ETag) whose
+// values come from the engine's cache-stable piece scheme rather than legacy's
+// per-request hash.
+//
 // Callers with other per-exchange fields append them to Pair.Mask; everything
 // else is returned untouched for byte comparison.
 //

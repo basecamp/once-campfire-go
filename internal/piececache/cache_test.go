@@ -167,10 +167,24 @@ func TestPutRejectsOversizedEntry(t *testing.T) {
 	member := mustMember(t, raw)
 	size := memberSize("key", raw, member)
 
-	// limit/4 is one byte under the entry's charged size: reject.
+	// limit/4 is one byte under the entry's charged size: not cached, but the
+	// caller still gets a valid immutable entry to serve this response.
 	cache := New(size*4 - 1)
-	if entry, ok := cache.Put("key", raw, member); ok || entry != nil {
-		t.Fatalf("Put accepted size %d over limit/4 of %d", size, size*4-1)
+	entry, ok := cache.Put("key", raw, member)
+	if ok {
+		t.Fatalf("Put cached size %d over limit/4 of %d", size, size*4-1)
+	}
+	if entry == nil {
+		t.Fatal("rejected Put returned no entry; callers need it to serve the rendered piece")
+	}
+	if !bytes.Equal(entry.Raw, raw) || !bytes.Equal(entry.Member, member) {
+		t.Fatal("rejected Put returned an entry that does not match the input")
+	}
+	if want := sha256.Sum256(raw); entry.Digest != want {
+		t.Fatalf("rejected Put digest = %x, want %x", entry.Digest, want)
+	}
+	if len(entry.Raw) > 0 && &entry.Raw[0] == &raw[0] {
+		t.Fatal("rejected Put returned an entry aliasing the caller's buffer")
 	}
 	if got := cache.Get("key"); got != nil {
 		t.Fatal("rejected entry was stored")
@@ -289,7 +303,8 @@ func TestPutReplacesSameKeyAccounting(t *testing.T) {
 }
 
 // TestPutRejectedReplacementKeepsOld: a replacement that cannot be cached is
-// all-or-nothing; the previous entry stays.
+// all-or-nothing; the previous entry stays, and the oversized piece is still
+// returned (uncached) for this response.
 func TestPutRejectedReplacementKeepsOld(t *testing.T) {
 	cache := New(1 << 20) // limit/4 = 256 KiB
 	raw := []byte("small")
@@ -297,8 +312,12 @@ func TestPutRejectedReplacementKeepsOld(t *testing.T) {
 		t.Fatal("Put rejected small entry")
 	}
 	big := bytes.Repeat([]byte("z"), 300<<10)
-	if entry, ok := cache.Put("k", big, mustMember(t, big)); ok || entry != nil {
-		t.Fatalf("oversized replacement accepted: %v", entry)
+	returned, ok := cache.Put("k", big, mustMember(t, big))
+	if ok {
+		t.Fatalf("oversized replacement cached: %v", returned)
+	}
+	if returned == nil || !bytes.Equal(returned.Raw, big) {
+		t.Fatalf("oversized replacement returned %v, want the uncached entry", returned)
 	}
 	got := cache.Get("k")
 	if got == nil || !bytes.Equal(got.Raw, raw) {
@@ -309,8 +328,12 @@ func TestPutRejectedReplacementKeepsOld(t *testing.T) {
 func TestZeroLimitDisablesStorage(t *testing.T) {
 	cache := New(0)
 	raw := []byte("data")
-	if entry, ok := cache.Put("k", raw, mustMember(t, raw)); ok || entry != nil {
-		t.Fatalf("Put on disabled cache = %v, %v; want nil, false", entry, ok)
+	entry, ok := cache.Put("k", raw, mustMember(t, raw))
+	if ok {
+		t.Fatal("Put cached into a disabled cache")
+	}
+	if entry == nil || !bytes.Equal(entry.Raw, raw) {
+		t.Fatalf("disabled Put returned %v; want an uncached entry to serve", entry)
 	}
 	if got := cache.Get("k"); got != nil {
 		t.Fatalf("disabled cache returned %v", got)

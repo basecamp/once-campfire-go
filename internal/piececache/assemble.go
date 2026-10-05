@@ -6,7 +6,8 @@ import (
 	"errors"
 )
 
-// Encoding selects the wire form Assemble produces.
+// Encoding selects the wire form Assemble produces. The zero value is
+// Identity.
 type Encoding uint8
 
 const (
@@ -33,6 +34,7 @@ func (e Encoding) String() string {
 var (
 	errNoPieces = errors.New("piececache: assemble with no pieces")
 	errNilPiece = errors.New("piececache: assemble with a nil piece")
+	errNoMember = errors.New("piececache: gzip piece has raw bytes but no member")
 	errEncoding = errors.New("piececache: unknown encoding")
 )
 
@@ -51,15 +53,22 @@ var (
 // W/"<hex of the low 16 bytes>"; this returns the full 32-byte digest so a
 // caller can also use it for 304 validation.
 //
+// The digest returned covers exactly the pieces passed. When the body also
+// contains per-request dynamic pieces (loadedAt), take the response validator
+// from ETagOf over the cache-stable subset instead — see ETagOf for the
+// engine's room-route ETag semantics.
+//
 // The digest pass is allocation-free for up to 8 pieces, covering the response
 // model's ~3-piece pages, by hashing a fixed 8×40-byte stack scratch. More than
 // 8 pieces uses a per-call scratch slice sized to the piece count; only the ≤8
 // path is gated at zero allocations.
 //
-// An empty piece list, a nil piece, or an unknown encoding returns an error
-// and leaves dst unchanged. (Empty lists are rejected rather than assembled to
-// zero bytes: a response assembled from nothing is a routing bug, and a silent
-// empty 200 would hide it.)
+// An empty piece list, a nil piece, an unknown encoding, or a gzip piece with
+// raw bytes but no member returns an error and leaves dst unchanged. (Empty
+// lists are rejected rather than assembled to zero bytes: a response assembled
+// from nothing is a routing bug, and a silent empty 200 would hide it. A
+// raw-only piece under gzip would silently drop its content, so it is rejected
+// rather than assembled without it; identity assembly can still render it.)
 func Assemble(dst []byte, encoding Encoding, pieces ...*Entry) ([]byte, [32]byte, error) {
 	if len(pieces) == 0 {
 		return dst, [32]byte{}, errNoPieces
@@ -73,6 +82,9 @@ func Assemble(dst []byte, encoding Encoding, pieces ...*Entry) ([]byte, [32]byte
 		case Identity:
 			total += len(piece.Raw)
 		case Gzip:
+			if len(piece.Raw) > 0 && len(piece.Member) == 0 {
+				return dst, [32]byte{}, errNoMember
+			}
 			total += len(piece.Member)
 		default:
 			return dst, [32]byte{}, errEncoding
@@ -100,6 +112,38 @@ func Assemble(dst []byte, encoding Encoding, pieces ...*Entry) ([]byte, [32]byte
 		}
 	}
 	return dst, etag, nil
+}
+
+// ETagOf returns the identity-record ETag digest for an ordered piece list
+// without assembling a body. It is the 304 path: a caller probes cache keys,
+// computes ETagOf over the cache-stable pieces it found, compares the digest
+// to If-None-Match, and only assembles when the validator does not match.
+//
+// The engine's ETag scheme covers cache-stable pieces only. Legacy's room ETag
+// moves on every request because loadedAt sits inside its hashed "before"
+// part; reproducing that would mean hashing roughly 100 KB per request, which
+// the design forbids. Callers therefore pass the pieces a version key
+// identifies — the room shell and message list — and exclude per-request
+// dynamic pieces (loadedAt); the room-route differential masks ETag as an
+// intentional difference. See Assemble for the full record formula.
+//
+// Validation is the common subset of Assemble's checks: an empty list and nil
+// pieces are errors, and so is a piece with raw bytes but no gzip member
+// (Assemble's gzip encoding rejects that set; identity assembly is the one
+// path that can still render a raw-only piece).
+func ETagOf(pieces ...*Entry) ([32]byte, error) {
+	if len(pieces) == 0 {
+		return [32]byte{}, errNoPieces
+	}
+	for _, piece := range pieces {
+		if piece == nil {
+			return [32]byte{}, errNilPiece
+		}
+		if len(piece.Raw) > 0 && len(piece.Member) == 0 {
+			return [32]byte{}, errNoMember
+		}
+	}
+	return etagOf(pieces), nil
 }
 
 // etagOf hashes the identity records: per piece, LE64(len(Raw)) then Digest.

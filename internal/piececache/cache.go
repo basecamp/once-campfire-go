@@ -1,6 +1,10 @@
 // Package piececache stores immutable, content-versioned response pieces —
 // raw bytes plus a complete gzip member of those bytes — in a byte-bounded LRU
-// and assembles ordered piece lists into a response without allocating.
+// and assembles ordered piece lists into a response with no allocation on the
+// warm path: up to eight pieces into a caller buffer with enough capacity
+// allocates nothing. Two documented exceptions: more than eight pieces uses
+// per-piece record scratch, and a caller buffer too small for the encoded
+// pieces grows once.
 //
 // Keys are content versions (a room's message version, a user's session
 // version), not URLs: an entry is never updated, so a version bump simply
@@ -8,7 +12,8 @@
 // NewEntry and Put are immutable; Get hands out the same pointer with no copy,
 // and a replacement under one key publishes a new entry instead of editing the
 // old one. Readers may keep and use an entry after it has been evicted or
-// replaced.
+// replaced. Immutability holds by convention: every reader shares one entry,
+// so a caller must never write through Entry.Raw or Entry.Member.
 //
 // No HTTP or template types cross this boundary: callers bring version strings
 // and complete gzip members, and take away bytes and a digest.
@@ -37,7 +42,9 @@ const entryOverhead = 240
 // ETag is computed from.
 //
 // Once published, an Entry is never mutated. NewEntry and Put take copies, so
-// the caller's buffers may be reused immediately afterwards.
+// the caller's buffers may be reused immediately afterwards. Immutability holds
+// by convention: callers must never write through Raw or Member, because every
+// reader of that key shares the same entry.
 type Entry struct {
 	// Raw is the uncompressed payload.
 	Raw []byte
@@ -102,21 +109,25 @@ func (c *Cache) Get(key string) *Entry {
 }
 
 // Put copies raw and member into a new immutable entry, computes the SHA-256
-// digest of raw, and publishes it under key, replacing any previous entry in
-// one lock acquisition. It reports false, with a nil entry and no change to
-// the cache, when the charged size — len(key) + len(raw) + len(member) +
-// entryOverhead — exceeds limit/4, so one piece can never thrash the whole
-// budget.
+// digest of raw, and — when it fits — publishes it under key, replacing any
+// previous entry in one lock acquisition. It reports false when the charged
+// size (len(key) + len(raw) + len(member) + entryOverhead) exceeds limit/4, so
+// one piece can never thrash the whole budget; the returned entry is still
+// valid and independent of the caller's buffers, it is simply not cached. A
+// rejected Put changes nothing in the cache, so an oversized replacement
+// leaves the previous entry in place.
 //
 // The copies and the digest are computed outside the mutex; only the map/list
 // swap is critical. A concurrent reader therefore observes either the old
 // entry or the new one, both complete — never a half-updated mix.
 func (c *Cache) Put(key string, raw, member []byte) (*Entry, bool) {
 	size := len(key) + len(raw) + len(member) + entryOverhead
-	if size > c.limit/4 {
-		return nil, false
-	}
 	entry := NewEntry(raw, member)
+	if size > c.limit/4 {
+		// Not cacheable, but the caller still needs the immutable piece for
+		// this response; return it uncached rather than forcing a re-copy.
+		return entry, false
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -147,7 +158,9 @@ func (c *Cache) Put(key string, raw, member []byte) (*Entry, bool) {
 // CAMPFIRE_FRAGMENT_CACHE_MB is unset, otherwise that many mebibytes. The key
 // is the one the legacy fragment cache reads (internal/web/server.go), so one
 // deployment knob sizes both caches independently; values outside [0, 1<<20]
-// or non-numeric are an error, exactly as the legacy parser treats them.
+// or non-numeric are an error, exactly as the legacy parser treats them. A
+// caller must treat the error as startup-fatal, mirroring web.New, rather than
+// serving with an unintended cache budget.
 func LimitFromEnv() (int, error) {
 	megabytes := DefaultLimit >> 20
 	if raw, ok := os.LookupEnv("CAMPFIRE_FRAGMENT_CACHE_MB"); ok {
