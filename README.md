@@ -99,50 +99,18 @@ Container verification exercises setup, a live SQLite backup, offline restore, a
 
 ## Benchmarks
 
-The [latest comparison](bench/results/optimization-next-20261003/README.md) measures the
-published Go version, the current Go version, and Rust in three rotating runs. Median
-requests/sec at 16 HTTP clients, with identical seed data and four application CPUs:
+Measured with 16 concurrent clients on an AMD Ryzen AI MAX+ 395,
+with four hardware threads allocated to each app.
 
-| Workload | Previous Go | Current Go | Change | Rust |
-|---|---:|---:|---:|---:|
-| Room page | 10,175 | 15,218 | +49.6% | 27,535 |
-| Message history | 21,445 | 21,369 | -0.4% | 31,139 |
-| Sidebar | 24,423 | 24,658 | +1.0% | 38,303 |
-| Search | 14,817 | 14,841 | +0.2% | 30,807 |
-| Post message | 4,025 | 5,036 | +25.1% | 7,740 |
+| HTTP workload (requests/sec) | Rails | [Django](https://github.com/basecamp/once-campfire-django) | [Laravel](https://github.com/basecamp/once-campfire-laravel) | [Express](https://github.com/basecamp/once-campfire-express) | [Elixir](https://github.com/basecamp/once-campfire-elixir) | [Go](https://github.com/basecamp/once-campfire-go) | [Rust](https://github.com/basecamp/once-campfire-rust) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Room page | 241 | 170 | 164 | 559 | 722 | 3,860 | 36,260 |
+| Messages page | 413 | 196 | 175 | 777 | 1,053 | 5,573 | 40,872 |
+| Sidebar | 552 | 615 | 715 | 4,125 | 1,275 | 19,753 | 34,672 |
+| Search | 435 | 315 | 305 | 1,294 | 1,156 | 7,053 | 33,299 |
+| Post a message | 273 | 154 | 137 | 256 | 801 | 4,767 | 6,896 |
 
-Room-page p99 latency fell from 5.69 to 4.14 ms; message-write p99 fell from 16.03 to
-12.49 ms. Rust remains 1.81× faster on room pages and 1.54× faster on writes. All nine
-application runs completed with zero HTTP errors, 345,913 acknowledged writes verified
-in both messages and FTS, and nine thumbnails with identical bytes. HTTP memory use was
-essentially unchanged. See the [raw report](bench/results/optimization-next-20261003/application/report.md)
-for ranges, latency, resource measurements and limitations.
-
-This focused pass did not remeasure Cable throughput. In the
-[earlier full-workload comparison](bench/results/application-optimized-20261003/report.md),
-compressed broadcasts to 10,000 clients measured 21.1 complete messages/sec for Go and
-39.3 for Rust. Final workload Pss was 1,023 MiB versus 408 MiB. Those measurements include
-large WebSocket workloads and must not be compared directly with the latest HTTP-only
-memory figures. The earlier run had zero HTTP errors and complete Cable delivery;
-[interrupted attempts](bench/results/application-optimized-20261003/CONTENTION.md) were
-excluded and restarted. The [first optimization report](bench/results/optimization-20261003/comparison.md)
-retains the original-port comparison.
-
-These numbers compare these implementations on this workstation, not languages in general.
-
-```sh
-# Build both release binaries and Rust's bench/loadgen; prepare its parity seed.
-bin/build
-bench/application --out bench/results/my-run --reps 3 --seconds 5 \
-  --concurrency 1 16 64 --cable-clients 100 1000 10000 --deflate 0 1
-```
-
-The harness alternates applications, uses fresh identical seed copies, fixes server/client CPU
-sets and four application workers, and warms each HTTP workload. It validates message/room IDs,
-static/avatar bytes, every successful write and FTS entry, complete Cable fan-out, and actual thumbnail
-bytes. Reports include raw samples, source/binary hashes, toolchains, load averages and limitations.
-HTTP measurements use the direct application listener and identity encoding; public TLS/compression
-throughput is not measured. `bench/health` remains available for the much narrower health-handler test.
+See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 
 ## Known differences
 
