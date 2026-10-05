@@ -32,6 +32,12 @@ func (p *AccountsBotsNew) Head() string {
 }
 
 func (p *AccountsBotsNew) StreamNav(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`  <div class="flex-item-justify-start">
+    `)
+	qw422016.N().S(string(LinkBackTo(p.Ctx, RouteAccountBots())))
+	qw422016.N().S(`
+  </div>
+`)
 }
 
 func (p *AccountsBotsNew) WriteNav(qq422016 qtio422016.Writer) {
@@ -49,6 +55,23 @@ func (p *AccountsBotsNew) Nav() string {
 }
 
 func (p *AccountsBotsNew) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`<section class="panel">
+`)
+	form := FormWith(RouteAccountBots()).Model("user").Class("flex flex-column gap")
+
+	qw422016.N().S(`  `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+    `)
+	StreamAccountsBotsForm(qw422016, p.Ctx, form, &p.Bot)
+	qw422016.N().S(`
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(FormWithBlock(capture1, form)))
+	qw422016.N().S(`</section>
+`)
 }
 
 func (p *AccountsBotsNew) WriteContent(qq422016 qtio422016.Writer) {

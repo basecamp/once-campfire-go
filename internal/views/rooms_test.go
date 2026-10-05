@@ -23,6 +23,24 @@ func TestNamesRoomsLikeRoomDisplayName(t *testing.T) {
 	}
 }
 
+func TestLowercasesLikeRust(t *testing.T) {
+	for in, want := range map[string]string{
+		"Kevin Mc":  "kevin mc",
+		"ΟΔΟΣ":      "οδος",
+		"ΟΔΟΣ ΣΑ":   "οδος σα",
+		"Σ":         "σ",
+		"A Σ":       "a σ",
+		"AΣ'":       "aς'",
+		"AΣ'B":      "aσ'b",
+		"İstanbul":  "i̇stanbul",
+		"ÉMILE Zoë": "émile zoë",
+	} {
+		if got := Lowercase(in); got != want {
+			t.Errorf("Lowercase(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestPostsRoomFormsToTheRoomsResource(t *testing.T) {
 	for _, c := range []struct {
 		id   *int64

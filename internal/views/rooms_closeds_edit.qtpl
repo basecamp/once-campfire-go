@@ -1,2 +1,2 @@
-{% comment %}reference/crates/views/templates/rooms/closeds/edit.html; TODO: body{% endcomment %}
-{% func (p *RoomsClosedsEdit) RoomForm() %}{% endfunc %}
+{% comment %}reference/crates/views/templates/rooms/closeds/edit.html{% endcomment %}
+{% func (p *RoomsClosedsEdit) RoomForm() %}{%= RoomsClosedsForm(p.Ctx, p.Form, RouteEditRoomsOpen(p.RoomID())) %}{% endfunc %}

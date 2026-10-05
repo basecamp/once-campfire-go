@@ -1,2 +1,19 @@
-{% comment %}reference/crates/views/templates/rooms/closeds/_user.html; TODO: body{% endcomment %}
-{% func RoomsClosedsUser(ctx *ViewContext, form *ClosedFormView, user *UserView, selected bool) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/rooms/closeds/_user.html{% endcomment %}
+{% func RoomsClosedsUser(ctx *ViewContext, form *ClosedFormView, user *UserView, selected bool) %}<li class="flex align-center gap margin-none" data-value="{%s Lowercase(user.Name) %}">
+  <figure class="avatar flex-item-no-shrink" style="--avatar-size: 4ch;">
+    <a title="{%s user.Title %}" class="btn avatar" data-turbo-frame="_top" href="{%s user.Path() %}"><img aria-hidden="true" loading="lazy" src="{%s user.AvatarURL %}" width="48" height="48" /></a>
+  </figure>
+
+  <div class="min-width">
+    <div class="overflow-ellipsis fill-shade"><strong>{%s user.Name %}</strong></div>
+  </div>
+
+  <hr class="separator" aria-hidden="true">{% if form.CanAdminister %}{% if user.ID == form.CurrentUserID && form.Room.ID == nil %}
+      <input type="hidden" name="user_ids[]" value="{%dl user.ID %}" />
+      <img class="colorize--black flex-item-no-shrink" aria-hidden="true" src="{%s ctx.Asset("check.svg") %}" width="20" height="20" />{% else %}
+      <label class="switch flex-item-no-shrink">
+        <input type="checkbox" name="user_ids[]" value="{%dl user.ID %}" class="switch__input"{% if selected %} checked="checked"{% endif %} />
+        <span class="switch__btn round"></span>
+        <span class="for-screen-reader">Give {%s user.Name %} access to this room</span>
+      </label>{% endif %}{% endif %}
+</li>{% endfunc %}

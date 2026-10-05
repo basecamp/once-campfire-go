@@ -15,6 +15,57 @@ var (
 )
 
 func StreamRoomsLayoutsForm(qw422016 *qt422016.Writer, ctx *ViewContext, room *FormRoom, canAdminister bool, kind RoomKind, content HTML) {
+	qw422016.N().S(`<form action="`)
+	qw422016.E().S(room.Action(kind))
+	qw422016.N().S(`" accept-charset="UTF-8" method="post">`)
+	if room.ID != nil {
+		qw422016.N().S(`<input type="hidden" name="_method" value="patch" />`)
+	} else {
+	}
+	qw422016.N().S(`
+  <div class="flex align-center gap">`)
+	if canAdminister {
+		qw422016.N().S(`
+      `)
+		qw422016.N().S(string(TranslationButton(ctx, "room_name")))
+		qw422016.N().S(`
+
+      <label class="flex-item-grow txt-large">
+        <input name="room[name]" id="room_name" class="input full-width" required="required" autofocus="autofocus" placeholder="Name the room" data-turbo-permanent="true" data-action="keydown.enter-&gt;form#submit:prevent" type="text"`)
+		if room.Name != nil {
+			qw422016.N().S(` value="`)
+			qw422016.E().S(*room.Name)
+			qw422016.N().S(`"`)
+		}
+		qw422016.N().S(` />
+        <span class="for-screen-reader">Name this room</span>
+      </label>`)
+	} else {
+		qw422016.N().S(`
+      <h1 class="flex-item-grow txt-x-large">
+        `)
+		qw422016.E().S(room.DisplayName())
+		qw422016.N().S(`
+      </h1>`)
+	}
+	qw422016.N().S(`
+  </div>
+
+  <hr class="margin-block borderless">
+
+  <section class="room-access margin-block pad-inline fill-shade border-radius">
+    `)
+	qw422016.N().S(string(content))
+	qw422016.N().S(`
+  </section>`)
+	if canAdminister {
+		qw422016.N().S(`
+  <button name="button" type="submit" class="btn btn--reversed txt-large center"><img aria-hidden="true" src="`)
+		qw422016.E().S(ctx.Asset("check.svg"))
+		qw422016.N().S(`" width="20" height="20" /><span class="for-screen-reader">Save</span></button>`)
+	}
+	qw422016.N().S(`
+</form>`)
 }
 
 func WriteRoomsLayoutsForm(qq422016 qtio422016.Writer, ctx *ViewContext, room *FormRoom, canAdminister bool, kind RoomKind, content HTML) {

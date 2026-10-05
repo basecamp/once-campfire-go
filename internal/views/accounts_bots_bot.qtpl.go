@@ -3,6 +3,8 @@
 
 package views
 
+import "strconv"
+
 import (
 	qtio422016 "io"
 
@@ -15,6 +17,109 @@ var (
 )
 
 func StreamAccountsBotsBot(qw422016 *qt422016.Writer, ctx *ViewContext, bot *Bot) {
+	qw422016.N().S(`<li class="flex flex-column gap flush fill-shade border-radius pad-block pad-inline-double">
+  <div class="flex align-center gap">
+    <figure class="avatar flex-item--no-shrink" style="--avatar-size: 2.65em;">
+      `)
+	qw422016.N().S(string(AvatarTag(ctx, bot.User.Avatar(), NewAttrs().Loading("lazy"))))
+	qw422016.N().S(`
+    </figure>
+
+    <div class="min-width">
+      <div class="overflow-ellipsis txt-large"><strong>`)
+	qw422016.E().S(bot.User.Name)
+	qw422016.N().S(`</strong></div>
+    </div>
+
+    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      `)
+	qw422016.N().S(string(ImageTag(ctx, "pencil.svg", NewAttrs().AriaHidden().Size(20))))
+	qw422016.N().S(`
+      <span class="for-screen-reader">Edit `)
+	qw422016.E().S(bot.User.Name)
+	qw422016.N().S(`</span>
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(LinkToBlock(capture1, RouteEditAccountBot(bot.User.ID), NewAttrs().Class("btn flex-item-justify-end").Style("view-transition-name: chat-bot-"+strconv.FormatInt(bot.User.ID, 10)))))
+	qw422016.N().S(`  </div>
+
+`)
+	for _, room := range bot.Rooms {
+		qw422016.N().S(`    <fieldset class="gap max-width pad border border-radius">
+      <legend class="min-width txt-align-start pad-inline">
+        <strong class="overflow-ellipsis">`)
+		qw422016.E().S(room.Name)
+		qw422016.N().S(`</strong>
+      </legend>
+
+`)
+		curlTextLine := CurlTextLine(ctx.URL(RouteRoomBotMessages(room.ID, bot.BotKey)))
+
+		qw422016.N().S(`      <div class="flex align-center gap">
+        `)
+		qw422016.N().S(string(ImageTag(ctx, "messages-outlined.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+		qw422016.N().S(`
+
+        <div class="flex-item-grow">
+          <input type="text" class="input full-width fill-white" value="`)
+		qw422016.E().S(curlTextLine)
+		qw422016.N().S(`" aria-label="curl command for posting messages" readonly>
+        </div>
+
+        <div class="txt-small">
+          `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+            `)
+		qw422016.N().S(string(ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20))))
+		qw422016.N().S(`
+            <span class="for-screen-reader">Copy message command</span>
+`)
+		capture2 := EndCapture(qw422016)
+
+		qw422016.N().S(string(ButtonToCopyToClipboard(capture2, curlTextLine)))
+		qw422016.N().S(`        </div>
+      </div>
+
+`)
+		curlUploadLine := CurlUploadLine(ctx.URL(RouteRoomBotMessages(room.ID, bot.BotKey)))
+
+		qw422016.N().S(`      <div class="flex align-center gap">
+        `)
+		qw422016.N().S(string(ImageTag(ctx, "attachment.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+		qw422016.N().S(`
+
+        <div class="flex-item-grow">
+          <input type="text" class="input full-width fill-white" value="`)
+		qw422016.E().S(curlUploadLine)
+		qw422016.N().S(`" aria-label="curl command for posting attachments" readonly>
+        </div>
+
+        <div class="txt-small">
+          `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+            `)
+		qw422016.N().S(string(ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20))))
+		qw422016.N().S(`
+            <span class="for-screen-reader">Copy attachment command</span>
+`)
+		capture3 := EndCapture(qw422016)
+
+		qw422016.N().S(string(ButtonToCopyToClipboard(capture3, curlUploadLine)))
+		qw422016.N().S(`        </div>
+      </div>
+    </fieldset>
+`)
+	}
+	qw422016.N().S(`</li>
+`)
 }
 
 func WriteAccountsBotsBot(qq422016 qtio422016.Writer, ctx *ViewContext, bot *Bot) {

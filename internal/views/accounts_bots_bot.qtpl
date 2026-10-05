@@ -1,2 +1,52 @@
-{% comment %}reference/crates/views/templates/accounts/bots/_bot.html; TODO: body{% endcomment %}
-{% func AccountsBotsBot(ctx *ViewContext, bot *Bot) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/accounts/bots/_bot.html{% endcomment %}
+{% import "strconv" %}
+{% func AccountsBotsBot(ctx *ViewContext, bot *Bot) %}<li class="flex flex-column gap flush fill-shade border-radius pad-block pad-inline-double">
+  <div class="flex align-center gap">
+    <figure class="avatar flex-item--no-shrink" style="--avatar-size: 2.65em;">
+      {%s= string(AvatarTag(ctx, bot.User.Avatar(), NewAttrs().Loading("lazy"))) %}
+    </figure>
+
+    <div class="min-width">
+      <div class="overflow-ellipsis txt-large"><strong>{%s bot.User.Name %}</strong></div>
+    </div>
+
+    {% code BeginCapture(qw422016) %}
+      {%s= string(ImageTag(ctx, "pencil.svg", NewAttrs().AriaHidden().Size(20))) %}
+      <span class="for-screen-reader">Edit {%s bot.User.Name %}</span>
+{% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture1, RouteEditAccountBot(bot.User.ID), NewAttrs().Class("btn flex-item-justify-end").Style("view-transition-name: chat-bot-" + strconv.FormatInt(bot.User.ID, 10)))) %}  </div>
+
+{% for _, room := range bot.Rooms %}    <fieldset class="gap max-width pad border border-radius">
+      <legend class="min-width txt-align-start pad-inline">
+        <strong class="overflow-ellipsis">{%s room.Name %}</strong>
+      </legend>
+
+{% code curlTextLine := CurlTextLine(ctx.URL(RouteRoomBotMessages(room.ID, bot.BotKey))) %}      <div class="flex align-center gap">
+        {%s= string(ImageTag(ctx, "messages-outlined.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))) %}
+
+        <div class="flex-item-grow">
+          <input type="text" class="input full-width fill-white" value="{%s curlTextLine %}" aria-label="curl command for posting messages" readonly>
+        </div>
+
+        <div class="txt-small">
+          {% code BeginCapture(qw422016) %}
+            {%s= string(ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20))) %}
+            <span class="for-screen-reader">Copy message command</span>
+{% code capture2 := EndCapture(qw422016) %}{%s= string(ButtonToCopyToClipboard(capture2, curlTextLine)) %}        </div>
+      </div>
+
+{% code curlUploadLine := CurlUploadLine(ctx.URL(RouteRoomBotMessages(room.ID, bot.BotKey))) %}      <div class="flex align-center gap">
+        {%s= string(ImageTag(ctx, "attachment.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))) %}
+
+        <div class="flex-item-grow">
+          <input type="text" class="input full-width fill-white" value="{%s curlUploadLine %}" aria-label="curl command for posting attachments" readonly>
+        </div>
+
+        <div class="txt-small">
+          {% code BeginCapture(qw422016) %}
+            {%s= string(ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20))) %}
+            <span class="for-screen-reader">Copy attachment command</span>
+{% code capture3 := EndCapture(qw422016) %}{%s= string(ButtonToCopyToClipboard(capture3, curlUploadLine)) %}        </div>
+      </div>
+    </fieldset>
+{% endfor %}</li>
+{% endfunc %}

@@ -32,6 +32,44 @@ func (p *RoomsDirectsNew) Head() string {
 }
 
 func (p *RoomsDirectsNew) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`
+<turbo-frame id="direct_rooms_control" target="_top">
+  <div class="directs directs--new flex flex-column gap">
+    <form class="flex gap flex-item-grow" data-controller="form" data-action="keydown.esc-&gt;form#cancel" action="`)
+	qw422016.E().S(RouteRoomsDirects())
+	qw422016.N().S(`" accept-charset="UTF-8" method="post">
+      <a class="btn flex-item-no-shrink" data-turbo-frame="user_sidebar" data-form-target="cancel" href="`)
+	qw422016.E().S(RouteUserSidebar())
+	qw422016.N().S(`">
+        <img aria-hidden="true" src="`)
+	qw422016.E().S(p.Ctx.Asset("arrow-left.svg"))
+	qw422016.N().S(`" />
+        <span class="for-screen-reader">Cancel changes</span>
+</a>
+      <section class="autocomplete__container unpad input input--actor">
+        <div class="autocomplete__input input flex flex-wrap position-relative flex-item-grow"
+            data-controller="autocomplete" data-autocomplete-url-value="`)
+	qw422016.E().S(RouteAutocompletableUsers())
+	qw422016.N().S(`">
+          <select name="user_ids[]" data-autocomplete-target="select" data-template-id="autocompletable-user" multiple="true" hidden required></select>
+
+          `)
+	StreamUsersAutocompletablesTemplate(qw422016, p.Ctx)
+	qw422016.N().S(`
+
+          <input autocomplete="off" autocorrect="off" data-1p-ignore="true" class="autocomplete__input input flex flex-wrap position-relative" data-autocomplete-target="input" data-action="input-&gt;autocomplete#search keydown-&gt;autocomplete#didPressKey" type="text" name="rooms_direct[user_ids_input]" id="rooms_direct_user_ids_input" />
+        </div>
+      </section>
+
+      <button name="button" type="submit" class="btn btn--reversed flex-item-no-shrink">
+        <img aria-hidden="true" src="`)
+	qw422016.E().S(p.Ctx.Asset("check.svg"))
+	qw422016.N().S(`" />
+        <span class="for-screen-reader">Start Ping</span>
+</button></form>
+    <span class="txt-small translucent pad-inline-half center">Type names to ping someone…</span>
+  </div>
+</turbo-frame>`)
 }
 
 func (p *RoomsDirectsNew) WriteContent(qq422016 qtio422016.Writer) {

@@ -1,4 +1,23 @@
-{% comment %}reference/crates/views/templates/accounts/bots/edit.html; TODO: body{% endcomment %}
+{% comment %}reference/crates/views/templates/accounts/bots/edit.html{% endcomment %}
 {% func (p *AccountsBotsEdit) Head() %}{% endfunc %}
-{% func (p *AccountsBotsEdit) Nav() %}{% endfunc %}
-{% func (p *AccountsBotsEdit) Content() %}{% endfunc %}
+{% func (p *AccountsBotsEdit) Nav() %}  <div class="flex-item-justify-start">
+    {%s= string(LinkBackTo(p.Ctx, RouteAccountBots())) %}
+  </div>
+{% endfunc %}
+{% func (p *AccountsBotsEdit) Content() %}<section class="panel" style="view-transition-name: chat-bot-{%dl p.BotID %}">
+{% code form := FormWith(RouteAccountBot(p.BotID)).Model("user").Method("patch").Class("flex flex-column gap") %}  {% code BeginCapture(qw422016) %}
+    {%= AccountsBotsForm(p.Ctx, form, &p.Bot) %}
+{% code capture1 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture1, form)) %}
+  <hr class="separator full-width margin-block-double">
+
+  <div class="flex align-center gap justify-space-between">
+    {% code BeginCapture(qw422016) %}
+      {%s= string(ImageTag(p.Ctx, "trash.svg", NewAttrs().AriaHidden().Size(20))) %}
+      {%s= string(ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))) %}
+{% code capture2 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture2, RouteAccountBot(p.BotID), NewAttrs().Method("delete").Class("btn txt--small btn--negative").Aria("label", "Delete this chat bot").Data("turbo_confirm", "Are you sure you want to permanently remove this bot from the account? This can’t be undone."))) %}
+    {% code BeginCapture(qw422016) %}
+      {%s= string(ImageTag(p.Ctx, "refresh.svg", NewAttrs().AriaHidden().Size(20))) %}
+      {%s= string(ImageTag(p.Ctx, "key.svg", NewAttrs().AriaHidden().Size(20))) %}
+{% code capture3 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture3, RouteAccountBotKey(p.BotID), NewAttrs().Method("put").Class("btn full-width txt--small btn--negative").Aria("label", "Generate a new key").Data("turbo_confirm", "Are you sure you want to change the bot key? All usage of this bot must be updated."))) %}  </div>
+</section>
+{% endfunc %}

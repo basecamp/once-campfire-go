@@ -1,4 +1,11 @@
-{% comment %}reference/crates/views/templates/accounts/bots/new.html; TODO: body{% endcomment %}
+{% comment %}reference/crates/views/templates/accounts/bots/new.html{% endcomment %}
 {% func (p *AccountsBotsNew) Head() %}{% endfunc %}
-{% func (p *AccountsBotsNew) Nav() %}{% endfunc %}
-{% func (p *AccountsBotsNew) Content() %}{% endfunc %}
+{% func (p *AccountsBotsNew) Nav() %}  <div class="flex-item-justify-start">
+    {%s= string(LinkBackTo(p.Ctx, RouteAccountBots())) %}
+  </div>
+{% endfunc %}
+{% func (p *AccountsBotsNew) Content() %}<section class="panel">
+{% code form := FormWith(RouteAccountBots()).Model("user").Class("flex flex-column gap") %}  {% code BeginCapture(qw422016) %}
+    {%= AccountsBotsForm(p.Ctx, form, &p.Bot) %}
+{% code capture1 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture1, form)) %}</section>
+{% endfunc %}

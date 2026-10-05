@@ -91,8 +91,17 @@ func Open(path string, readers int) (*DB, error) {
 	return &DB{Read: pool, Write: w, Now: now}, nil
 }
 
-func (d *DB) Close() error     { return errors.Join(d.Write.Close(), d.Read.Close()) }
-func Stamp(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05.000000") }
+func (d *DB) Close() error { return errors.Join(d.Write.Close(), d.Read.Close()) }
+
+// Stamp is the text Active Record writes for a time (the reference's Timestamp::to_db): the
+// microseconds only when there are some.
+func Stamp(t time.Time) string {
+	t = t.UTC()
+	if t.Nanosecond() < 1000 {
+		return t.Format("2006-01-02 15:04:05")
+	}
+	return t.Format("2006-01-02 15:04:05.000000")
+}
 
 // Transaction runs fn as one BEGIN IMMEDIATE transaction on the writer goroutine, then the
 // after-commit work it queued. An error from fn, or a failed commit, rolls back.

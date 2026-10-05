@@ -32,6 +32,12 @@ func (p *RoomsDirectsEdit) Head() string {
 }
 
 func (p *RoomsDirectsEdit) StreamNav(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`
+  <div class="flex-item-justify-start">
+    `)
+	qw422016.N().S(string(LinkBackToLastRoomVisited(p.Ctx)))
+	qw422016.N().S(`
+  </div>`)
 }
 
 func (p *RoomsDirectsEdit) WriteNav(qq422016 qtio422016.Writer) {
@@ -49,6 +55,38 @@ func (p *RoomsDirectsEdit) Nav() string {
 }
 
 func (p *RoomsDirectsEdit) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`
+<div class="panel txt-align-center">
+  <section class="directs--edit margin-block-end">`)
+	for _, user := range p.Edit.Users {
+		qw422016.N().S(`
+      <div class="member flex flex-column gap fill-shade pad border-radius">
+        <figure class="avatar center" style="--avatar-border-radius: 10ch; --avatar-size: 10ch;" >
+          <a title="`)
+		qw422016.E().S(user.Title)
+		qw422016.N().S(`" class="btn avatar" data-turbo-frame="_top" href="`)
+		qw422016.E().S(user.Path())
+		qw422016.N().S(`"><img aria-hidden="true" loading="lazy" src="`)
+		qw422016.E().S(user.AvatarURL)
+		qw422016.N().S(`" width="48" height="48" /></a>
+        </figure>
+
+        <strong>`)
+		qw422016.E().S(user.Name)
+		qw422016.N().S(`</strong>
+      </div>`)
+	}
+	qw422016.N().S(`
+  </section>
+
+  <form class="button_to" method="post" action="`)
+	qw422016.E().S(p.Ctx.URL(RouteRoomsDirect(p.Edit.RoomID)))
+	qw422016.N().S(`"><input type="hidden" name="_method" value="delete" /><button class="btn btn--negative center" aria-label="Delete Ping" data-turbo-confirm="Are you sure you want to delete this ping and all messages in it? This can’t be undone." type="submit">
+    <img aria-hidden="true" src="`)
+	qw422016.E().S(p.Ctx.Asset("trash.svg"))
+	qw422016.N().S(`" />
+    Ping
+</button></form></div>`)
 }
 
 func (p *RoomsDirectsEdit) WriteContent(qq422016 qtio422016.Writer) {

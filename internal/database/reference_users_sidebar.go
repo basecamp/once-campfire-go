@@ -20,16 +20,6 @@ const (
 	SelectUsers = `SELECT ` + UserColumns + ` FROM "users"`
 )
 
-// ReferenceMembership is a memberships row as the reference's Membership model reads it.
-type ReferenceMembership struct {
-	ID, RoomID, UserID int64
-	// Nullable (default "mentions").
-	Involvement NullString
-	// unread_at IS NOT NULL (Membership#unread?).
-	Unread    bool
-	UpdatedAt time.Time
-}
-
 // MembershipRoom is a membership with its room (the reference's with_room join).
 type MembershipRoom struct {
 	Membership ReferenceMembership
@@ -76,28 +66,6 @@ func (d *DB) MembershipsWithOrderedRoom(ctx context.Context, user int64) ([]Memb
 	return d.membershipRooms(ctx, `SELECT `+membershipColumns+`, `+roomColumns+` FROM "memberships" INNER JOIN "rooms" ON "rooms"."id" = "memberships"."room_id" WHERE "memberships"."user_id" = ? ORDER BY LOWER(rooms.name)`, user)
 }
 
-// MembershipsForRoom is Membership::for_room: `room.memberships`.
-func (d *DB) MembershipsForRoom(ctx context.Context, room int64) ([]ReferenceMembership, error) {
-	rows, err := d.Read.QueryContext(ctx, `SELECT `+membershipColumns+` FROM "memberships" WHERE "memberships"."room_id" = ?`, room)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var list []ReferenceMembership
-	for rows.Next() {
-		var m ReferenceMembership
-		var unreadAt, connectedAt NullString
-		var connections int64
-		var created time.Time
-		if err := rows.Scan(&m.ID, &m.RoomID, &m.UserID, &m.Involvement, &unreadAt, &connectedAt, &connections, timestamp{&created}, timestamp{&m.UpdatedAt}); err != nil {
-			return nil, err
-		}
-		m.Unread = unreadAt.Valid
-		list = append(list, m)
-	}
-	return list, rows.Err()
-}
-
 // RoomFindByID is Room::find_by_id.
 func (d *DB) RoomFindByID(ctx context.Context, id int64) (ReferenceRoom, bool, error) {
 	return d.optionalRoom(ctx, `SELECT `+roomColumns+` FROM "rooms" WHERE "rooms"."id" = ? LIMIT 1`, id)
@@ -119,11 +87,6 @@ func (d *DB) UsersBySQL(ctx context.Context, query string, args ...any) ([]User,
 		users = append(users, u)
 	}
 	return users, rows.Err()
-}
-
-// RoomUsers is Room#users: `room.users`.
-func (d *DB) RoomUsers(ctx context.Context, room int64) ([]User, error) {
-	return d.UsersBySQL(ctx, `SELECT `+UserColumns+` FROM "users" INNER JOIN "memberships" ON "users"."id" = "memberships"."user_id" WHERE "memberships"."room_id" = ?`, room)
 }
 
 // RoomsForUserOfType is Room::for_user_of_type: `user.rooms.directs` / `.opens` / `.closeds`;
@@ -257,46 +220,6 @@ func (d *DB) CreateMember(ctx context.Context, name string, email, passwordDiges
 		return err
 	})
 	return u, err
-}
-
-// membershipInsertBatch is the reference's MEMBERSHIP_INSERT_BATCH.
-const membershipInsertBatch = 1000
-
-// sqliteNow is the reference's SQLITE_NOW.
-const sqliteNow = `STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')`
-
-// grantMembershipToOpenRooms is User#grant_membership_to_open_rooms (after_create_commit).
-func grantMembershipToOpenRooms(ctx context.Context, tx *Tx, user int64) error {
-	rows, err := tx.QueryContext(ctx, `SELECT "rooms"."id" FROM "rooms" WHERE "rooms"."type" = ?`, "Rooms::Open")
-	if err != nil {
-		return err
-	}
-	var rooms []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		rooms = append(rooms, id)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for len(rooms) > 0 {
-		chunk := rooms[:min(len(rooms), membershipInsertBatch)]
-		rooms = rooms[len(chunk):]
-		values := make([]string, len(chunk))
-		args := make([]any, 0, 2*len(chunk))
-		for i, room := range chunk {
-			values[i] = "(" + sqliteNow + ", ?, " + sqliteNow + ", ?)"
-			args = append(args, room, user)
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO "memberships" ("created_at","room_id","updated_at","user_id") VALUES `+strings.Join(values, ", ")+` ON CONFLICT  DO NOTHING RETURNING "id"`, args...); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // IsRecordNotUnique is ActiveRecord::RecordNotUnique: a unique or primary key constraint failed.

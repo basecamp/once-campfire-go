@@ -1,4 +1,22 @@
-{% comment %}reference/crates/views/templates/rooms/directs/edit.html; TODO: body{% endcomment %}
+{% comment %}reference/crates/views/templates/rooms/directs/edit.html{% endcomment %}
 {% func (p *RoomsDirectsEdit) Head() %}{% endfunc %}
-{% func (p *RoomsDirectsEdit) Nav() %}{% endfunc %}
-{% func (p *RoomsDirectsEdit) Content() %}{% endfunc %}
+{% func (p *RoomsDirectsEdit) Nav() %}
+  <div class="flex-item-justify-start">
+    {%s= string(LinkBackToLastRoomVisited(p.Ctx)) %}
+  </div>{% endfunc %}
+{% func (p *RoomsDirectsEdit) Content() %}
+<div class="panel txt-align-center">
+  <section class="directs--edit margin-block-end">{% for _, user := range p.Edit.Users %}
+      <div class="member flex flex-column gap fill-shade pad border-radius">
+        <figure class="avatar center" style="--avatar-border-radius: 10ch; --avatar-size: 10ch;" >
+          <a title="{%s user.Title %}" class="btn avatar" data-turbo-frame="_top" href="{%s user.Path() %}"><img aria-hidden="true" loading="lazy" src="{%s user.AvatarURL %}" width="48" height="48" /></a>
+        </figure>
+
+        <strong>{%s user.Name %}</strong>
+      </div>{% endfor %}
+  </section>
+
+  <form class="button_to" method="post" action="{%s p.Ctx.URL(RouteRoomsDirect(p.Edit.RoomID)) %}"><input type="hidden" name="_method" value="delete" /><button class="btn btn--negative center" aria-label="Delete Ping" data-turbo-confirm="Are you sure you want to delete this ping and all messages in it? This can’t be undone." type="submit">
+    <img aria-hidden="true" src="{%s p.Ctx.Asset("trash.svg") %}" />
+    Ping
+</button></form></div>{% endfunc %}

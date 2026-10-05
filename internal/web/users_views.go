@@ -649,6 +649,14 @@ func (p *gearedPage) offset() int64 {
 	return variable + max(p.number-size, 0)*p.ratio(size)
 }
 
+// nextPage is `page.next_param` unless `page.last?`.
+func (p *gearedPage) nextPage() *string {
+	if p.number == p.pageCount() {
+		return nil
+	}
+	return views.Ptr(strconv.FormatInt(p.number+1, 10))
+}
+
 // records is the indexes of the page's slice of n ordered records.
 func (p *gearedPage) records(n int) []int {
 	start := min(p.offset(), int64(n))

@@ -32,6 +32,12 @@ func (p *AccountsBotsEdit) Head() string {
 }
 
 func (p *AccountsBotsEdit) StreamNav(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`  <div class="flex-item-justify-start">
+    `)
+	qw422016.N().S(string(LinkBackTo(p.Ctx, RouteAccountBots())))
+	qw422016.N().S(`
+  </div>
+`)
 }
 
 func (p *AccountsBotsEdit) WriteNav(qq422016 qtio422016.Writer) {
@@ -49,6 +55,59 @@ func (p *AccountsBotsEdit) Nav() string {
 }
 
 func (p *AccountsBotsEdit) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`<section class="panel" style="view-transition-name: chat-bot-`)
+	qw422016.N().DL(p.BotID)
+	qw422016.N().S(`">
+`)
+	form := FormWith(RouteAccountBot(p.BotID)).Model("user").Method("patch").Class("flex flex-column gap")
+
+	qw422016.N().S(`  `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+    `)
+	StreamAccountsBotsForm(qw422016, p.Ctx, form, &p.Bot)
+	qw422016.N().S(`
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(FormWithBlock(capture1, form)))
+	qw422016.N().S(`
+  <hr class="separator full-width margin-block-double">
+
+  <div class="flex align-center gap justify-space-between">
+    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "trash.svg", NewAttrs().AriaHidden().Size(20))))
+	qw422016.N().S(`
+      `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))))
+	qw422016.N().S(`
+`)
+	capture2 := EndCapture(qw422016)
+
+	qw422016.N().S(string(ButtonToBlock(capture2, RouteAccountBot(p.BotID), NewAttrs().Method("delete").Class("btn txt--small btn--negative").Aria("label", "Delete this chat bot").Data("turbo_confirm", "Are you sure you want to permanently remove this bot from the account? This can’t be undone."))))
+	qw422016.N().S(`
+    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "refresh.svg", NewAttrs().AriaHidden().Size(20))))
+	qw422016.N().S(`
+      `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "key.svg", NewAttrs().AriaHidden().Size(20))))
+	qw422016.N().S(`
+`)
+	capture3 := EndCapture(qw422016)
+
+	qw422016.N().S(string(ButtonToBlock(capture3, RouteAccountBotKey(p.BotID), NewAttrs().Method("put").Class("btn full-width txt--small btn--negative").Aria("label", "Generate a new key").Data("turbo_confirm", "Are you sure you want to change the bot key? All usage of this bot must be updated."))))
+	qw422016.N().S(`  </div>
+</section>
+`)
 }
 
 func (p *AccountsBotsEdit) WriteContent(qq422016 qtio422016.Writer) {

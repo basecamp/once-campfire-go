@@ -15,6 +15,54 @@ var (
 )
 
 func StreamRoomsClosedsUser(qw422016 *qt422016.Writer, ctx *ViewContext, form *ClosedFormView, user *UserView, selected bool) {
+	qw422016.N().S(`<li class="flex align-center gap margin-none" data-value="`)
+	qw422016.E().S(Lowercase(user.Name))
+	qw422016.N().S(`">
+  <figure class="avatar flex-item-no-shrink" style="--avatar-size: 4ch;">
+    <a title="`)
+	qw422016.E().S(user.Title)
+	qw422016.N().S(`" class="btn avatar" data-turbo-frame="_top" href="`)
+	qw422016.E().S(user.Path())
+	qw422016.N().S(`"><img aria-hidden="true" loading="lazy" src="`)
+	qw422016.E().S(user.AvatarURL)
+	qw422016.N().S(`" width="48" height="48" /></a>
+  </figure>
+
+  <div class="min-width">
+    <div class="overflow-ellipsis fill-shade"><strong>`)
+	qw422016.E().S(user.Name)
+	qw422016.N().S(`</strong></div>
+  </div>
+
+  <hr class="separator" aria-hidden="true">`)
+	if form.CanAdminister {
+		if user.ID == form.CurrentUserID && form.Room.ID == nil {
+			qw422016.N().S(`
+      <input type="hidden" name="user_ids[]" value="`)
+			qw422016.N().DL(user.ID)
+			qw422016.N().S(`" />
+      <img class="colorize--black flex-item-no-shrink" aria-hidden="true" src="`)
+			qw422016.E().S(ctx.Asset("check.svg"))
+			qw422016.N().S(`" width="20" height="20" />`)
+		} else {
+			qw422016.N().S(`
+      <label class="switch flex-item-no-shrink">
+        <input type="checkbox" name="user_ids[]" value="`)
+			qw422016.N().DL(user.ID)
+			qw422016.N().S(`" class="switch__input"`)
+			if selected {
+				qw422016.N().S(` checked="checked"`)
+			}
+			qw422016.N().S(` />
+        <span class="switch__btn round"></span>
+        <span class="for-screen-reader">Give `)
+			qw422016.E().S(user.Name)
+			qw422016.N().S(` access to this room</span>
+      </label>`)
+		}
+	}
+	qw422016.N().S(`
+</li>`)
 }
 
 func WriteRoomsClosedsUser(qq422016 qtio422016.Writer, ctx *ViewContext, form *ClosedFormView, user *UserView, selected bool) {

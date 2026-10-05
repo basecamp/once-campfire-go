@@ -15,6 +15,62 @@ var (
 )
 
 func StreamRoomsOpensForm(qw422016 *qt422016.Writer, ctx *ViewContext, form *OpenFormView, typeChangePath string) {
+	BeginCapture(qw422016)
+
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+    <li class="flex align-center gap margin-none">
+      <figure class="avatar flex-item-no-shrink" style="--avatar-border-radius: 0; --avatar-size: 4ch;">
+        <img aria-hidden="true" class="colorize--black" style="background-color: transparent" src="`)
+	qw422016.E().S(ctx.Asset("everyone.svg"))
+	qw422016.N().S(`" />
+        <span class="for-screen-reader">Everyone</span>
+      </figure>
+
+      <div class="min-width">
+        <div class="overflow-ellipsis fill-shade"><strong>Everyone</strong></div>
+      </div>
+
+      <hr class="separator" aria-hidden="true">`)
+	if form.CanAdminister {
+		qw422016.N().S(`
+        <a class="btn--faux flex-inline" tabindex="-1" data-turbo-action="replace" href="`)
+		qw422016.E().S(typeChangePath)
+		qw422016.N().S(`">
+          <label for="room_type" class="switch">
+            <input type="checkbox" id="room_type" class="switch__input" checked="checked">
+            <span class="switch__btn round"></span>
+            <span class="for-screen-reader">Give only some access to this room</span>
+          </label>
+</a>`)
+	}
+	qw422016.N().S(`
+    </li>
+
+    <hr class="separator full-width" style="--border-style: solid">`)
+	if len(form.Users) > 20 {
+		qw422016.N().S(`
+    `)
+		qw422016.N().S(string(UserFilterSearchTag()))
+	}
+	qw422016.N().S(`
+
+    <div data-filter-target="list" contents>`)
+	for i := range form.Users {
+		qw422016.N().S(`
+      `)
+		StreamRoomsOpensUser(qw422016, ctx, form, &form.Users[i])
+	}
+	qw422016.N().S(`
+    </div>
+`)
+	capture2 := EndCapture(qw422016)
+
+	qw422016.N().S(string(UserFilterMenuTag(capture2)))
+	capture1 := EndCapture(qw422016)
+
+	StreamRoomsLayoutsForm(qw422016, ctx, &form.Room, form.CanAdminister, RoomKindOpen, capture1)
 }
 
 func WriteRoomsOpensForm(qq422016 qtio422016.Writer, ctx *ViewContext, form *OpenFormView, typeChangePath string) {

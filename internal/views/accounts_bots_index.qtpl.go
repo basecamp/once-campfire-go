@@ -32,6 +32,12 @@ func (p *AccountsBotsIndex) Head() string {
 }
 
 func (p *AccountsBotsIndex) StreamNav(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`  <div class="flex-item-justify-start">
+    `)
+	qw422016.N().S(string(LinkBackTo(p.Ctx, RouteEditAccount())))
+	qw422016.N().S(`
+  </div>
+`)
 }
 
 func (p *AccountsBotsIndex) WriteNav(qq422016 qtio422016.Writer) {
@@ -49,6 +55,44 @@ func (p *AccountsBotsIndex) Nav() string {
 }
 
 func (p *AccountsBotsIndex) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`<section class="panel panel--wide txt-align-center flex flex-column position-relative" style="view-transition-name: chat-bots">
+  <div class="flex align-center gap">
+    <div class="panel__button">
+      `)
+	qw422016.N().S(string(TranslationButton(p.Ctx, "chat_bots")))
+	qw422016.N().S(`
+    </div>
+    <div class="pad-inline-double center">
+      <h1 class="margin-none">Chat bots</h1>
+      <p class="margin-none-block-start">With Chat bots, other sites and services can post updates directly to Campfire.</p>
+
+      `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+        `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))))
+	qw422016.N().S(`
+        `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "add.svg", NewAttrs().AriaHidden().Size(20))))
+	qw422016.N().S(`
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(LinkToBlock(capture1, RouteNewAccountBot(), NewAttrs().Class("btn btn--reversed txt-large").Aria("label", "Add a chat bot"))))
+	qw422016.N().S(`    </div>
+  </div>
+
+  <div class="pad-inline pad-block-start ">
+    <menu class="flex flex-column gap margin-none pad">
+      `)
+	for i := range p.Bots {
+		StreamAccountsBotsBot(qw422016, p.Ctx, &p.Bots[i])
+	}
+	qw422016.N().S(`    </menu>
+  </div>
+</section>
+`)
 }
 
 func (p *AccountsBotsIndex) WriteContent(qq422016 qtio422016.Writer) {

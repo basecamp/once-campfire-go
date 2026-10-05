@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	qt "github.com/valyala/quicktemplate"
 )
@@ -297,6 +299,70 @@ func ButtonToDeleteRoom(ctx *ViewContext, roomID int64, displayName string) HTML
 		Aria("label", "Delete "+displayName).
 		Data("turbo_confirm", "Are you sure you want to delete this room and all messages in it? This can’t be undone.")
 	return ButtonTo(url, options, content)
+}
+
+// Lowercase is Rust's str::to_lowercase, which the room forms' user rows apply to names: full
+// Unicode lowercasing, İ to "i̇", and a word-final Σ to ς.
+func Lowercase(s string) string {
+	ascii := true
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return strings.ToLower(s)
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i, c := range s {
+		switch c {
+		case 'İ':
+			b.WriteString("i̇")
+		case 'Σ':
+			if casedAcrossIgnorable(s[:i], true) && !casedAcrossIgnorable(s[i+len("Σ"):], false) {
+				b.WriteRune('ς')
+			} else {
+				b.WriteRune('σ')
+			}
+		default:
+			b.WriteRune(unicode.ToLower(c))
+		}
+	}
+	return b.String()
+}
+
+// casedAcrossIgnorable is Rust's case_ignorable_then_cased: skipping case-ignorable characters
+// (backwards from the end of s, or forwards from its start), whether the next one is cased.
+func casedAcrossIgnorable(s string, backwards bool) bool {
+	for len(s) > 0 {
+		var c rune
+		var size int
+		if backwards {
+			c, size = utf8.DecodeLastRuneInString(s)
+			s = s[:len(s)-size]
+		} else {
+			c, size = utf8.DecodeRuneInString(s)
+			s = s[size:]
+		}
+		if caseIgnorable(c) {
+			continue
+		}
+		return unicode.IsUpper(c) || unicode.IsLower(c) || unicode.IsTitle(c) ||
+			unicode.In(c, unicode.Other_Lowercase, unicode.Other_Uppercase)
+	}
+	return false
+}
+
+// caseIgnorable is Unicode's Case_Ignorable: Mn, Me, Cf, Lm, Sk and the word-break MidLetter,
+// MidNumLet and Single_Quote characters.
+func caseIgnorable(c rune) bool {
+	switch c {
+	case '\'', '.', ':', '·', '‘', '’', '․', '‧', '︓', '﹒', '﹕', '＇', '．', '：', '·', '՟', '״':
+		return true
+	}
+	return unicode.In(c, unicode.Mn, unicode.Me, unicode.Cf, unicode.Lm, unicode.Sk)
 }
 
 // RoomForm is the room_form filter, `render layout: "rooms/layouts/form", locals: { room: } do ...

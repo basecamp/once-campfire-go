@@ -15,6 +15,63 @@ var (
 )
 
 func StreamAccountsBotsForm(qw422016 *qt422016.Writer, ctx *ViewContext, form *Form, bot *BotForm) {
+	qw422016.N().S(`<h1 class="for-screen-reader">Chat Bot Setup</h1>
+<label class="align-center center avatar__form gap" data-controller="upload-preview">
+  <div class="btn input--file">
+    `)
+	qw422016.N().S(string(ImageTag(ctx, "camera.svg", NewAttrs().AriaHidden().Size(20))))
+	qw422016.N().S(`
+    `)
+	qw422016.N().S(string(form.FileField("avatar", NewAttrs().Class("input").Accept("image/*").Data("upload_preview_target", "input").Data("action", "upload-preview#previewImage"))))
+	qw422016.N().S(`
+    <span class="for-screen-reader">Upload bot avatar</span>
+  </div>
+
+  <div class="avatar input--file txt-xx-large" style="--avatar-size: var(--btn-size);">
+    `)
+	avatar := "default-bot-avatar.svg"
+
+	if bot.AvatarAttachmentURL != nil {
+		avatar = *bot.AvatarAttachmentURL
+
+	}
+	qw422016.N().S(string(ImageTag(ctx, avatar, NewAttrs().Alt("Bot avatar").Size(48).Data("upload_preview_target", "image"))))
+	qw422016.N().S(`
+  </div>
+</label>
+
+<div class="flex align-center gap">
+  `)
+	qw422016.N().S(string(TranslationButton(ctx, "bot_name")))
+	qw422016.N().S(`
+  <label class="flex align-center gap flex-item-grow txt-large input input--actor">
+    `)
+	qw422016.N().S(string(form.TextField("name", bot.Name, NewAttrs().Class("input").Autocomplete("name").Placeholder("Name the bot").Autofocus().Required(true).Data("1p-ignore", true))))
+	qw422016.N().S(`
+    `)
+	qw422016.N().S(string(ImageTag(ctx, "bot.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	qw422016.N().S(`
+  </label>
+</div>
+
+<div class="flex align-center gap">
+  `)
+	qw422016.N().S(string(TranslationButton(ctx, "webhook_url")))
+	qw422016.N().S(`
+  <label class="flex align-center gap flex-item-grow txt-large input input--actor">
+    `)
+	qw422016.N().S(string(form.URLField("webhook_url", bot.WebhookURL, NewAttrs().Class("input").Placeholder("Webhook URL"))))
+	qw422016.N().S(`
+    `)
+	qw422016.N().S(string(ImageTag(ctx, "web.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	qw422016.N().S(`
+  </label>
+</div>
+
+`)
+	qw422016.N().S(string(ProfileFormSubmitButton(ctx)))
+	qw422016.N().S(`
+`)
 }
 
 func WriteAccountsBotsForm(qq422016 qtio422016.Writer, ctx *ViewContext, form *Form, bot *BotForm) {

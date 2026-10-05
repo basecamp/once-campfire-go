@@ -580,7 +580,7 @@ golden/, messages_views.rs, rooms_views.rs, searches_views.rs, parity_a.rs).
 - Types: ClosedFormView, UserView.
 - Included by:
   - rooms/closeds/_form.html: `{%= RoomsClosedsUser(ctx, form, &form.SelectedUsers[i], true) %}`, `{%= RoomsClosedsUser(ctx, form, &form.UnselectedUsers[i], false) %}` (Rust `let selected = true` / `false`)
-- `user.name.to_lowercase()` is `strings.ToLower(user.Name)` (Rust lowercases full Unicode; check non-ASCII edge cases such as final sigma).
+- `user.name.to_lowercase()` is `Lowercase(user.Name)` (rooms.go: Rust's full Unicode lowercasing, with İ and a word-final Σ).
 
 ### rooms/closeds/edit.html
 
@@ -709,7 +709,7 @@ golden/, messages_views.rs, rooms_views.rs, searches_views.rs, parity_a.rs).
 - Types: OpenFormView, UserView.
 - Included by:
   - rooms/opens/_form.html: `{%= RoomsOpensUser(ctx, form, &form.Users[i]) %}`
-- `user.name.to_lowercase()` is `strings.ToLower(user.Name)` (see rooms/closeds/_user.html).
+- `user.name.to_lowercase()` is `Lowercase(user.Name)` (see rooms/closeds/_user.html).
 
 ### rooms/opens/edit.html
 
