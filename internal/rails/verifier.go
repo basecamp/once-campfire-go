@@ -294,16 +294,43 @@ func marshalString(data []byte) (string, bool) {
 	}
 	return string(data[:length]), true
 }
+
+var globalIDPattern = regexp.MustCompile(`gid://campfire/[^/]+/\d+`)
+
+// modelPurpose is combine_signed_id_purposes: `[base_class.name.underscore, purpose.to_s]
+// .compact_blank.join("/")`, as the reference's signed_id::combine_purposes builds it.
 func modelPurpose(model, purpose string) string {
-	model = strings.ReplaceAll(model, "::", "/")
-	model = regexp.MustCompile(`([A-Z]+)([A-Z][a-z])`).ReplaceAllString(model, "${1}_${2}")
-	model = regexp.MustCompile(`([a-z0-9])([A-Z])`).ReplaceAllString(model, "${1}_${2}")
-	model = strings.ToLower(strings.ReplaceAll(model, "-", "_"))
-	if strings.TrimSpace(purpose) != "" {
-		model += "/" + purpose
+	parts := make([]string, 0, 2)
+	for _, part := range []string{underscore(model), purpose} {
+		if strings.TrimSpace(part) != "" {
+			parts = append(parts, part)
+		}
 	}
-	return model
+	return strings.Join(parts, "/")
 }
+
+// underscore is String#underscore for class names: `Rooms::Open` → `rooms/open`, `WebPush` →
+// `web_push`, `HTTPRequest` → `http_request`.
+func underscore(name string) string {
+	runes := []rune(strings.ReplaceAll(name, "::", "/"))
+	var b strings.Builder
+	for i, c := range runes {
+		if c >= 'A' && c <= 'Z' {
+			afterLowerOrDigit := i > 0 && (runes[i-1] >= 'a' && runes[i-1] <= 'z' || runes[i-1] >= '0' && runes[i-1] <= '9')
+			acronymEnd := i > 0 && runes[i-1] >= 'A' && runes[i-1] <= 'Z' && i+1 < len(runes) && runes[i+1] >= 'a' && runes[i+1] <= 'z'
+			if afterLowerOrDigit || acronymEnd {
+				b.WriteByte('_')
+			}
+			b.WriteRune(c + ('a' - 'A'))
+		} else if c == '-' {
+			b.WriteByte('_')
+		} else {
+			b.WriteRune(c)
+		}
+	}
+	return b.String()
+}
+
 func (s *Secrets) SignedID(model string, id int64, purpose string, expires time.Time) string {
 	value, err := s.idVerifier().Generate(id, modelPurpose(model, purpose), expires)
 	if err != nil {
@@ -399,7 +426,7 @@ func UnverifiedUserGID(sgid string) (string, error) {
 		if err != nil {
 			return "", ErrInvalid
 		}
-		gid = regexp.MustCompile(`gid://campfire/[^/]+/\d+`).FindString(string(decoded))
+		gid = globalIDPattern.FindString(string(decoded))
 	}
 	if !strings.HasPrefix(gid, "gid://") {
 		decoded, err := decode64(gid)

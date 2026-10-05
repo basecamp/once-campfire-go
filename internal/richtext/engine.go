@@ -27,6 +27,8 @@ type Result struct {
 
 var attributeOrder = []string{"sgid", "content-type", "url", "href", "filename", "filesize", "width", "height", "previewable", "presentation", "caption", "content"}
 
+var letterPattern = regexp.MustCompile(`[a-zA-Z]`)
+
 func load(body string) (*xhtml.Node, error) {
 	root, err := parse(strings.Trim(body, "\x00\t\n\v\f\r "))
 	if err != nil {
@@ -515,7 +517,7 @@ func externalURL(value, host string) (string, error) {
 		return "", errors.New("missing host label")
 	}
 	label := name[strings.LastIndex(name, ".")+1:]
-	if !regexp.MustCompile(`[a-zA-Z]`).MatchString(label) || strings.HasPrefix(strings.ToLower(label), "0x") || strings.EqualFold(name, strings.TrimSuffix(host, ".")) {
+	if !letterPattern.MatchString(label) || strings.HasPrefix(strings.ToLower(label), "0x") || strings.EqualFold(name, strings.TrimSuffix(host, ".")) {
 		return "", nil
 	}
 	return value, nil
