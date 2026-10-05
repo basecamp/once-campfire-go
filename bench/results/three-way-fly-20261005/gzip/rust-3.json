@@ -8,19 +8,19 @@
       "errors": 0,
       "gzip": true,
       "latency": {
-        "max_ms": 4.303,
-        "mean_ms": 1.46,
-        "n": 54773,
-        "p50_ms": 1.397,
-        "p90_ms": 2.055,
-        "p99_ms": 2.777
+        "max_ms": 12.279,
+        "mean_ms": 1.91,
+        "n": 41792,
+        "p50_ms": 1.852,
+        "p90_ms": 2.615,
+        "p99_ms": 3.413
       },
-      "ok": 54773,
+      "ok": 41792,
       "path": "/rooms/486777696",
-      "rps": 10951.1,
+      "rps": 8355.2,
       "secs": 5.0,
       "statuses": {
-        "200": 54773
+        "200": 41792
       },
       "route": "room_show"
     },
@@ -30,19 +30,19 @@
       "errors": 0,
       "gzip": true,
       "latency": {
-        "max_ms": 5.143,
-        "mean_ms": 1.28,
-        "n": 62373,
-        "p50_ms": 1.239,
-        "p90_ms": 1.746,
-        "p99_ms": 2.317
+        "max_ms": 11.383,
+        "mean_ms": 1.68,
+        "n": 47475,
+        "p50_ms": 1.644,
+        "p90_ms": 2.237,
+        "p99_ms": 2.823
       },
-      "ok": 62373,
+      "ok": 47475,
       "path": "/rooms/486777696/messages?before=933434569",
-      "rps": 12470.6,
+      "rps": 9492.4,
       "secs": 5.0,
       "statuses": {
-        "200": 62373
+        "200": 47475
       },
       "route": "messages_page"
     },
@@ -52,19 +52,19 @@
       "errors": 0,
       "gzip": true,
       "latency": {
-        "max_ms": 4.743,
-        "mean_ms": 1.45,
-        "n": 55137,
-        "p50_ms": 1.393,
-        "p90_ms": 2.051,
-        "p99_ms": 2.751
+        "max_ms": 12.879,
+        "mean_ms": 1.92,
+        "n": 41652,
+        "p50_ms": 1.856,
+        "p90_ms": 2.671,
+        "p99_ms": 3.499
       },
-      "ok": 55137,
+      "ok": 41652,
       "path": "/users/me/sidebar",
-      "rps": 11024.9,
+      "rps": 8328.2,
       "secs": 5.0,
       "statuses": {
-        "200": 55137
+        "200": 41652
       },
       "route": "sidebar"
     },
@@ -74,19 +74,19 @@
       "errors": 0,
       "gzip": true,
       "latency": {
-        "max_ms": 8.171,
-        "mean_ms": 1.62,
-        "n": 49185,
-        "p50_ms": 1.509,
-        "p90_ms": 2.329,
-        "p99_ms": 3.523
+        "max_ms": 7.075,
+        "mean_ms": 1.99,
+        "n": 40131,
+        "p50_ms": 1.866,
+        "p90_ms": 2.837,
+        "p99_ms": 4.139
       },
-      "ok": 49185,
+      "ok": 40131,
       "path": "/searches?q=coffee",
-      "rps": 9833.9,
+      "rps": 8022.8,
       "secs": 5.0,
       "statuses": {
-        "200": 49185
+        "200": 40131
       },
       "route": "search"
     },
@@ -96,30 +96,30 @@
       "errors": 0,
       "gzip": true,
       "latency": {
-        "max_ms": 152.575,
-        "mean_ms": 7.19,
-        "n": 11111,
-        "p50_ms": 5.775,
-        "p90_ms": 7.591,
-        "p99_ms": 99.711
+        "max_ms": 25.503,
+        "mean_ms": 8.1,
+        "n": 9866,
+        "p50_ms": 7.907,
+        "p90_ms": 9.567,
+        "p99_ms": 14.431
       },
-      "ok": 11111,
+      "ok": 9866,
       "path": "POST /rooms/201306877/messages",
-      "rps": 2220.1,
-      "secs": 5.0,
+      "rps": 1970.3,
+      "secs": 5.01,
       "statuses": {
-        "200": 11111
+        "200": 9866
       },
       "route": "post_message"
     }
   ],
   "cable": [],
-  "load_start": "4.64 3.09 1.56 1/199 10227\n",
-  "startup_ms": 80.95,
+  "load_start": "4.24 2.92 1.47 1/197 10230\n",
+  "startup_ms": 82.62,
   "idle_memory_kib": {
-    "Rss": 35000,
-    "Pss": 33566,
-    "Private_Dirty": 14332
+    "Rss": 34852,
+    "Pss": 33417,
+    "Private_Dirty": 14296
   },
   "scrape": {
     "bytes": 416127,
@@ -136,7 +136,7 @@
   "bodies": {
     "room_show": {
       "bytes": 416139,
-      "sha256": "274d2d160237381a1268be3e3103c01ecb93ff36d40f3ea174c9552203479741",
+      "sha256": "a0794ee695e4d0be1b96d497bcb98be80ff7aed374ece2a7340d6a9760cdbf10",
       "contract": [
         "136976342",
         "217777555",
@@ -243,7 +243,7 @@
     },
     "search": {
       "bytes": 149625,
-      "sha256": "067e4e5ac140e0ad4f2857186767259ffd21dc81a51204abd22f601a1518a840",
+      "sha256": "411266e55e08b1d8883afaaa06f10b25d8f61af21bbe1f8e3ecd69557faef83f",
       "contract": [
         "933434483",
         "933434510",
@@ -262,24 +262,24 @@
     }
   },
   "write_validation": {
-    "expected": 15005,
-    "persisted": 15005,
-    "indexed": 15005
+    "expected": 13232,
+    "persisted": 13232,
+    "indexed": 13232
   },
   "http_memory_kib": {
-    "Rss": 111928,
-    "Pss": 110349,
-    "Private_Dirty": 89416
+    "Rss": 110968,
+    "Pss": 109383,
+    "Private_Dirty": 88584
   },
   "upload": {
     "file": "black_hole.jpg",
     "bytes": 505420,
-    "median_total_ms": 128.4499189999906,
+    "median_total_ms": 124.93112100003145,
     "runs": [
       {
-        "post_ms": 124.23146100002214,
-        "thumb_ms": 4.21845799996845,
-        "total_ms": 128.4499189999906,
+        "post_ms": 119.93649599992295,
+        "thumb_ms": 4.994625000108499,
+        "total_ms": 124.93112100003145,
         "thumb_bytes": 84296,
         "thumb_sha256": "b83abe479559cd6ea61e5abc721de0c178be118a02580f4551ac99c3a2287527",
         "content_type": "image/jpeg",
@@ -289,9 +289,9 @@
     ]
   },
   "final_memory_kib": {
-    "Rss": 153656,
-    "Pss": 152077,
-    "Private_Dirty": 127920
+    "Rss": 157540,
+    "Pss": 155955,
+    "Private_Dirty": 131976
   },
-  "load_end": "4.79 3.30 1.70 1/232 10322\n"
+  "load_end": "4.78 3.19 1.62 1/225 10320\n"
 }

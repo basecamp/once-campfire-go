@@ -1,6 +1,6 @@
 # Go and Rust application benchmark
 
-Native release binaries; direct HTTP/1.1 application listeners; identity encoding; identical seed and CPU affinity. Media use installed native libraries. Workstation background load recorded.
+Native release binaries; direct HTTP/1.1 application listeners; identity encoding; identical seed and CPU affinity. Media use installed native libraries. Fly.io performance-16x Machine background load recorded.
 
 6 rotating repetitions; 5.0-second HTTP samples after 2-second warmups. Four application workers on CPUs 8-11; load generator on CPUs 12-15. HTTP uses identity encoding. Every run starts with a separate copy of the same seed.
 
@@ -12,21 +12,21 @@ Rates show median (minimum–maximum); latency is the median of each run’s per
 
 | Workload | Clients | App | Requests/s (range) | p50 ms | p90 ms | p99 ms |
 |---|---:|---|---:|---:|---:|---:|
-| room_show | 16 | go-before | 5,506 (5,327–5,713) | 2.532 | 5.171 | 8.063 |
-| room_show | 16 | go | 6,932 (6,338–7,272) | 1.951 | 4.175 | 6.767 |
-| room_show | 16 | rust | 9,184 (8,272–9,459) | 1.661 | 2.386 | 3.218 |
-| messages_page | 16 | go-before | 7,629 (7,332–7,841) | 1.743 | 3.845 | 6.265 |
-| messages_page | 16 | go | 7,753 (7,285–7,981) | 1.719 | 3.789 | 6.245 |
-| messages_page | 16 | rust | 10,055 (9,392–10,653) | 1.526 | 2.135 | 2.791 |
-| sidebar | 16 | go-before | 6,191 (5,716–7,400) | 2.414 | 3.843 | 5.645 |
-| sidebar | 16 | go | 7,004 (6,558–7,427) | 2.131 | 3.354 | 5.041 |
-| sidebar | 16 | rust | 11,441 (10,661–12,003) | 1.344 | 1.965 | 2.638 |
-| search | 16 | go-before | 4,990 (4,613–5,192) | 2.774 | 5.765 | 9.207 |
-| search | 16 | go | 5,138 (4,950–5,303) | 2.690 | 5.611 | 8.887 |
-| search | 16 | rust | 9,807 (9,358–10,284) | 1.510 | 2.332 | 3.447 |
-| post_message | 16 | go-before | 2,034 (1,946–2,115) | 4.961 | 18.543 | 31.431 |
-| post_message | 16 | go | 2,012 (1,948–2,101) | 4.729 | 19.895 | 33.055 |
-| post_message | 16 | rust | 2,007 (1,897–2,046) | 4.855 | 6.247 | 133.183 |
+| room_show | 16 | go-before | 4,313 (4,194–4,553) | 3.316 | 6.341 | 9.667 |
+| room_show | 16 | go | 5,428 (5,189–5,556) | 2.562 | 5.187 | 8.123 |
+| room_show | 16 | rust | 6,437 (6,164–6,826) | 2.390 | 3.392 | 4.409 |
+| messages_page | 16 | go-before | 5,984 (5,771–6,496) | 2.290 | 4.749 | 7.591 |
+| messages_page | 16 | go | 5,937 (5,845–6,083) | 2.290 | 4.799 | 7.851 |
+| messages_page | 16 | rust | 6,851 (6,596–7,210) | 2.254 | 3.118 | 4.012 |
+| sidebar | 16 | go-before | 4,585 (4,255–5,408) | 3.309 | 4.993 | 6.927 |
+| sidebar | 16 | go | 5,129 (4,601–5,808) | 2.936 | 4.501 | 6.407 |
+| sidebar | 16 | rust | 8,190 (7,949–8,670) | 1.884 | 2.716 | 3.546 |
+| search | 16 | go-before | 4,018 (3,662–4,158) | 3.634 | 6.573 | 9.903 |
+| search | 16 | go | 4,087 (3,872–4,393) | 3.555 | 6.449 | 9.855 |
+| search | 16 | rust | 7,351 (7,137–7,749) | 2.025 | 3.093 | 4.525 |
+| post_message | 16 | go-before | 1,945 (1,922–2,028) | 5.995 | 17.319 | 31.175 |
+| post_message | 16 | go | 1,934 (1,894–1,989) | 6.029 | 17.359 | 30.983 |
+| post_message | 16 | rust | 2,090 (2,066–2,138) | 7.471 | 8.875 | 13.263 |
 
 ## Action Cable
 
@@ -39,22 +39,22 @@ Throughput counts posted messages delivered to **all** clients; one such message
 
 | App | Upload + thumbnail median ms | Thumbnail bytes | Startup median ms | Idle Pss MiB | After HTTP Pss MiB | Final Pss MiB | Binary MiB |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| go-before | 139.99 | 84296 | 53.1 | 27.3 | 120.2 | 161.6 | 37.7 |
-| go | 128.12 | 84296 | 53.5 | 27.9 | 119.6 | 162.9 | 37.7 |
-| rust | 127.13 | 84296 | 79.1 | 32.5 | 88.3 | 132.2 | 35.6 |
+| go-before | 114.66 | 84296 | 52.9 | 27.3 | 119.2 | 161.6 | 37.7 |
+| go | 113.71 | 84296 | 53.0 | 27.7 | 118.8 | 160.0 | 37.7 |
+| rust | 119.10 | 84296 | 80.8 | 32.5 | 87.6 | 131.1 | 35.6 |
 
 Startup includes application initialization, measured to a successful health request at 25 ms polling intervals. Final memory follows the complete workload sequence and includes allocator high-water effects; it is not a per-client memory measurement. Each media sample creates a new blob and fetches its generated thumbnail.
 
 ## Reproduction and limits
 
 - [Raw samples](raw.json) include statuses, errors, latency distributions, delivery counters, byte hashes and memory snapshots. [Metadata](metadata.json) records source/binary/seed hashes, CPU details, affinity and load averages.
-- These are local workstation measurements, sequential within the harness. Background host activity is recorded, not eliminated. They are not a language-wide performance claim.
+- These are Fly.io performance-16x Machine measurements, sequential within the harness. Background host activity is recorded, not eliminated. They are not a language-wide performance claim.
 - This comparison uses direct application HTTP listeners. TLS, ACME, gzip/zstd and the public response cache have separate functional tests; these numbers do not measure their throughput.
 - Screen-level HTML and network comparisons remain stricter than the functional response contracts used here. Benchmark validation is not a declaration of complete byte-for-byte UI parity.
 
 ## Validation totals
 
-18 completed application runs; 271,510 acknowledged HTTP writes verified in both messages and FTS; 18 real thumbnail samples with identical hashes. HTTP errors: 0. Cable throughput was not measured.
+18 completed application runs; 246,052 acknowledged HTTP writes verified in both messages and FTS; 18 real thumbnail samples with identical hashes. HTTP errors: 0. Cable throughput was not measured.
 
 Generated HTML has different whitespace, attributes and serialization. Representative body sizes from the first repetition are shown below; comparison contracts use matching message/room IDs and the separately verified browser workflows.
 

@@ -14,7 +14,8 @@ REPS=${REPS:-6} SECONDS_=${SECONDS_:-5} SERVER=${SERVER:-8-11} LOADGEN=${LOADGEN
 for gzip in 1 0; do
   bench/application --rust-root /bench/rust --out bench/results/fly-gzip$gzip --apps go-before go rust --baseline-go /bench/campfire-main \
     --routes room_show messages_page sidebar search post_message --concurrency 16 --cable-clients --upload-reps 1 \
-    --reps $REPS --seconds $SECONDS_ --server-cpus $SERVER --loadgen-cpus $LOADGEN --gzip $gzip || echo "BENCH FAILED gzip=$gzip"
+    --reps $REPS --seconds $SECONDS_ --server-cpus $SERVER --loadgen-cpus $LOADGEN --gzip $gzip \
+    --host-label 'Fly.io performance-16x Machine' || echo "BENCH FAILED gzip=$gzip"
 done
 cp /bench/machine.txt bench/results/
 tar czf /bench/results.tgz -C bench/results . && echo "BENCH DONE"
