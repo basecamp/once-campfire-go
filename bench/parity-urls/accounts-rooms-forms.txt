@@ -1,15 +1,15 @@
 # Account settings, chat bots and the room forms (area C). David is an administrator. Pages with
 # absolute URLs (ctx.url) pin the Host, so both apps build them from the same base URL.
-/account/edit
-/account/edit | Turbo-Frame: account_users
-/account/edit?page=2
+/account/edit | Host: campfire.test
+/account/edit | Turbo-Frame: account_users | Host: campfire.test
+/account/edit?page=2 | Host: campfire.test
 /account/custom_styles/edit | Host: campfire.test
 /account/custom_styles/edit | Turbo-Frame: custom_styles | Host: campfire.test
 /account/users.turbo_stream
 /account/users.turbo_stream?page=2
 /account/users?page=1 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml
 /account/users
-/account/edit.json
+/account/edit.json | Host: campfire.test
 /account/bots | Host: campfire.test
 /account/bots | Turbo-Frame: chat_bots | Host: campfire.test
 /account/bots/new

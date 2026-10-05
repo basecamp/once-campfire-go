@@ -3,8 +3,8 @@
 /users/me/sidebar
 /users/me/sidebar | Turbo-Frame: user_sidebar
 /users/{users.david}/sidebar
-/users/me/profile
-/users/me/profile | Turbo-Frame: user_profile
+/users/me/profile | Host: campfire.test
+/users/me/profile | Turbo-Frame: user_profile | Host: campfire.test
 /users/me/push_subscriptions
 /users/me/push_subscriptions | Turbo-Frame: push_subscriptions
 /users/{users.david} | Host: campfire.test
@@ -21,12 +21,12 @@
 /users/999999999
 /users/me
 # users/new: signed in, require_unauthenticated_access redirects to the root.
-/join/{join_codes.signal}
-/join/wrong-code
+/join/{join_codes.signal} | Host: campfire.test | !nofollow
+/join/wrong-code | Host: campfire.test | !nofollow
 # Signed out (the Cookie header replaces the session's).
-/join/{join_codes.signal} | Cookie: none=1
-/join/{join_codes.signal} | Cookie: none=1 | Turbo-Frame: signup
-/join/wrong-code | Cookie: none=1
+/join/{join_codes.signal} | Cookie: none=1 | Host: campfire.test
+/join/{join_codes.signal} | Cookie: none=1 | Turbo-Frame: signup | Host: campfire.test
+/join/wrong-code | Cookie: none=1 | Host: campfire.test
 /autocompletable/users
 /autocompletable/users?query=a
 /autocompletable/users?filter=j

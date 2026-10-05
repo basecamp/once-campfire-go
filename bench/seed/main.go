@@ -400,7 +400,7 @@ func (s *seed) loadFixtures() {
 	}
 	created := map[string]time.Time{}
 	for _, f := range s.readFixtures("messages") {
-		at, err := time.Parse("2006-01-02 15:04:05.000000", f.fields["created_at"])
+		at, err := time.Parse("2006-01-02 15:04:05.999999", f.fields["created_at"])
 		if err != nil {
 			panic(err)
 		}
