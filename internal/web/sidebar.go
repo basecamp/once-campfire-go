@@ -43,12 +43,20 @@ func (r sidebarRoom) Label() string {
 	return strings.Join(names, "")
 }
 func (s *Server) displayRoom(ctx context.Context, room database.Room, user database.User) (sidebarRoom, error) {
+	var members []database.User
+	if room.Type == "Rooms::Direct" {
+		var err error
+		members, err = s.DB.RoomMembers(ctx, room.ID)
+		if err != nil {
+			return sidebarRoom{}, err
+		}
+	}
+	return displayRoomMembers(room, user, members), nil
+}
+
+func displayRoomMembers(room database.Room, user database.User, members []database.User) sidebarRoom {
 	view := sidebarRoom{Room: room}
 	if room.Type == "Rooms::Direct" {
-		members, err := s.DB.RoomMembers(ctx, room.ID)
-		if err != nil {
-			return view, err
-		}
 		var names []string
 		for _, member := range members {
 			if member.ID != user.ID {
@@ -70,7 +78,7 @@ func (s *Server) displayRoom(ctx context.Context, room database.Room, user datab
 			}
 		}
 	}
-	return view, nil
+	return view
 }
 func (s *Server) sidebarRooms(ctx context.Context, user database.User) ([]sidebarRoom, error) {
 	rooms, err := s.DB.SidebarRooms(ctx, user.ID)

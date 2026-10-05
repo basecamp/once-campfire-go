@@ -72,9 +72,21 @@ try {
   const messageID = await first.locator(".messages > .message[data-message-id]").filter({ hasText: "Hello from the first tab" }).getAttribute("id")
   const message = first.locator(`[id="${messageID}"]`)
   await message.locator("summary").click()
+  const numericID = await message.getAttribute("data-message-id")
+  // Quick reactions submit the clicked button's value through one shared form.
+  const reactions = message.locator('.quick-boosts button[name="boost[content]"]')
+  if (await reactions.count() !== 8) throw new Error("missing quick reaction controls")
+  for (let i = 0; i < 8; i++) {
+    const reaction = reactions.nth(i)
+    const expectedReaction = await reaction.getAttribute("value")
+    const postedReaction = first.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === `/messages/${numericID}/boosts`)
+    await reaction.click()
+    await postedReaction
+    await second.locator(`[data-message-id="${numericID}"] .boost-item`).filter({ hasText: expectedReaction }).waitFor()
+    await message.locator("summary").click()
+  }
   await message.getByRole("button", { name: "Copy link", exact: true }).click()
   const copiedLink = await first.evaluate(() => navigator.clipboard.readText())
-  const numericID = await message.getAttribute("data-message-id")
   if (copiedLink !== `${roomURL}/@${numericID}`) throw new Error(`Incorrect message permalink: ${copiedLink}`)
   await message.getByRole("link", { name: "Edit", exact: true }).click()
   await message.getByRole("textbox", { name: "Edit message", exact: true }).fill("Edited in the browser")
@@ -148,7 +160,7 @@ try {
   await first.locator("#nav").getByRole("heading", {name: "Ping with Joined browser user", exact: true}).waitFor()
   await joinedContext.close()
   if (errors.length) throw new Error(errors.join("\n"))
-  console.log("PASS: setup, two-tab live messaging, duplicate suppression, and stored-markup safety, copying message permalinks, editing, search, profile/account updates, QR codes, live room creation/renaming, bots, custom styles, session transfers, joining, and autocomplete-started direct pings in Chromium.")
+  console.log("PASS: setup, two-tab live messaging, duplicate suppression, and stored-markup safety, all eight quick reactions and live delivery, copying message permalinks, editing, search, profile/account updates, QR codes, live room creation/renaming, bots, custom styles, session transfers, joining, and autocomplete-started direct pings in Chromium.")
 } catch (error) {
  console.error(logs)
  for (const page of browser?.contexts()[0]?.pages() || []) {console.error(await page.locator("body").innerText());console.error(await page.locator("#composer").getAttribute("outerHTML").catch(()=>""))}

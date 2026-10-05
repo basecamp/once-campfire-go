@@ -284,18 +284,10 @@ type SidebarRoom struct {
 }
 
 func (d *DB) SidebarRooms(ctx context.Context, user int64) ([]SidebarRoom, error) {
-	rows, err := d.Read.QueryContext(ctx, "SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at,coalesce(m.involvement,''),m.unread_at IS NOT NULL FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=? AND m.involvement!='invisible' ORDER BY lower(r.name)", user)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var rooms []SidebarRoom
-	for rows.Next() {
-		var r SidebarRoom
-		if err := rows.Scan(&r.ID, &r.CreatorID, &r.Name, &r.Type, timestamp{&r.UpdatedAt}, &r.Involvement, &r.Unread); err != nil {
-			return nil, err
-		}
-		rooms = append(rooms, r)
-	}
-	return rooms, rows.Err()
+	return snapshotRows(d, ctx, `SELECT json_group_array(json(value)) FROM (
+		SELECT json_object('ID',r.id,'CreatorID',r.creator_id,'Name',coalesce(r.name,''),'Type',r.type,
+			'UpdatedAt',r.updated_at,'Involvement',coalesce(m.involvement,''),'Unread',m.unread_at IS NOT NULL) AS value
+		FROM rooms r JOIN memberships m ON m.room_id=r.id
+		WHERE m.user_id=? AND m.involvement!='invisible' ORDER BY lower(r.name)
+	)`, decodeSidebarRooms, user)
 }

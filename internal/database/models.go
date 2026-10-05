@@ -74,6 +74,20 @@ func (d *DB) UserByEmail(ctx context.Context, email string) (User, error) {
 func (d *DB) SessionUser(ctx context.Context, token string) (User, error) {
 	return userRow(d.Read.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND u.status=0", token))
 }
+
+// AuthenticatedUser checks current session/user state and refreshes stale activity
+// from the same lookup, avoiding a second read for the common active-session case.
+func (d *DB) AuthenticatedUser(ctx context.Context, token, agent, ip string) (User, bool, error) {
+	var u User
+	var active time.Time
+	err := d.Read.QueryRowContext(ctx, "SELECT "+userColumns+",s.last_active_at FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND u.status=0", token).Scan(&u.ID, &u.Name, &u.Email, &u.Password, &u.Role, &u.Status, &u.Bio, timestamp{&u.UpdatedAt}, &u.BotToken, timestamp{&active})
+	if err != nil {
+		return u, false, err
+	}
+	refreshed, err := d.refreshSession(ctx, token, agent, ip, active)
+	return u, refreshed, err
+}
+
 func (d *DB) StartSession(ctx context.Context, user int64, agent, ip string) (string, error) {
 	token, now := Token(), Stamp(d.Now())
 	_, err := d.Write.ExecContext(ctx, "INSERT INTO sessions(token,user_id,user_agent,ip_address,last_active_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?)", token, user, agent, ip, now, now, now)
@@ -123,29 +137,29 @@ func (d *DB) AllRooms(ctx context.Context, user int64) ([]Room, error) {
 	return d.rooms(ctx, user, false)
 }
 func (d *DB) rooms(ctx context.Context, user int64, visible bool) ([]Room, error) {
-	query := "SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=?"
+	visibility := ""
 	if visible {
-		query += " AND m.involvement!='invisible'"
+		visibility = " AND m.involvement!='invisible'"
 	}
-	rows, err := d.Read.QueryContext(ctx, query+" ORDER BY lower(r.name)", user)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := []Room{}
-	for rows.Next() {
-		var r Room
-		if err = rows.Scan(&r.ID, &r.CreatorID, &r.Name, &r.Type, timestamp{&r.UpdatedAt}); err != nil {
-			return nil, err
-		}
-		result = append(result, r)
-	}
-	return result, rows.Err()
+	return snapshotRows(d, ctx, `SELECT json_group_array(json(value)) FROM (
+		SELECT json_object('ID',r.id,'CreatorID',r.creator_id,'Name',coalesce(r.name,''),'Type',r.type,'UpdatedAt',r.updated_at) AS value
+		FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=?`+visibility+" ORDER BY lower(r.name))", decodeRooms, user)
 }
 func (d *DB) Room(ctx context.Context, user, id int64) (Room, error) {
 	var r Room
 	err := d.Read.QueryRowContext(ctx, "SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=? AND r.id=?", user, id).Scan(&r.ID, &r.CreatorID, &r.Name, &r.Type, timestamp{&r.UpdatedAt})
 	return r, err
+}
+
+// RoomPageRoom authorizes the room and reads its invitation state in one query.
+func (d *DB) RoomPageRoom(ctx context.Context, user, id int64) (Room, bool, error) {
+	var r Room
+	var invitation bool
+	err := d.Read.QueryRowContext(ctx, `SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at,
+		r.id=(SELECT id FROM rooms ORDER BY created_at LIMIT 1) AND NOT EXISTS(SELECT 1 FROM messages WHERE room_id=r.id LIMIT 1 OFFSET 40)
+		FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=? AND r.id=?`, user, id).
+		Scan(&r.ID, &r.CreatorID, &r.Name, &r.Type, timestamp{&r.UpdatedAt}, &invitation)
+	return r, invitation, err
 }
 
 const messageSelect = "SELECT m.id,m.room_id,m.creator_id,m.client_message_id,coalesce(t.body,''),coalesce(u.name,''),m.created_at,m.updated_at FROM messages m LEFT JOIN users u ON u.id=m.creator_id LEFT JOIN action_text_rich_texts t ON t.record_type='Message' AND t.record_id=m.id AND t.name='body' "
@@ -221,15 +235,16 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 	err := d.Transaction(ctx, func(tx *sql.Tx) error {
 		if checkMembership {
 			var n int
-			if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.room_id=? AND m.user_id=? AND u.status=0", room, user).Scan(&n); err != nil {
+			if err := tx.QueryRowContext(ctx, "SELECT count(*),coalesce(max(u.name),'') FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.room_id=? AND m.user_id=? AND u.status=0", room, user).Scan(&n, &m.Creator); err != nil {
 				return err
 			}
 			if n != 1 {
 				return ErrForbidden
 			}
-		}
-		if err := tx.QueryRowContext(ctx, "SELECT name FROM users WHERE id=?", user).Scan(&m.Creator); err != nil {
-			return err
+		} else {
+			if err := tx.QueryRowContext(ctx, "SELECT name FROM users WHERE id=?", user).Scan(&m.Creator); err != nil {
+				return err
+			}
 		}
 		if staged != nil {
 			var err error
@@ -284,11 +299,14 @@ func (d *DB) Search(ctx context.Context, user int64, query string) ([]Message, e
 	for i, w := range words {
 		words[i] = "\"" + strings.ReplaceAll(w, "\"", "\"\"") + "\""
 	}
-	rows, err := d.Read.QueryContext(ctx, messageSelect+"JOIN message_search_index idx ON idx.rowid=m.id JOIN memberships member ON member.room_id=m.room_id WHERE member.user_id=? AND idx.body MATCH ? ORDER BY m.created_at DESC LIMIT 100", user, strings.Join(words, " "))
-	if err != nil {
-		return nil, err
-	}
-	messages, err := scanMessages(rows)
+	messages, err := snapshotRows(d, ctx, `SELECT json_group_array(json(value)) FROM (
+		SELECT json_object('ID',m.id,'RoomID',m.room_id,'CreatorID',m.creator_id,'ClientID',m.client_message_id,
+			'Body',coalesce(t.body,''),'Creator',coalesce(u.name,''),'CreatedAt',m.created_at,'UpdatedAt',m.updated_at) AS value
+		FROM messages m LEFT JOIN users u ON u.id=m.creator_id
+		LEFT JOIN action_text_rich_texts t ON t.record_type='Message' AND t.record_id=m.id AND t.name='body'
+		JOIN message_search_index idx ON idx.rowid=m.id JOIN memberships member ON member.room_id=m.room_id
+		WHERE member.user_id=? AND idx.body MATCH ? ORDER BY m.created_at DESC LIMIT 100
+	)`, decodeMessages, user, strings.Join(words, " "))
 	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
 		messages[i], messages[j] = messages[j], messages[i]
 	}

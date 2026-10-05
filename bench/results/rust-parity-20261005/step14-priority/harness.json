@@ -1,0 +1,18 @@
+{
+  "sha256": {
+    "bench/application": "d207bd383a899237de9bf57621ededd2ba83c4baf55e27954183cf9a7029b086",
+    "bench/report": "282fbf99be19269b622e29ae252c8f84bb0d4950a5fa976081b88b6a284feab2",
+    "bench/target": "27fa5bcd9000f8f1a76dd0cdc995742b5dab7605937841a0bde0b4eb47e27681",
+    "bench/profile": "cb7e1342c94c30f5a101d22e5644cbcdef3055118f858c6851254e7a71730759",
+    "bench/upload": "37e43d238f5432ef62fddd792326943db0df981cbf1688d4b7e017ed6b6529c1",
+    "bin/build": "a666aafd13e51a806caf180666337beb63995fee9a168362f17d8461168ab2e7",
+    "bin/check": "33dde1706f182bdd88858f17cf455619b9e26bcf628436a11b9d54e4c4252f7c",
+    "bin/check-upgrade": "cc149171eecfb74767e4d975eb57396d2b461b02112afb138c89a30c3a4c94da"
+  },
+  "go_base_commit": "504428addff333549f1fc88b003c7331779a3c2a",
+  "go_build": "CGO_ENABLED=1 go build -tags sqlite_fts5 -trimpath -o campfire ./cmd/campfire (bin/build; no PGO)",
+  "rust_build": "cargo build --release -j 8 (pinned reference)",
+  "baseline_go": "Unmodified base commit built before edits; preserved at .cache/campfire-before for exploratory comparisons.",
+  "acceptance": "bench/target RESULTS (three repetitions, five workloads, Go/Rust median throughput > 1.0)",
+  "scheduling": "Applications and load generator all inherit nice -10. CPU affinities are unchanged; metadata records process_priority."
+}

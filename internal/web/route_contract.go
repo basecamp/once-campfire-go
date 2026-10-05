@@ -13,6 +13,7 @@ import (
 type routeContract struct {
 	Method, Pattern, Endpoint, Action string
 	regex                             *regexp.Regexp
+	prefix                            string
 	names                             []string
 	bot                               bool
 }
@@ -51,6 +52,9 @@ func compileContract(pattern string) (*regexp.Regexp, []string) {
 var escapedHex = regexp.MustCompile(`%[a-fA-F0-9]{2}`)
 
 func normalizedPath(path string) string {
+	if strings.HasPrefix(path, "/") && !strings.ContainsAny(path, "%") && !strings.Contains(path, "//") && (path == "/" || !strings.HasSuffix(path, "/")) {
+		return path
+	}
 	parts := strings.FieldsFunc(path, func(r rune) bool { return r == '/' })
 	return escapedHex.ReplaceAllStringFunc("/"+strings.Join(parts, "/"), strings.ToUpper)
 }
@@ -62,6 +66,9 @@ func recognize(method, path string) (*routeContract, map[string]string, error) {
 	for i := range contracts {
 		route := &contracts[i]
 		if route.Method != method {
+			continue
+		}
+		if !strings.HasPrefix(path, route.prefix) {
 			continue
 		}
 		captures := route.regex.FindStringSubmatch(path)
@@ -95,6 +102,11 @@ func recognize(method, path string) (*routeContract, map[string]string, error) {
 func init() {
 	for i := range contracts {
 		contracts[i].regex, contracts[i].names = compileContract(contracts[i].Pattern)
+		prefix := contracts[i].Pattern
+		if end := strings.IndexAny(prefix, ":*("); end >= 0 {
+			prefix = prefix[:end]
+		}
+		contracts[i].prefix = prefix
 		contracts[i].bot = strings.Contains(contracts[i].Pattern, ":bot_key")
 	}
 }

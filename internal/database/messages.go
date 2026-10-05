@@ -317,27 +317,15 @@ func (d *DB) MessagePageReferences(ctx context.Context, room, anchor int64, dire
 	if direction != "before" && anchor != 0 {
 		return d.MessagePage(ctx, room, anchor, direction)
 	}
-	query := "SELECT id,updated_at FROM messages WHERE room_id=? "
+	query := "SELECT id,room_id,updated_at FROM messages WHERE room_id=? "
 	args := []any{room}
 	if anchor != 0 {
 		query += "AND created_at < (SELECT created_at FROM messages WHERE id=? AND room_id=?) "
 		args = append(args, anchor, room)
 	}
-	rows, err := d.Read.QueryContext(ctx, query+"ORDER BY created_at DESC LIMIT 40", args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var messages []Message
-	for rows.Next() {
-		message := Message{RoomID: room}
-		if err := rows.Scan(&message.ID, timestamp{&message.UpdatedAt}); err != nil {
-			return nil, err
-		}
-		messages = append(messages, message)
-	}
+	messages, err := snapshotRows(d, ctx, "SELECT json_group_array(json_object('ID',id,'RoomID',room_id,'UpdatedAt',updated_at)) FROM ("+query+"ORDER BY created_at DESC LIMIT 40)", decodeMessages, args...)
 	slices.Reverse(messages)
-	return messages, rows.Err()
+	return messages, err
 }
 
 func (d *DB) MessagesByID(ctx context.Context, ids []int64) ([]Message, error) {

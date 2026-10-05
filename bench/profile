@@ -4,8 +4,8 @@ import argparse,importlib.machinery,importlib.util,json,os,shutil,sqlite3,subpro
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 loader=importlib.machinery.SourceFileLoader('upgrade',str(ROOT/'bin/check-upgrade'));spec=importlib.util.spec_from_loader(loader.name,loader);u=importlib.util.module_from_spec(spec);loader.exec_module(u)
-p=argparse.ArgumentParser();p.add_argument('workload',choices=['sidebar','room','search','avatar','write','cable']);p.add_argument('--out',type=Path,required=True);p.add_argument('--seconds',type=int,default=10);a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True)
-rust=ROOT.parent/'once-campfire-rust';seed=rust/'parity/.seed/default';labels=json.load(open(seed/'labels.json'))
+p=argparse.ArgumentParser();p.add_argument('workload',choices=['sidebar','room','messages','search','avatar','write','cable']);p.add_argument('--rust-root',type=Path,default=ROOT/'reference');p.add_argument('--out',type=Path,required=True);p.add_argument('--seconds',type=int,default=10);a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True)
+rust=a.rust_root.resolve();seed=rust/'parity/.seed/default';labels=json.load(open(seed/'labels.json'))
 env=os.environ.copy()
 for line in (rust/'parity/.env.reference').read_text().splitlines():
  if line and not line.startswith('#') and '=' in line:k,v=line.split('=',1);env[k]=v
@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(dir=ROOT/'.cache/tmp',prefix='profile-') as tmp
   else:
    cmd=['http','--conc','16','--duration',str(a.seconds),'--gzip','0']
    if a.workload=='write':cmd+=['--post-room',str(labels['rooms.hq'])]
-   else:cmd+=['--path',{'sidebar':'/users/me/sidebar','room':f'/rooms/{room}','search':'/searches?q=coffee','avatar':f'/users/{labels["avatar_tokens.jason"]}/avatar'}[a.workload]]
+   else:cmd+=['--path',{'sidebar':'/users/me/sidebar','room':f'/rooms/{room}','messages':f'/rooms/{room}/messages?before={labels["messages.busy_060"]}','search':'/searches?q=coffee','avatar':f'/users/{labels["avatar_tokens.jason"]}/avatar'}[a.workload]]
   result=subprocess.check_output(lg+cmd+['--base',base,'--cookie',cookie],text=True)
   (a.out/(a.workload+'.json')).write_text(result)
   print(result)

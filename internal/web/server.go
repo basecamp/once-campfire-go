@@ -33,21 +33,22 @@ const HealthBody = `<!DOCTYPE html><html><body style="background-color: green"><
 const MaxBody = 16 << 20
 
 type Server struct {
-	fragments  *fragmentCache
-	Webhooks   *integrations.WebhookClient
-	Jobs       *jobs.Runner
-	Push       *integrations.PushSender
-	Unfurler   *integrations.Unfurler
-	Storage    *storage.Store
-	Cable      *cable.Hub
-	DB         *database.DB
-	Secrets    *rails.Secrets
-	Secure     bool
-	mux        *router
-	templates  *template.Template
-	attemptsMu sync.Mutex
-	attempts   map[string]attempt
-	dummyHash  []byte
+	messageTemplates messageTemplates
+	fragments        *fragmentCache
+	Webhooks         *integrations.WebhookClient
+	Jobs             *jobs.Runner
+	Push             *integrations.PushSender
+	Unfurler         *integrations.Unfurler
+	Storage          *storage.Store
+	Cable            *cable.Hub
+	DB               *database.DB
+	Secrets          *rails.Secrets
+	Secure           bool
+	mux              *router
+	templates        *template.Template
+	attemptsMu       sync.Mutex
+	attempts         map[string]attempt
+	dummyHash        []byte
 }
 type attempt struct {
 	Count int
@@ -62,6 +63,8 @@ type botView struct {
 	Rooms []database.Room
 }
 type page struct {
+	// Defer view allocation until a cached message list actually needs rendering.
+	messageRecords               []database.Message
 	MessagesHTML                 template.HTML
 	Version                      string
 	UserDivider                  int
@@ -133,6 +136,10 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 	if err != nil {
 		return nil, err
 	}
+	messageTemplates, err := compileMessageTemplates(t)
+	if err != nil {
+		return nil, err
+	}
 	cacheMB := 32
 	if raw, ok := os.LookupEnv("CAMPFIRE_FRAGMENT_CACHE_MB"); ok {
 		cacheMB, err = strconv.Atoi(raw)
@@ -140,7 +147,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 			return nil, fmt.Errorf("invalid CAMPFIRE_FRAGMENT_CACHE_MB %q", raw)
 		}
 	}
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	s := &Server{messageTemplates: messageTemplates, fragments: newFragmentCache(cacheMB << 20), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -386,16 +393,21 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 		p.CustomStyles = template.HTML("<style>" + a.CustomStyles + "</style>")
 	}
 	var recorded *fragmentEntry
-	if len(p.Messages) > 0 {
-		raw := make([]database.Message, len(p.Messages))
+	raw := p.messageRecords
+	if raw == nil && len(p.Messages) > 0 {
+		raw = make([]database.Message, len(p.Messages))
 		for i, m := range p.Messages {
 			raw[i] = m.Message
 		}
+	}
+	if len(raw) > 0 {
 		if name == "room" || name == "messages" || name == "search" {
 			var entry fragmentEntry
 			entry, err = s.messageList(r.Context(), raw)
 			recorded = &entry
-			p.MessagesHTML = template.HTML("\x00campfire-" + rand.Text() + "\x00")
+			if name == "messages" {
+				p.MessagesHTML = template.HTML("\x00campfire-" + rand.Text() + "\x00")
+			}
 		} else {
 			p.Messages, err = s.messageViews(r.Context(), raw)
 			if err == nil && name == "edit-message" {
@@ -412,14 +424,14 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	if name == "search" {
 		p.ReturnRoom, _ = s.lastRoom(r, p.User.ID)
 	}
-	if name == "room" && recorded != nil {
-		shell, marker, err := s.roomShell(p)
+	if (name == "room" || name == "search") && recorded != nil {
+		shell, err := s.pageShellEntry(name, p)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		writeRecorded(w, status, shell, marker, *recorded)
+		writePageShell(w, status, shell, p.LoadedAt, *recorded)
 		return
 	}
 	sidebarKey := ""
@@ -475,16 +487,11 @@ func (s *Server) auth(next func(http.ResponseWriter, *http.Request, database.Use
 			s.requestAuthentication(w, r)
 			return
 		}
-		u, err := s.DB.SessionUser(r.Context(), token)
+		u, refreshed, err := s.DB.AuthenticatedUser(r.Context(), token, r.UserAgent(), remoteIP(r))
 		if errors.Is(err, sql.ErrNoRows) {
 			s.requestAuthentication(w, r)
 			return
 		}
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		refreshed, err := s.DB.RefreshSession(r.Context(), token, r.UserAgent(), remoteIP(r))
 		if err != nil {
 			s.fail(w, err)
 			return
@@ -696,7 +703,7 @@ func viewMessages(messages []database.Message) []messageView {
 	return result
 }
 func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
-	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
+	room, invitation, err := s.DB.RoomPageRoom(r.Context(), u.ID, roomID(r))
 	if err != nil {
 		s.roomLookupFailure(w, r, err)
 		return
@@ -716,13 +723,9 @@ func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
 		return
 	}
 	room = view.Room
-	var invitation bool
-	if err = s.DB.Read.QueryRowContext(r.Context(), "SELECT ?=(SELECT id FROM rooms ORDER BY created_at LIMIT 1) AND NOT EXISTS(SELECT 1 FROM messages WHERE room_id=? LIMIT 1 OFFSET 40)", room.ID, room.ID).Scan(&invitation); err != nil {
-		s.fail(w, err)
-		return
-	}
+
 	s.rememberRoom(w, r, strconv.FormatInt(room.ID, 10))
-	s.render(w, r, "room", 200, page{Invitation: invitation, Stream: s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)), Title: room.Name, User: u, Room: room, Messages: viewMessages(messages)})
+	s.render(w, r, "room", 200, page{Invitation: invitation, Stream: s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)), Title: room.Name, User: u, Room: room, messageRecords: messages})
 }
 func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.User) {
 	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
@@ -745,10 +748,38 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.Use
 		w.WriteHeader(204)
 		return
 	}
-	if messageFreshness(w, r, messages) {
+	// Preserve the cheap conditional-request path even on a cold fragment cache.
+	if r.Header.Get("If-None-Match") != "" || r.Header.Get("If-Modified-Since") != "" {
+		if messageFreshness(w, r, messages) {
+			return
+		}
+	}
+	if len(s.messageTemplates[0]) == 0 {
+		messageFreshness(w, r, messages)
+		s.render(w, r, "messages", 200, page{Messages: viewMessages(messages)})
 		return
 	}
-	s.render(w, r, "messages", 200, page{Messages: viewMessages(messages)})
+	if respondFormat(w, r, "html") == "" {
+		return
+	}
+	fragment, err := s.messageList(r.Context(), messages)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	etag := fragment.messageETag
+	if r.Header.Get("Turbo-Frame") != "" {
+		etag = fragment.frameETag
+	}
+	if setMessageFreshness(w, r, etag, fragment.modified) {
+		return
+	}
+	s.consumeFlash(r)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(200)
+	if _, err := w.Write(fragment.payload); err != nil {
+		return // Headers are committed; stop on a disconnected client.
+	}
 }
 func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u database.User) {
 	if !requireMessage(w, r) {
@@ -813,15 +844,16 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 	}
 }
 func (s *Server) sidebar(w http.ResponseWriter, r *http.Request, u database.User) {
-	items, err := s.sidebarRooms(r.Context(), u)
+	rooms, members, placeholders, err := s.DB.Sidebar(r.Context(), u.ID)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	placeholders, err := s.DB.DirectPlaceholders(r.Context(), u.ID)
-	if err != nil {
-		s.fail(w, err)
-		return
+	items := make([]sidebarRoom, 0, len(rooms))
+	for _, room := range rooms {
+		view := displayRoomMembers(room.Room, u, members[room.ID])
+		view.Involvement, view.Unread = room.Involvement, room.Unread
+		items = append(items, view)
 	}
 	s.render(w, r, "sidebar", 200, page{Placeholders: placeholders, SidebarRooms: items, User: u, RoomsStream: s.Secrets.SignStream("rooms"), UserRoomsStream: s.Secrets.SignStream(rails.UserRoomsStream(u.ID))})
 }
@@ -858,7 +890,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Rooms: rooms, Messages: viewMessages(messages), RecentSearches: recent})
+	s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Rooms: rooms, messageRecords: messages, RecentSearches: recent})
 }
 
 func (s *Server) serveCable(w http.ResponseWriter, r *http.Request, u database.User) {

@@ -81,15 +81,22 @@ func (w *responseBuffer) finish(r *http.Request) {
 			size += len(part)
 		}
 		h.Set("Content-Length", strconv.Itoa(size))
+	} else if w.status != 204 && w.status != 304 && h.Get("Content-Length") == "" && h.Get("Transfer-Encoding") == "" {
+		// The complete buffered body is known before committing headers. Avoid
+		// chunk framing, and give HEAD the same length as the corresponding GET.
+		h.Set("Content-Length", strconv.Itoa(w.body.Len()))
 	}
 	w.ResponseWriter.WriteHeader(w.status)
 	if r.Method != "HEAD" && w.status != 204 && w.status != 304 {
 		if len(w.parts) > 0 {
+			// One body write avoids separately flushing each fragment boundary
+			// through net/http's small connection buffer. Reuse the pooled body.
 			for _, part := range w.parts {
-				w.ResponseWriter.Write(part)
+				w.body.Write(part)
 			}
-		} else {
-			w.ResponseWriter.Write(w.body.Bytes())
+		}
+		if _, err := w.ResponseWriter.Write(w.body.Bytes()); err != nil {
+			return // The response is committed; a disconnected client needs no further writes.
 		}
 	}
 }
