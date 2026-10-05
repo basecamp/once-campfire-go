@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1014,12 +1015,19 @@ func searchQueryParam(r *http.Request) *string {
 	return nil
 }
 
-// searchQuery is params[:q]&.gsub(/[^[:word:]]/, " ").
+// searchQuery is params[:q]&.gsub(/[^[:word:]]/, " "): one space for each character that isn't
+// one of Onigmo's word characters.
 func searchQuery(q *string) *string {
 	if q == nil {
 		return nil
 	}
-	query := database.SearchQuery(*q)
+	query := strings.Map(func(c rune) rune {
+		i := sort.Search(len(searchWordRanges), func(i int) bool { return searchWordRanges[i][1] >= c })
+		if i < len(searchWordRanges) && searchWordRanges[i][0] <= c {
+			return c
+		}
+		return ' '
+	}, *q)
 	return &query
 }
 

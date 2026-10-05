@@ -34,6 +34,21 @@ func TestBroadcastsRenderTurboStreamActionsLikeTurboRails(t *testing.T) {
 	}
 }
 
+func TestSearchQueriesKeepOnlyOnigmoWordCharacters(t *testing.T) {
+	for q, want := range map[string]string{
+		"héllo wörld_1 ２ 日本語 ‿ a-b ️ ❤ é": "héllo wörld_1 ２ 日本語 ‿ a b ️   é",
+		`"quoted" OR NEAR(x*)`:            " quoted  OR NEAR x  ",
+		"ǅʰⅫⒶ‍½²€":                        "ǅʰⅫⒶ‍   ",
+	} {
+		if got := *searchQuery(&q); got != want {
+			t.Errorf("searchQuery(%q) = %q, want %q", q, got, want)
+		}
+	}
+	if searchQuery(nil) != nil {
+		t.Error("no q")
+	}
+}
+
 // roomsTest is a signed-in David with his first room, and the room's messages stream.
 type roomsTest struct {
 	t      *testing.T
