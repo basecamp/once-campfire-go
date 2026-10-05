@@ -99,31 +99,29 @@ Container verification exercises setup, a live SQLite backup, offline restore, a
 
 ## Benchmarks
 
-The [latest comparison](bench/results/concurrency-20261004/README.md) measures the published
-Go version, the current Go version and Rust in three rotating runs with identical seed data,
-two application CPUs and two SQLite readers each. Median requests/sec at 16 HTTP clients:
+The [latest comparisons](bench/results/uncached-cable-20261005/README.md) run the Go and Rust
+applications with identical seed data, two application CPUs and two SQLite readers each.
+Median requests/sec at 16 HTTP clients over three rotating runs; the "Go 2026-10-03" column is
+the version before the [concurrency changes](bench/results/concurrency-20261004/README.md):
 
-| Workload | Previous Go | Current Go | Rust | Current Go / Rust |
+| Workload | Go 2026-10-03 | Current Go | Rust | Current Go / Rust |
 |---|---:|---:|---:|---:|
-| Room page | 9,456 | 16,924 | 17,324 | 98% |
-| Message history | 13,430 | 19,335 | 18,940 | 102% |
-| Sidebar (full page) | 11,315 | 16,034 | 20,436 | 78% (66% with Rust's SQLite temp store) |
-| Search | 9,073 | 18,800 | 22,942 | 82% |
-| Post message | 4,540 | 7,086 | 6,739 | 105% |
+| Room page | 9,456 | 16,583 | 17,040 | 97% |
+| Message history | 13,430 | 19,281 | 18,545 | 104% |
+| Sidebar (full page) | 11,315 | 16,599 | 20,713 | 80% (66% with Rust's SQLite temp store) |
+| Search | 9,073 | 17,958 | 22,106 | 81% |
+| Post message | 4,540 | 8,301 | 6,700 | 124% |
+| Cable fan-out, 1,000 clients (messages/s) | 228 | 389 | 403 | 97% |
 
-Writes now follow the reference's concurrency model: one writer goroutine, WAL checkpoints
-beside it, and SQLite work that is not cancelled. The [change log](bench/results/concurrency-20261004/CHANGES.md)
-lists each change with its measured effect and tests. Go's p99 latency is still about twice
-Rust's on reads. Earlier sidebar comparisons, including the previous report's 24,658 vs 38,303 req/s,
-measured Go returning only the sidebar frame where Rust returned
-the full page; Go now renders the same page and the sidebar row compares like for like.
-
-These results use warm fragment caches, as both applications do by default. With the
-cache disabled in both, Rust renders room pages about 4.4× faster (1,594 vs 362 req/s), so
-uncached message rendering remains the largest gap. Action Cable fan-out to 1,000 clients
-was unchanged: 233 complete messages/sec for Go and 409 for Rust. Measurements ran in a
-4-CPU Docker Desktop VM and are not comparable with the earlier 16-CPU workstation reports
-([previous comparison](bench/results/optimization-next-20261003/README.md),
+These use warm fragment caches, as both applications do by default. With the cache disabled
+in both, Go renders room pages at 984 req/s and Rust at 1,584. Go's p99 latency is still about
+twice Rust's at 16 clients (equal at one client), and 1,000 Cable clients take about 73 KB each
+in Go and 18 KB in Rust. Earlier sidebar comparisons, including the previous report's 24,658 vs
+38,303 req/s, measured Go returning only the sidebar frame where Rust returned the full page.
+The change logs ([1](bench/results/concurrency-20261004/CHANGES.md),
+[2](bench/results/uncached-cable-20261005/CHANGES.md)) list each change with its measured effect
+and tests. Measurements ran in a 4-CPU Docker Desktop VM and are not comparable with the
+earlier 16-CPU workstation reports ([previous comparison](bench/results/optimization-next-20261003/README.md),
 [full-workload comparison](bench/results/application-optimized-20261003/report.md)).
 
 These numbers compare these implementations on this machine, not languages in general.
@@ -151,7 +149,8 @@ throughput is not measured. `bench/health` remains available for the much narrow
   parameters and every content-negotiation edge case is not claimed.
 - WebSockets share serialized and compressed broadcast payloads through a small extension to
   coder/websocket v1.8.15 (see `third_party/websocket/README.campfire`). Outgoing queues hold 256
-  frames; slow clients are disconnected. Authorization is checked afresh for each publication,
+  frames; slow clients are disconnected. Frames already queued for a client are written together
+  in one vectored write. Authorization is checked afresh for each publication,
   batching distinct sessions per room. Rust uses different stream queues.
 - Go ignores typing commands for rooms that have been deleted; Rust can still echo them to an
   already subscribed socket. The composer shows the same deleted-room message.
@@ -162,6 +161,8 @@ throughput is not measured. `bench/health` remains available for the much narrow
   messages and refresh timestamp on every request. Responses assemble cached bytes with fresh
   parts and derive validators from part lengths and hashes, so ETag values differ from both the
   original Go implementation and Rust.
+- Message HTML is produced by a compiled renderer rather than by executing the message template;
+  tests require it to match the template byte for byte over every branch and adversarial values.
 - SQLite connections keep temporary B-trees (small `DISTINCT`/`ORDER BY` sorts) in memory
   (`temp_store=MEMORY`); the reference uses SQLite's default file temp store. Results are the
   same. As in the reference, WAL checkpoints run beside a single writer and SQLite work is not

@@ -2,6 +2,10 @@ Based on github.com/coder/websocket v1.8.15, retaining its MIT license.
 
 Campfire adds prepared.go and prepared_test.go. PreparedMessage shares immutable
 payloads and lazily compressed bytes across server connections negotiating
-permessage-deflate without context takeover. Other connection modes use Write.
-The existing frame writer still handles locking, cancellation and close state.
-No upstream Go source files were changed. Upstream tests run in bin/check.
+permessage-deflate without context takeover. WritePrepared writes one or more
+prepared messages; when nothing is buffered, their frame headers and payloads go
+out in one vectored write (net.Buffers) instead of through the hijacked 4 KiB
+writer. It takes the same frame lock and follows the same close-state, timeout
+and error handling as writeFrame, and falls back to writeFrame otherwise. Other
+connection modes use Write. No upstream Go source files were changed. Upstream
+tests run in bin/check.

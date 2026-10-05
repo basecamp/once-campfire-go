@@ -48,6 +48,18 @@ func run() error {
 				file.Close()
 			}
 		}()
+		// SIGUSR1 writes the live heap beside it, for profiles under load.
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, syscall.SIGUSR1)
+		go func() {
+			for range signals {
+				if file, err := os.Create(path + ".inuse"); err == nil {
+					runtime.GC()
+					pprof.Lookup("heap").WriteTo(file, 0)
+					file.Close()
+				}
+			}
+		}()
 	}
 
 	command := "server"
