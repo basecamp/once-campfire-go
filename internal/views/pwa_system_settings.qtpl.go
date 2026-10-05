@@ -15,6 +15,109 @@ var (
 )
 
 func StreamPwaSystemSettings(qw422016 *qt422016.Writer, ctx *ViewContext) {
+	qw422016.N().S(`<details class="notifications-help hide-in-browser" data-notifications-target="details">
+  <summary class="btn">
+    `)
+	qw422016.N().S(string(ImageTag(ctx, "external/gear.svg", NewAttrs().AriaHidden().Size(20))))
+	qw422016.N().S(`
+    <strong>Check your `)
+	qw422016.E().S(ctx.Platform.OperatingSystem)
+	qw422016.N().S(` settings</strong>
+    `)
+	qw422016.N().S(string(ImageTag(ctx, "disclosure.svg", NewAttrs().AriaHidden().Size(10).Class("disclosure"))))
+	qw422016.N().S(`
+  </summary>
+
+`)
+	if ctx.Platform.Firefox && ctx.Platform.Android {
+		qw422016.N().S(`      <ol>
+        <li>Tap the <em>`)
+		qw422016.N().S(string(ImageTag(ctx, "menu-dots-vertical.svg", NewAttrs().Alt("More options").Size(16))))
+		qw422016.N().S(`</em> menu button.</li>
+        <li>Tap <em>Settings</em>.</li>
+        <li>Tap <em>Notifications</em>.</li>
+        <li>Tap <em>`)
+		qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the toggle button").Size(22))))
+		qw422016.N().S(`</em> to <em>Allow `)
+		qw422016.E().S(Capitalize(ctx.Platform.Browser))
+		qw422016.N().S(` notifications</em>.</li>
+      </ol>
+`)
+	} else if ctx.Platform.Edge && ctx.Platform.Desktop {
+		qw422016.N().S(`      <ol>
+        <li>Click <em>Start</em>, then <em>Settings</em>.</li>
+        <li>Go to <em>System &gt; Notification</em>.</li>
+        <li>Click <em>`)
+		qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the toggle button").Size(22))))
+		qw422016.N().S(`</em> <em>ON</em> for Campfire.</li>
+      </ol>
+`)
+	} else if (ctx.Platform.Firefox || ctx.Platform.Chrome) && ctx.Platform.Desktop {
+		qw422016.N().S(`      <ol>
+`)
+		if ctx.Platform.Windows {
+			qw422016.N().S(`          <li>Click <em>Start</em>, then <em>Settings</em>.</li>
+          <li>Go to <em>System &gt; Notification</em>.</li>
+          <li>Click <em>`)
+			qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the toggle button").Size(22))))
+			qw422016.N().S(`</em> <em>ON</em> for Campfire.</li>
+`)
+		} else {
+			qw422016.N().S(`          <li>Click <em aria-label="the Apple menu"></em> in the top left.</li>
+          <li>Click <em>System Settings…</em>.</li>
+          <li>Click <em>Notifications</em>.</li>
+          <li>Click <em>Campfire</em>.</li>
+          <li>Click <em>`)
+			qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the allow notifications switch").Size(22))))
+			qw422016.N().S(`</em> to <em>Allow notifications</em>.</li>
+`)
+		}
+		qw422016.N().S(`      </ol>
+`)
+	} else if ctx.Platform.Safari && ctx.Platform.Desktop {
+		qw422016.N().S(`      <ol>
+        <li>Click <em aria-label="the Apple menu"></em> in the top left.</li>
+        <li>Click <em>System Settings…</em>.</li>
+        <li>Click <em>Notifications</em>.</li>
+        <li>Click <em>Campfire</em>.</li>
+        <li>Click <em>`)
+		qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the allow notifications switch").Size(22))))
+		qw422016.N().S(`</em> to <em>Allow notifications</em>.</li>
+      </ol>
+`)
+	} else if (ctx.Platform.Safari || ctx.Platform.Chrome) && ctx.Platform.IOS {
+		qw422016.N().S(`      <ol>
+        <li>Open the <em>`)
+		qw422016.N().S(string(ImageTag(ctx, "external/gear.svg", NewAttrs().AriaHidden().Size(20))))
+		qw422016.N().S(`</em> Settings app.</li>
+        <li>Scroll to and tap <em>Campfire</em>.</li>
+        <li>Tap <em>Notifications</em>.</li>
+        <li>Tap <em>`)
+		qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the allow notifications switch button").Size(22))))
+		qw422016.N().S(`</em> to <em>Allow Notifications</em>.</li>
+      </ol>
+`)
+	} else if ctx.Platform.Chrome && ctx.Platform.Android {
+		qw422016.N().S(`      <ol>
+        <li>Open the <em>`)
+		qw422016.N().S(string(ImageTag(ctx, "external/gear.svg", NewAttrs().AriaHidden().Size(20))))
+		qw422016.N().S(`</em> Settings app.</li>
+        <li>Tap <em>Notifications</em>.</li>
+        <li>Tap <em>App notifications</em>.</li>
+        <li>Scroll to <em>Campfire</em>.</li>
+        <li>Tap <em>`)
+		qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the switch").Size(22))))
+		qw422016.N().S(`</em> to <em>Allow Notifications</em>.</li>
+      </ol>
+`)
+	} else {
+		qw422016.N().S(`      <p>Ensure notifications are allowed for `)
+		qw422016.E().S(Capitalize(ctx.Platform.Browser))
+		qw422016.N().S(` in your system settings.</p>
+`)
+	}
+	qw422016.N().S(`</details>
+`)
 }
 
 func WritePwaSystemSettings(qq422016 qtio422016.Writer, ctx *ViewContext) {

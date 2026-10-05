@@ -1,6 +1,48 @@
-{% comment %}reference/crates/views/templates/searches/index.html; TODO: body{% endcomment %}
+{% comment %}searches/index.html: blocks of SearchesIndex, which renders them in its layout (layouts/application.html).{% endcomment %}
 {% func (p *SearchesIndex) Head() %}{% endfunc %}
-{% func (p *SearchesIndex) Nav() %}{% endfunc %}
-{% func (p *SearchesIndex) Sidebar() %}{% endfunc %}
-{% func (p *SearchesIndex) Content() %}{% endfunc %}
-{% func (p *SearchesIndex) Footer() %}{% endfunc %}
+{% func (p *SearchesIndex) Nav() %}{% if p.Index.Query != nil %}
+    <div class="searches__query flex align-center gap pad-block-start-half">
+      <div class="btn btn--reversed btn--faux align-center gap txt-nowrap">
+        <span class="overflow-ellipsis">“{%s *p.Index.Query %}”</span>
+        <span class="flex-item-no-shrink">{%d len(p.Index.Messages) %}</span>
+</div>    </div>{% endif %}
+
+  <div class="searches__recents align-center gap pad-block-half overflow-y overflow-hide-scrollbar">
+    {%= SearchesRecents(p.Ctx, p.Index) %}
+  </div>{% endfunc %}
+{% func (p *SearchesIndex) Sidebar() %}
+  <div class="rooms position-relative flex flex-column gap overflow-y overflow-hide-scrollbar">
+    {%= SearchesRecents(p.Ctx, p.Index) %}
+  </div>{% endfunc %}
+{% func (p *SearchesIndex) Content() %}
+<div id="message-area" class="message-area">
+  <div class="message-area--empty min-width center">
+    <figure class="center pad">
+      <img aria-hidden="true" class="colorize--black translucent" src="{%s p.Ctx.Asset("search.svg") %}" />
+    </figure>
+  </div>
+
+  <div id="search-results" class="messages searches__results" data-controller="search-results" data-search-results-target="messages" data-search-results-me-class="message--me" data-search-results-threaded-class="message--threaded" data-search-results-mentioned-class="message--mentioned" data-search-results-formatted-class="message--formatted">{% for _, message := range p.Index.Messages %}
+    {%= Fragment(CachedMessageItem(p.Ctx, message)) %}{% endfor %}
+  </div></div>{% endfunc %}
+{% func (p *SearchesIndex) Footer() %}
+  <div class="composer flex align-end gap">
+    <a class="btn flex-item-no-shrink margin-block-end" style="view-transition-name: input-switcher; --btn-border-radius: 0.5em" href="{%s RouteRoom(p.Index.ReturnToRoomID) %}">
+      <img aria-hidden="true" src="{%s p.Ctx.Asset("arrow-left.svg") %}" />
+      <span class="for-screen-reader">Exit search </span>
+</a>
+    <form class="margin-block flex-item-grow contain flex align-center gap" data-controller="form" data-action="keydown.esc-&gt;form#cancel" action="{%s RouteSearches() %}" accept-charset="UTF-8" method="post">
+      <div class="composer__input flex align-center flex-item-grow gap full-width input input--actor min-width">
+        <img aria-hidden="true" class="composer__input-hint colorize--black" style="view-transition-name: input-btn;" src="{%s p.Ctx.Asset("search.svg") %}" width="20" height="20" />
+
+        <input{% if p.Index.Q != nil %} value="{%s *p.Index.Q %}"{% endif %} class="searches__input input flex-item-grow" role="searchbox" aria-label="search" autofocus="autofocus" required="required" type="text" name="q" id="q" />
+
+        <a data-form-target="cancel" role="button" class="searches__reset" href="{%s RouteSearches() %}">
+          <img aria-hidden="true" class="colorize--black" src="{%s p.Ctx.Asset("remove.svg") %}" width="14" height="14" />
+          <span class="for-screen-reader">Clear search field</span>
+</a>
+        <button name="button" type="submit" class="btn btn--reversed flex-item-no-shrink txt-small" style="--btn-border-radius: 0.5em">
+          <img aria-hidden="true" src="{%s p.Ctx.Asset("arrow-up.svg") %}" />
+          <span class="for-screen-reader">Search</span>
+</button>      </div>
+</form>  </div>{% endfunc %}

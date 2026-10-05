@@ -1,2 +1,6 @@
-{% comment %}reference/crates/views/templates/rooms/refreshes/show.turbo_stream.html; TODO: body{% endcomment %}
-{% func RoomsRefreshesShowTurboStream(ctx *ViewContext, refresh *RefreshView) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/rooms/refreshes/show.turbo_stream.html{% endcomment %}
+{% func RoomsRefreshesShowTurboStream(ctx *ViewContext, refresh *RefreshView) %}{% if len(refresh.NewMessages) > 0 %}<turbo-stream action="append" target="{%s RoomDomID(refresh.RoomKind, refresh.RoomID, "messages") %}"><template>
+  {% for _, message := range refresh.NewMessages %}{%= Fragment(CachedMessageItem(ctx, message)) %}{% endfor %}
+</template></turbo-stream>{% endif %}
+{% for _, message := range refresh.UpdatedMessages %}{%s "  " %}<turbo-stream action="replace" target="{%s message.DomID("") %}"><template>{%= Fragment(CachedMessageItem(ctx, message)) %}</template></turbo-stream>
+{% endfor %}{% endfunc %}

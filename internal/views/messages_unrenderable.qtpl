@@ -1,2 +1,8 @@
-{% comment %}reference/crates/views/templates/messages/_unrenderable.html; TODO: body{% endcomment %}
-{% func MessagesUnrenderable() %}{% endfunc %}
+{% comment %}reference/crates/views/templates/messages/_unrenderable.html{% endcomment %}
+{% func MessagesUnrenderable() %}<div class="message message--formatted message--failed center">
+  <div class="message__body">
+    <div class="message__body-content txt-align-center">
+      Failed to load message content
+    </div>
+  </div>
+</div>{% endfunc %}

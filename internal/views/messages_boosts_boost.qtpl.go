@@ -15,6 +15,46 @@ var (
 )
 
 func StreamMessagesBoostsBoost(qw422016 *qt422016.Writer, ctx *ViewContext, boost *BoostView) {
+	qw422016.N().S(`<div id="`)
+	qw422016.E().S(boost.DomID())
+	qw422016.N().S(`"
+      class="boost boost-item flex-inline postion--relative max-width align-center fill-white gap"
+      data-controller="boost-delete" data-boost-delete-perform-class="boost--deleting" data-boost-delete-reveal-class="expanded" data-boost-delete-booster-id-value="`)
+	qw422016.N().DL(boost.Booster.ID)
+	qw422016.N().S(`">
+    <figure class="avatar boost__avatar flex-item-no-shrink">
+      <a title="`)
+	qw422016.E().S(boost.Booster.Title)
+	qw422016.N().S(`" class="btn avatar" data-turbo-frame="_top" href="`)
+	qw422016.E().S(boost.Booster.Path())
+	qw422016.N().S(`"><img aria-label="`)
+	qw422016.E().S(boost.Booster.Name)
+	qw422016.N().S(` boosted `)
+	qw422016.E().S(boost.Content)
+	qw422016.N().S(`" src="`)
+	qw422016.E().S(boost.Booster.AvatarURL)
+	qw422016.N().S(`" width="48" height="48" /></a>
+    </figure>
+
+    <span role="button" class="`)
+	if boost.AllEmoji {
+		qw422016.N().S(`txt-small txt-medium`)
+	} else {
+		qw422016.N().S(`txt-small`)
+	}
+	qw422016.N().S(`" data-action="click-&gt;boost-delete#reveal keydown.enter-&gt;boost-delete#reveal:prevent" data-boost-delete-target="content">`)
+	qw422016.E().S(boost.Content)
+	qw422016.N().S(`</span>
+
+    <form class="button_to" method="post" action="`)
+	qw422016.E().S(boost.Path())
+	qw422016.N().S(`"><input type="hidden" name="_method" value="delete" /><button data-action="boost-delete#perform" data-boost-delete-target="button" class="btn btn--negative flex-item-justify-end boost__delete" type="submit">
+      <img aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("minus.svg"))
+	qw422016.N().S(`" width="20" height="20" />
+      <span class="for-screen-reader">Delete this boost</span>
+</button></form>  </div>
+  <span id="delete_boost_accessible_label" class="for-screen-reader">Press enter to delete this boost</span>`)
 }
 
 func WriteMessagesBoostsBoost(qq422016 qtio422016.Writer, ctx *ViewContext, boost *BoostView) {

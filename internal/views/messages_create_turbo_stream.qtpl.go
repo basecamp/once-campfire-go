@@ -15,6 +15,11 @@ var (
 )
 
 func StreamMessagesCreateTurboStream(qw422016 *qt422016.Writer, ctx *ViewContext, message MessageItem, roomKind RoomKind) {
+	qw422016.N().S(`<turbo-stream action="append" target="`)
+	qw422016.E().S(RoomDomID(roomKind, message.RoomID(), "messages"))
+	qw422016.N().S(`"><template>`)
+	StreamFragment(qw422016, CachedMessageItem(ctx, message))
+	qw422016.N().S(`</template></turbo-stream>`)
 }
 
 func WriteMessagesCreateTurboStream(qq422016 qtio422016.Writer, ctx *ViewContext, message MessageItem, roomKind RoomKind) {

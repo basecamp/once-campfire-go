@@ -15,6 +15,100 @@ var (
 )
 
 func StreamMessagesActions(qw422016 *qt422016.Writer, ctx *ViewContext, message *MessageView) {
+	qw422016.N().S(`<div class="message__actions" data-controller="soft-keyboard">
+  <details class="position-relative" data-controller="popup" data-action="keydown.esc-&gt;popup#close toggle-&gt;popup#toggle click@document-&gt;popup#closeOnClickOutside" data-popup-orientation-top-class="popup-orientation-top">
+    <summary class="btn message__action-btn message__options-btn">
+      <img class="colorize--black" aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("menu-dots-horizontal.svg"))
+	qw422016.N().S(`" width="20" height="20" />
+      <span class="for-screen-reader">Message options</span>
+    </summary>
+
+    <div class="message__actions-menu border shadow" data-popup-target="menu">
+      <div class="quick-boosts">`)
+	for _, reaction := range Reactions {
+		qw422016.N().S(`
+          <form data-turbo-frame="`)
+		qw422016.E().S(message.DomID("boosting"))
+		qw422016.N().S(`" data-action="popup#close" action="`)
+		qw422016.E().S(message.BoostsPath())
+		qw422016.N().S(`" accept-charset="UTF-8" method="post">
+            <input type="hidden" name="boost[content]" id="boost_content" value="`)
+		qw422016.E().S(reaction.Character)
+		qw422016.N().S(`" />
+            <button name="button" type="submit" title="`)
+		qw422016.E().S(reaction.Title)
+		qw422016.N().S(`" class="btn message__action-btn" data-emoji="`)
+		qw422016.E().S(reaction.Character)
+		qw422016.N().S(`">
+              <figure class="margin-none boost-character">`)
+		qw422016.E().S(reaction.Character)
+		qw422016.N().S(`</figure>
+              <span class="for-screen-reader">`)
+		qw422016.E().S(reaction.Title)
+		qw422016.N().S(`</span>
+</button></form>`)
+	}
+	qw422016.N().S(`
+
+        <a class="btn message__action-btn message__boost-btn" data-turbo-frame="`)
+	qw422016.E().S(message.DomID("new_boost"))
+	qw422016.N().S(`" data-action="soft-keyboard#open popup#close" href="`)
+	qw422016.E().S(message.NewBoostPath())
+	qw422016.N().S(`">
+          <img class="colorize--black" aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("boost.svg"))
+	qw422016.N().S(`" width="20" height="20" />
+          <span class="for-screen-reader">New boost</span>
+</a>      </div>
+
+      <div class="flex flex-wrap border-top margin-block-start-half pad-block-start-half message__actions-grid">`)
+	if attachment := message.Attachment(); attachment != nil {
+		qw422016.N().S(`
+          <a class="btn message__action-btn center full-width hide-in-ios-pwa" title="Download" aria-label="Download" href="`)
+		qw422016.E().S(attachment.DownloadPath)
+		qw422016.N().S(`">
+            <img class="colorize--black" aria-hidden="true" src="`)
+		qw422016.E().S(ctx.Asset("download.svg"))
+		qw422016.N().S(`" width="20" height="20" />
+</a>
+          <button class="btn message__action-btn center full-width" data-controller="web-share" data-action="web-share#share" data-web-share-files-value="`)
+		qw422016.E().S(attachment.BlobPath)
+		qw422016.N().S(`" data-web-share-title-value="`)
+		qw422016.E().S(attachment.Filename)
+		qw422016.N().S(`" title="Share" aria-label="Share">
+            <img class="colorize--black" aria-hidden="true" src="`)
+		qw422016.E().S(ctx.Asset("share.svg"))
+		qw422016.N().S(`" width="20" height="20" />
+</button>`)
+	} else {
+		qw422016.N().S(`
+          <button class="btn message__action-btn center full-width" data-action="reply#reply" title="Reply" aria-label="Reply">
+            <img class="colorize--black" aria-hidden="true" src="`)
+		qw422016.E().S(ctx.Asset("reply.svg"))
+		qw422016.N().S(`" width="20" height="20" />
+</button>`)
+	}
+	qw422016.N().S(`
+
+        <button class="btn message__action-btn center full-width" title="Copy link" aria-label="Copy link" data-controller="copy-to-clipboard" data-action="copy-to-clipboard#copy" data-copy-to-clipboard-success-class="btn--success" data-copy-to-clipboard-url-value="`)
+	qw422016.E().S(message.AtPath())
+	qw422016.N().S(`">
+          <img class="colorize--black" aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("link.svg"))
+	qw422016.N().S(`" width="20" height="20" />
+</button>
+        <a class="btn message__action-btn center full-width message__edit-btn" data-turbo-frame="`)
+	qw422016.E().S(message.DomID("edit"))
+	qw422016.N().S(`" title="Edit" aria-label="Edit" href="`)
+	qw422016.E().S(message.EditPath())
+	qw422016.N().S(`">
+          <img class="colorize--black" aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("pencil.svg"))
+	qw422016.N().S(`" width="20" height="20" />
+</a>      </div>
+    </div>
+</details></div>`)
 }
 
 func WriteMessagesActions(qq422016 qtio422016.Writer, ctx *ViewContext, message *MessageView) {

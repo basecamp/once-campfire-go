@@ -1,2 +1,2 @@
-{% comment %}reference/crates/views/templates/messages/show.html; TODO: body{% endcomment %}
-{% func MessagesShow(ctx *ViewContext, message *MessageView) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/messages/show.html{% endcomment %}
+{% func MessagesShow(ctx *ViewContext, message *MessageView) %}{%s= CachedMessage(ctx, message).HTML %}{% endfunc %}

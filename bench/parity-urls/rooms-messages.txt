@@ -1,0 +1,93 @@
+# Area A: rooms#show, messages, boosts, refreshes, involvements and searches. Every request names
+# the same host, so the absolute URLs (url_for) agree although the two servers listen on different
+# ports.
+
+# rooms#show: the original room (invitation), open, closed, direct, group direct, invisible, and
+# a room created by someone else. (A room David isn't in redirects to the root, which the harness
+# can't follow to campfire.test; internal/web tests cover it.)
+/rooms/{rooms.pets} | Host: campfire.test
+/rooms/{rooms.hq} | Host: campfire.test
+/rooms/{rooms.watercooler} | Host: campfire.test
+/rooms/{rooms.watercooler} | Turbo-Frame: messages | Host: campfire.test
+/rooms/{rooms.designers} | Host: campfire.test
+/rooms/{rooms.david_and_jason} | Host: campfire.test
+/rooms/{rooms.david_and_kevin} | Host: campfire.test
+/rooms/{rooms.group_direct} | Host: campfire.test
+/rooms/{rooms.quiet} | Host: campfire.test
+/rooms/{rooms.archive} | Host: campfire.test
+/rooms/{rooms.broken} | Host: campfire.test
+
+# Deep links: the page around a message, a message in another room, one that doesn't exist.
+/rooms/{rooms.watercooler}/@{messages.busy_060} | Host: campfire.test
+/rooms/{rooms.watercooler}/@{messages.busy_001} | Host: campfire.test
+/rooms/{rooms.watercooler}/@{messages.busy_120} | Host: campfire.test
+/rooms/{rooms.watercooler}/@{messages.busy_060} | Turbo-Frame: messages | Host: campfire.test
+/rooms/{rooms.designers}/@{messages.first} | Host: campfire.test
+/rooms/{rooms.watercooler}/@{messages.first} | Host: campfire.test
+/rooms/{rooms.watercooler}/@999999999 | Host: campfire.test
+
+# messages#index: the last page, before and after a message, empty pages, missing anchors.
+/rooms/{rooms.watercooler}/messages | Host: campfire.test
+/rooms/{rooms.watercooler}/messages?before={messages.busy_060} | Host: campfire.test
+/rooms/{rooms.watercooler}/messages?after={messages.busy_060} | Host: campfire.test
+/rooms/{rooms.watercooler}/messages?before={messages.busy_001} | Host: campfire.test
+/rooms/{rooms.watercooler}/messages?after={messages.busy_120} | Host: campfire.test
+/rooms/{rooms.watercooler}/messages?before={messages.busy_060} | Turbo-Frame: messages | Host: campfire.test
+/rooms/{rooms.designers}/messages?before={messages.second} | Host: campfire.test
+/rooms/{rooms.designers}/messages?after={messages.first} | Host: campfire.test
+/rooms/{rooms.david_and_jason}/messages | Host: campfire.test
+/rooms/{rooms.pets}/messages | Host: campfire.test
+/rooms/{rooms.watercooler}/messages?before=999999999 | Host: campfire.test
+/rooms/{rooms.bender_and_kevin}/messages | Host: campfire.test
+
+# messages#show and #edit.
+/rooms/{rooms.designers}/messages/{messages.first} | Host: campfire.test
+/rooms/{rooms.designers}/messages/{messages.second} | Host: campfire.test
+/rooms/{rooms.watercooler}/messages/{messages.fourth} | Host: campfire.test
+/rooms/{rooms.watercooler}/messages/{messages.busy_060} | Host: campfire.test
+/rooms/{rooms.watercooler}/messages/{messages.bot_in_watercooler} | Host: campfire.test
+/rooms/{rooms.david_and_jason}/messages/{messages.direct_first} | Host: campfire.test
+/rooms/{rooms.designers}/messages/{messages.first} | Turbo-Frame: edit_message_0001 | Host: campfire.test
+/rooms/{rooms.designers}/messages/{messages.first}/edit | Host: campfire.test
+/rooms/{rooms.designers}/messages/{messages.second}/edit | Host: campfire.test
+/rooms/{rooms.watercooler}/messages/{messages.busy_060}/edit | Host: campfire.test
+/rooms/{rooms.designers}/messages/{messages.first}/edit | Turbo-Frame: edit_message_0001 | Host: campfire.test
+/rooms/{rooms.watercooler}/messages/{messages.first} | Host: campfire.test
+/messages/{messages.first} | Host: campfire.test
+
+# Boosts.
+/messages/{messages.first}/boosts | Host: campfire.test
+/messages/{messages.first}/boosts | Turbo-Frame: boosting_message_0001 | Host: campfire.test
+/messages/{messages.fourth}/boosts | Host: campfire.test
+/messages/{messages.thirteenth}/boosts | Host: campfire.test
+/messages/{messages.busy_060}/boosts | Host: campfire.test
+/messages/{messages.first}/boosts/new | Host: campfire.test
+/messages/{messages.first}/boosts/new | Turbo-Frame: new_boost_message_0001 | Host: campfire.test
+/messages/{messages.busy_060}/boosts/new | Host: campfire.test
+/messages/999999999/boosts | Host: campfire.test
+
+# rooms/refreshes#show, with since as the client sends it (room.updated_at in ms).
+/rooms/{rooms.watercooler}/refresh?since=1772466900000 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
+/rooms/{rooms.watercooler}/refresh?since=1772452800000 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
+/rooms/{rooms.watercooler}/refresh?since=1772323200000 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
+/rooms/{rooms.watercooler}/refresh?since=0 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
+/rooms/{rooms.watercooler}/refresh | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
+/rooms/{rooms.designers}/refresh?since=0 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
+/rooms/{rooms.david_and_jason}/refresh?since=0 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml | Host: campfire.test
+/rooms/{rooms.watercooler}/refresh?since=0 | Host: campfire.test
+
+# rooms/involvements#show.
+/rooms/{rooms.watercooler}/involvement | Host: campfire.test
+/rooms/{rooms.hq}/involvement | Host: campfire.test
+/rooms/{rooms.archive}/involvement | Host: campfire.test
+/rooms/{rooms.pets}/involvement | Host: campfire.test
+/rooms/{rooms.david_and_jason}/involvement | Host: campfire.test
+/rooms/{rooms.watercooler}/involvement | Turbo-Frame: involvement_rooms_closed_486777696 | Host: campfire.test
+
+# searches#index.
+/searches | Host: campfire.test
+/searches?q=coffee | Host: campfire.test
+/searches?q= | Host: campfire.test
+/searches?q=zzzzqqqq | Host: campfire.test
+/searches?q=hello%2C+world%21 | Host: campfire.test
+/searches?q=coffee | Turbo-Frame: search-results | Host: campfire.test

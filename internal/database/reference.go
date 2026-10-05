@@ -151,13 +151,13 @@ func (d *DB) MessageLastPage(ctx context.Context, room int64) ([]ReferenceMessag
 
 // MessagePageBefore is room.messages.page_before(message).
 func (d *DB) MessagePageBefore(ctx context.Context, room int64, message ReferenceMessage) ([]ReferenceMessage, error) {
-	messages, err := d.referenceMessages(ctx, selectInRoom+` AND (created_at < ?) ORDER BY "messages"."created_at" DESC LIMIT 40`, room, Stamp(message.CreatedAt))
+	messages, err := d.referenceMessages(ctx, selectInRoom+` AND (created_at < ?) ORDER BY "messages"."created_at" DESC LIMIT 40`, room, ToDB(message.CreatedAt))
 	return reversed(messages), err
 }
 
 // MessagePageAfter is room.messages.page_after(message).
 func (d *DB) MessagePageAfter(ctx context.Context, room int64, message ReferenceMessage) ([]ReferenceMessage, error) {
-	return d.referenceMessages(ctx, selectInRoom+` AND (created_at > ?) ORDER BY "messages"."created_at" ASC LIMIT 40`, room, Stamp(message.CreatedAt))
+	return d.referenceMessages(ctx, selectInRoom+` AND (created_at > ?) ORDER BY "messages"."created_at" ASC LIMIT 40`, room, ToDB(message.CreatedAt))
 }
 
 // MessagePageAround is room.messages.page_around(message): up to 40 before, the message, up to

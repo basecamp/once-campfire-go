@@ -1,2 +1,4 @@
-{% comment %}reference/crates/views/templates/messages/_presentation.html; TODO: body{% endcomment %}
-{% func MessagesPresentation(ctx *ViewContext, message *MessageView) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/messages/_presentation.html{% endcomment %}
+{% func MessagesPresentation(ctx *ViewContext, message *MessageView) %}<div id="{%s message.DomID("presentation") %}" dir="auto" data-reply-target="body" data-messages-target="body">
+  {%s= string(MessagePresentation(ctx, message)) %}
+</div>{% endfunc %}

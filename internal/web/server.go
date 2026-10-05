@@ -168,17 +168,17 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 	s.mux.HandleFunc("POST /first_run", s.browserCheck(s.firstRunsCreate))
 	s.mux.HandleFunc("GET /{$}", s.auth(s.welcomeShow))
 	s.mux.HandleFunc("GET /rooms", s.auth(s.home))
-	s.mux.HandleFunc("GET /rooms/{id}", s.auth(s.room))
-	s.mux.HandleFunc("GET /rooms/{id}/messages", s.auth(s.messages))
-	s.mux.HandleFunc("POST /rooms/{id}/messages", s.auth(s.createMessage))
+	s.mux.HandleFunc("GET /rooms/{id}", s.auth(s.roomShow))
+	s.mux.HandleFunc("GET /rooms/{room_id}/messages", s.auth(s.messagesIndex))
+	s.mux.HandleFunc("POST /rooms/{room_id}/messages", s.auth(s.messagesCreate))
 	s.mux.HandleFunc("GET /users/{user_id}/sidebar", s.auth(s.usersSidebarShow))
 	s.registerMessageRoutes()
 	s.registerRoomRoutes()
 	s.registerMediaRoutes()
 	s.registerAccountRoutes()
-	s.mux.HandleFunc("GET /searches", s.auth(s.search))
-	s.mux.HandleFunc("POST /searches", s.auth(s.search))
-	s.mux.HandleFunc("DELETE /searches/clear", s.auth(s.search))
+	s.mux.HandleFunc("GET /searches", s.auth(s.searchesIndex))
+	s.mux.HandleFunc("POST /searches", s.auth(s.searchesCreate))
+	s.mux.HandleFunc("DELETE /searches/clear", s.auth(s.searchesClear))
 	return s, nil
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

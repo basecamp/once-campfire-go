@@ -15,6 +15,85 @@ var (
 )
 
 func StreamMessagesMessage(qw422016 *qt422016.Writer, ctx *ViewContext, message *MessageView) {
+	if message.IsUnrenderable() {
+		qw422016.N().S(`
+  `)
+		StreamMessagesUnrenderable(qw422016)
+	} else {
+		qw422016.N().S(`
+  <div id="`)
+		qw422016.E().S(message.DomID(""))
+		qw422016.N().S(`" class="message `)
+		if message.AllEmoji {
+			qw422016.N().S(`message--emoji`)
+		}
+		qw422016.N().S(`" data-controller="reply" data-user-id="`)
+		qw422016.N().DL(message.Creator.ID)
+		qw422016.N().S(`" data-message-id="`)
+		qw422016.N().DL(message.ID)
+		qw422016.N().S(`" data-message-timestamp="`)
+		qw422016.N().DL(message.CreatedAtEpoch())
+		qw422016.N().S(`" data-message-updated-at="`)
+		qw422016.N().DL(message.UpdatedAtEpoch())
+		qw422016.N().S(`" data-sort-value="`)
+		qw422016.N().DL(message.CreatedAtEpoch())
+		qw422016.N().S(`" data-messages-target="message" data-search-results-target="message" data-refresh-room-target="message" data-reply-composer-outlet="#composer">
+    <h2 class="message__day-separator"><time datetime="`)
+		qw422016.E().S(message.CreatedAtISO())
+		qw422016.N().S(`" data-local-time-target="date"></time></h2>
+
+    <figure class="avatar message__avatar">
+      <a title="`)
+		qw422016.E().S(message.Creator.Title)
+		qw422016.N().S(`" class="btn avatar" data-turbo-frame="_top" href="`)
+		qw422016.E().S(message.Creator.Path())
+		qw422016.N().S(`"><img aria-hidden="true" src="`)
+		qw422016.E().S(message.Creator.AvatarURL)
+		qw422016.N().S(`" width="48" height="48" /></a>
+    </figure>
+
+    <turbo-frame id="`)
+		qw422016.E().S(message.DomID("edit"))
+		qw422016.N().S(`">
+      <div class="message__body">
+        <div class="message__body-content">
+          <div class="message__meta">
+            <h3 class="message__heading">
+              <span class="message__author" title="`)
+		qw422016.E().S(message.Creator.Title)
+		qw422016.N().S(`">
+                <strong data-reply-target="author">`)
+		qw422016.E().S(message.Creator.Name)
+		qw422016.N().S(`</strong>
+              </span>
+              <a target="_top" class="message__permalink" href="`)
+		qw422016.E().S(message.AtPath())
+		qw422016.N().S(`"><time class="message__timestamp" datetime="`)
+		qw422016.E().S(message.CreatedAtISO())
+		qw422016.N().S(`" data-local-time-target="time"></time></a>
+              <span class="message__room">
+                <a target="_top" data-reply-target="link" href="`)
+		qw422016.E().S(message.AtPath())
+		qw422016.N().S(`">`)
+		qw422016.E().S(message.RoomName)
+		qw422016.N().S(`</a>
+              </span>
+            </h3>
+            `)
+		StreamMessagesActions(qw422016, ctx, message)
+		qw422016.N().S(`
+          </div>
+          `)
+		StreamMessagesPresentation(qw422016, ctx, message)
+		qw422016.N().S(`
+          `)
+		StreamMessagesBoostsBoosts(qw422016, ctx, message)
+		qw422016.N().S(`
+        </div>
+      </div>
+    </turbo-frame>
+</div>`)
+	}
 }
 
 func WriteMessagesMessage(qq422016 qtio422016.Writer, ctx *ViewContext, message *MessageView) {

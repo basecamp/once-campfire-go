@@ -15,6 +15,94 @@ var (
 )
 
 func StreamMessagesEdit(qw422016 *qt422016.Writer, ctx *ViewContext, edit *MessageEditView) {
+	message := &edit.Message
+
+	qw422016.N().S(`<turbo-frame id="`)
+	qw422016.E().S(message.DomID("edit"))
+	qw422016.N().S(`">
+  <div class="message__body position-relative" data-controller="scroll-into-view">
+    <div class="message__body-content message__body-content--editing gap">`)
+	if attachment := message.Attachment(); attachment != nil {
+		qw422016.N().S(`
+        `)
+		qw422016.N().S(string(AttachmentPresentation(ctx, attachment)))
+		qw422016.N().S(`
+
+        <div class="message__edit-btns flex align-center justify-space-between gap full-width pad-block-start-half">
+          <button name="button" type="submit" class="btn btn--negative center margin-block-end" form="`)
+		qw422016.E().S(message.DomID("delete_form"))
+		qw422016.N().S(`" data-turbo-confirm="Are you sure you want to delete this message?">
+            <img aria-hidden="true" src="`)
+		qw422016.E().S(ctx.Asset("trash.svg"))
+		qw422016.N().S(`" />
+            <span class="for-screen-reader">Delete message</span>
+</button>        </div>`)
+	} else {
+		qw422016.N().S(`
+        <div class="composer--edit composer--rich-text">
+          <form id="`)
+		qw422016.E().S(message.DomID("form"))
+		qw422016.N().S(`" data-controller="form" data-action="lexxy:file-accept-&gt;form#preventAttachment keydown.esc-&gt;form#cancel keydown.ctrl+enter-&gt;form#submit:prevent keydown.meta+enter-&gt;form#submit:prevent" action="`)
+		qw422016.E().S(message.Path())
+		qw422016.N().S(`" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="patch" />
+            <div class="full-width input input--actor min-width fill-white">
+              <lexxy-editor rows="1" class="input lexxy-content" aria-multiline="true" aria-label="Edit message" autofocus="autofocus" permitted-attachment-types="application/vnd.campfire.mention application/vnd.actiontext.opengraph-embed" data-action="lexxy:change-&gt;typing-notifications#start keydown-&gt;composer#submitByKeyboard:capture" data-direct-upload-url="`)
+		qw422016.E().S(ctx.URL("/rails/active_storage/direct_uploads"))
+		qw422016.N().S(`" data-blob-url-template="`)
+		qw422016.E().S(ctx.URL("/rails/active_storage/blobs/redirect/:signed_id/:filename"))
+		qw422016.N().S(`" id="message_body" input="message_body_trix_input_`)
+		qw422016.E().S(message.DomID(""))
+		qw422016.N().S(`" name="message[body]" value="`)
+		qw422016.E().S(edit.EditableBodyHTML)
+		qw422016.N().S(`">
+                <lexxy-prompt trigger="@" name="mention" src="`)
+		qw422016.E().S(MentionPromptSrc(message.RoomID))
+		qw422016.N().S(`" remote-filtering="true" empty-results="No matches"></lexxy-prompt>
+</lexxy-editor>            </div>
+
+            <a data-form-target="cancel" hidden="hidden" href="`)
+		qw422016.E().S(message.Path())
+		qw422016.N().S(`">Close editor and discard changes</a>
+
+            <div class="message__edit-btns flex align-center justify-space-between gap full-width pad-block-start-half">
+              <button name="button" type="submit" class="btn btn--reversed">
+                <img aria-hidden="true" src="`)
+		qw422016.E().S(ctx.Asset("check.svg"))
+		qw422016.N().S(`" />
+                <span class="for-screen-reader">Save changes</span>
+</button>
+              <button name="button" type="submit" class="btn btn--negative" form="`)
+		qw422016.E().S(message.DomID("delete_form"))
+		qw422016.N().S(`" data-turbo-confirm="Are you sure you want to delete this message?">
+                <img aria-hidden="true" src="`)
+		qw422016.E().S(ctx.Asset("trash.svg"))
+		qw422016.N().S(`" />
+                <span class="for-screen-reader">Delete message</span>
+</button>            </div>
+</form>        </div>`)
+	}
+	qw422016.N().S(`
+    </div>
+
+    <div class="message__actions flex flex-wrap">
+      <a class="message__action-btn message__edit-close-btn txt-small btn btn--borderless" href="`)
+	qw422016.E().S(message.Path())
+	qw422016.N().S(`">
+        <img class="colorize--black" aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("remove.svg"))
+	qw422016.N().S(`" />
+        <span class="for-screen-reader">Close editor and discard changes</span>
+</a>    </div>
+
+    <form id="`)
+	qw422016.E().S(message.DomID("delete_form"))
+	qw422016.N().S(`" data-turbo-frame="`)
+	qw422016.E().S(message.DomID("edit"))
+	qw422016.N().S(`" action="`)
+	qw422016.E().S(message.Path())
+	qw422016.N().S(`" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="delete" />
+  </div>
+</turbo-frame>`)
 }
 
 func WriteMessagesEdit(qq422016 qtio422016.Writer, ctx *ViewContext, edit *MessageEditView) {

@@ -15,6 +15,27 @@ var (
 )
 
 func StreamSearchesRecents(qw422016 *qt422016.Writer, ctx *ViewContext, index *SearchIndexView) {
+	for _, search := range index.RecentSearches {
+		qw422016.N().S(`
+      <a class="align-center gap room btn txt-nowrap" href="`)
+		qw422016.E().S(SearchPath(search))
+		qw422016.N().S(`">
+        <span class="overflow-ellipsis">“`)
+		qw422016.E().S(search)
+		qw422016.N().S(`”</span>
+</a>`)
+	}
+	if len(index.RecentSearches) > 0 {
+		qw422016.N().S(`
+      <form class="button_to" method="post" action="`)
+		qw422016.E().S(ctx.URL(RouteClearSearches()))
+		qw422016.N().S(`"><input type="hidden" name="_method" value="delete" /><button class="btn searches__btn" data-turbo-confirm="Are you sure you want to clear your recent searches?" type="submit">
+        <img aria-hidden="true" src="`)
+		qw422016.E().S(ctx.Asset("broom.svg"))
+		qw422016.N().S(`" />
+        <span class="for-screen-reader">Clear recent searches</span>
+</button></form>`)
+	}
 }
 
 func WriteSearchesRecents(qq422016 qtio422016.Writer, ctx *ViewContext, index *SearchIndexView) {

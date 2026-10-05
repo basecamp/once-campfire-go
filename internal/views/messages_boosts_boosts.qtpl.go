@@ -15,6 +15,36 @@ var (
 )
 
 func StreamMessagesBoostsBoosts(qw422016 *qt422016.Writer, ctx *ViewContext, message *MessageView) {
+	qw422016.N().S(`<turbo-frame id="`)
+	qw422016.E().S(message.DomID("boosting"))
+	qw422016.N().S(`">
+  <div class="boosts flex flex-wrap align-center gap full-width" style="--column-gap: 0.4ch; --row-gap: 0"
+      data-controller="turbo-streaming" data-action="turbo:submit-start->turbo-streaming#unsubscribe">
+    <div class="flex-inline flex-wrap gap" id="`)
+	qw422016.E().S(message.DomID("boosts"))
+	qw422016.N().S(`" data-turbo-streaming-target="container">`)
+	for i := range message.Boosts {
+		qw422016.N().S(`
+      `)
+		qw422016.N().S(CachedBoost(ctx, &message.Boosts[i]).HTML)
+	}
+	qw422016.N().S(`
+    </div>
+
+    <turbo-frame id="`)
+	qw422016.E().S(message.DomID("new_boost"))
+	qw422016.N().S(`">
+      <div class="flex-inline message__boost-inline" data-controller="soft-keyboard">
+        <a class="boost__action txt-small btn" action="soft-keyboard#open" href="`)
+	qw422016.E().S(message.NewBoostPath())
+	qw422016.N().S(`">
+          <img aria-hidden="true" src="`)
+	qw422016.E().S(ctx.Asset("boost.svg"))
+	qw422016.N().S(`" width="20" height="20" />
+          <span class="for-screen-reader">Add a boost</span>
+</a>      </div>
+</turbo-frame>  </div>
+</turbo-frame>`)
 }
 
 func WriteMessagesBoostsBoosts(qq422016 qtio422016.Writer, ctx *ViewContext, message *MessageView) {

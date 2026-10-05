@@ -15,6 +15,15 @@ var (
 )
 
 func StreamRoomsInvolvementsShow(qw422016 *qt422016.Writer, ctx *ViewContext, involvement *InvolvementView) {
+	qw422016.N().S(`<turbo-frame data-controller="turbo-frame" data-action="notifications:ready@window-&gt;turbo-frame#load" data-turbo-frame-url-param="`)
+	qw422016.E().S(RouteRoomInvolvement(involvement.RoomID))
+	qw422016.N().S(`" id="`)
+	qw422016.E().S(RoomDomID(involvement.Kind, involvement.RoomID, "involvement"))
+	qw422016.N().S(`">
+  `)
+	qw422016.N().S(string(involvement.Button(ctx)))
+	qw422016.N().S(`
+</turbo-frame>`)
 }
 
 func WriteRoomsInvolvementsShow(qq422016 qtio422016.Writer, ctx *ViewContext, involvement *InvolvementView) {

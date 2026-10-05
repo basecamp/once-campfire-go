@@ -15,6 +15,9 @@ var (
 )
 
 func StreamMessagesDestroyTurboStream(qw422016 *qt422016.Writer, message *MessageView) {
+	qw422016.N().S(`<turbo-stream action="remove" target="`)
+	qw422016.E().S(message.DomID(""))
+	qw422016.N().S(`"></turbo-stream>`)
 }
 
 func WriteMessagesDestroyTurboStream(qq422016 qtio422016.Writer, message *MessageView) {

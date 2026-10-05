@@ -1,2 +1,4 @@
-{% comment %}reference/crates/views/templates/rooms/involvements/show.html; TODO: body{% endcomment %}
-{% func RoomsInvolvementsShow(ctx *ViewContext, involvement *InvolvementView) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/rooms/involvements/show.html{% endcomment %}
+{% func RoomsInvolvementsShow(ctx *ViewContext, involvement *InvolvementView) %}<turbo-frame data-controller="turbo-frame" data-action="notifications:ready@window-&gt;turbo-frame#load" data-turbo-frame-url-param="{%s RouteRoomInvolvement(involvement.RoomID) %}" id="{%s RoomDomID(involvement.Kind, involvement.RoomID, "involvement") %}">
+  {%s= string(involvement.Button(ctx)) %}
+</turbo-frame>{% endfunc %}

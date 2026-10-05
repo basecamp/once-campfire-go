@@ -1,2 +1,22 @@
-{% comment %}reference/crates/views/templates/messages/boosts/new.html; TODO: body{% endcomment %}
-{% func MessagesBoostsNew(ctx *ViewContext, message *MessageView, user *UserView) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/messages/boosts/new.html{% endcomment %}
+{% func MessagesBoostsNew(ctx *ViewContext, message *MessageView, user *UserView) %}<turbo-frame id="{%s message.DomID("new_boost") %}">
+  <div class="boost flex-inline postion--relative max-width fill-white" style="--column-gap: var(--inline-space-half)">
+    <form class="boost__form flex align-center gap expanded" data-controller="form scroll-into-view" data-turbo-frame="{%s message.DomID("boosting") %}" data-action="keydown.esc-&gt;form#cancel" action="{%s message.BoostsPath() %}" accept-charset="UTF-8" method="post">
+      <label class="boost__form-label flex gap" style="--column-gap: 0.7ch;" role="button" tabindex="0" aria-label="Add a boost">
+        <figure class="avatar boost__avatar flex-item-no-shrink">
+          <a title="{%s user.Title %}" class="btn avatar" data-turbo-frame="_top" href="{%s user.Path() %}"><img aria-hidden="true" src="{%s user.AvatarURL %}" width="48" height="48" /></a>
+          <span class="for-screen-reader">{%s user.Name %}</span>
+        </figure>
+
+        <input autofocus="autofocus" autocomplete="off" autocorrect="off" maxlength="16" required="required" pattern="\S+.*" data-boost-form-target="input" class="input input--boost txt-small" size="16" type="text" name="boost[content]" />
+      </label>
+
+      <button name="button" type="submit" class="btn btn--reversed">
+        <img aria-hidden="true" src="{%s ctx.Asset("check.svg") %}" />
+        <span class="for-screen-reader">Submit</span>
+</button>
+      <a data-turbo-frame="{%s message.DomID("boosts") %}" data-form-target="cancel" class="btn btn--negative" href="{%s message.BoostsPath() %}">
+        <img aria-hidden="true" src="{%s ctx.Asset("minus.svg") %}" />
+        <span class="for-screen-reader">Cancel</span>
+</a></form>  </div>
+</turbo-frame>{% endfunc %}
