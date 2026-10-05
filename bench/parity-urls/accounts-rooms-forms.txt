@@ -1,0 +1,45 @@
+# Account settings, chat bots and the room forms (area C). David is an administrator. Pages with
+# absolute URLs (ctx.url) pin the Host, so both apps build them from the same base URL.
+/account/edit
+/account/edit | Turbo-Frame: account_users
+/account/edit?page=2
+/account/custom_styles/edit | Host: campfire.test
+/account/custom_styles/edit | Turbo-Frame: custom_styles | Host: campfire.test
+/account/users.turbo_stream
+/account/users.turbo_stream?page=2
+/account/users?page=1 | Accept: text/vnd.turbo-stream.html, text/html, application/xhtml+xml
+/account/users
+/account/edit.json
+/account/bots | Host: campfire.test
+/account/bots | Turbo-Frame: chat_bots | Host: campfire.test
+/account/bots/new
+/account/bots/new | Turbo-Frame: chat_bots
+/account/bots/{users.bender}/edit | Host: campfire.test
+/account/bots/{users.deploy_bot}/edit | Host: campfire.test
+/account/bots/{users.deploy_bot}/edit | Turbo-Frame: chat_bot | Host: campfire.test
+/account/bots/{users.old_bot}/edit
+/account/bots/{users.jason}/edit
+/rooms/opens/new
+/rooms/opens/new | Turbo-Frame: room_form
+/rooms/closeds/new
+/rooms/closeds/new | Turbo-Frame: room_form
+/rooms/directs/new
+/rooms/directs/new | Turbo-Frame: user_sidebar
+/rooms/opens/{rooms.hq}/edit | Host: campfire.test
+/rooms/opens/{rooms.hq}/edit | Turbo-Frame: room_form | Host: campfire.test
+/rooms/closeds/{rooms.hq}/edit | Host: campfire.test
+/rooms/opens/{rooms.pets}/edit | Host: campfire.test
+/rooms/closeds/{rooms.pets}/edit | Host: campfire.test
+/rooms/opens/{rooms.archive}/edit | Host: campfire.test
+/rooms/closeds/{rooms.archive}/edit | Host: campfire.test
+/rooms/closeds/{rooms.designers}/edit | Host: campfire.test
+/rooms/closeds/{rooms.designers}/edit | Turbo-Frame: room_form | Host: campfire.test
+/rooms/opens/{rooms.designers}/edit | Host: campfire.test
+/rooms/closeds/{rooms.quiet}/edit | Host: campfire.test
+/rooms/opens/{rooms.quiet}/edit | Host: campfire.test
+/rooms/closeds/{rooms.watercooler}/edit | Host: campfire.test
+/rooms/closeds/{rooms.broken}/edit | Host: campfire.test
+/rooms/directs/{rooms.david_and_jason}/edit | Host: campfire.test
+/rooms/directs/{rooms.david_and_jason}/edit | Turbo-Frame: room_form | Host: campfire.test
+/rooms/directs/{rooms.group_direct}/edit | Host: campfire.test
+/rooms/directs/{rooms.david_and_kevin}/edit | Host: campfire.test

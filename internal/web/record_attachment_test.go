@@ -55,9 +55,11 @@ func TestBotPartialUpdateKeepsOmittedFields(t *testing.T) {
 	if response.StatusCode != 302 {
 		t.Fatal(response.Status)
 	}
+	// update_bot!'s update_webhook_url!(attributes.delete(:webhook_url)): a missing URL removes
+	// the webhook, as in the reference.
 	var actual string
-	if err = app.DB.Read.QueryRow("SELECT url FROM webhooks WHERE user_id=?", bot.ID).Scan(&actual); err != nil || actual != webhook {
-		t.Fatalf("omitted webhook changed: %q %v", actual, err)
+	if err = app.DB.Read.QueryRow("SELECT url FROM webhooks WHERE user_id=?", bot.ID).Scan(&actual); !errors.Is(err, database.ErrNoRows) {
+		t.Fatalf("omitted webhook kept: %q %v", actual, err)
 	}
 	response, _ = perform(t, server, "PATCH", fmt.Sprintf("/account/bots/%d", bot.ID), "application/json", strings.NewReader(`{"user":{"webhook_url":""}}`), cookie)
 	if response.StatusCode != 302 {

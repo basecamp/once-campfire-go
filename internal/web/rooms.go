@@ -15,13 +15,14 @@ import (
 func (s *Server) registerRoomRoutes() {
 	for _, namespace := range []string{"opens", "closeds", "directs"} {
 		prefix := "/rooms/" + namespace
-		s.mux.HandleFunc("GET "+prefix+"/new", s.auth(s.roomForm))
-		s.mux.HandleFunc("POST "+prefix, s.auth(s.saveRoom))
-		s.mux.HandleFunc("GET "+prefix+"/{id}/edit", s.auth(s.roomForm))
+		forms := s.roomForms(namespace)
+		s.mux.HandleFunc("GET "+prefix+"/new", s.auth(forms.new))
+		s.mux.HandleFunc("POST "+prefix, s.auth(forms.create))
+		s.mux.HandleFunc("GET "+prefix+"/{id}/edit", s.auth(forms.edit))
 		s.mux.HandleFunc("GET "+prefix+"/{id}", s.auth(s.redirectRoom))
-		s.mux.HandleFunc("PATCH "+prefix+"/{id}", s.auth(s.saveRoom))
-		s.mux.HandleFunc("PUT "+prefix+"/{id}", s.auth(s.saveRoom))
-		s.mux.HandleFunc("DELETE "+prefix+"/{id}", s.auth(s.deleteRoom))
+		s.mux.HandleFunc("PATCH "+prefix+"/{id}", s.auth(forms.update))
+		s.mux.HandleFunc("PUT "+prefix+"/{id}", s.auth(forms.update))
+		s.mux.HandleFunc("DELETE "+prefix+"/{id}", s.auth(forms.destroy))
 	}
 	s.mux.HandleFunc("DELETE /rooms/{id}", s.auth(s.deleteRoom))
 	s.mux.HandleFunc("GET /rooms/{id}/involvement", s.auth(s.involvement))
