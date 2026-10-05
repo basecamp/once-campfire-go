@@ -93,7 +93,7 @@ func (s *Server) writeCached(w http.ResponseWriter, r *http.Request, kind, key s
 	}
 	counterHit.Add(1)
 	body := page.body
-	if enc := negotiatedEncoding(r); enc != "" {
+	if enc := responseEncoding(w, r); enc != "" {
 		if encoded := encodedBytes(page.body, page.gzip, page.zstd, enc); len(encoded) > 0 {
 			body = encoded
 			w.Header().Set("Content-Encoding", enc)

@@ -96,7 +96,7 @@ func writeRecorded(w http.ResponseWriter, status int, rendered, marker string, f
 }
 
 func writeRoom(w http.ResponseWriter, r *http.Request, status int, shell, messages fragmentEntry, loadedAt string) {
-	enc := negotiatedEncoding(r)
+	enc := responseEncoding(w, r)
 	parts := assembleRoom(shell, messages, loadedAt, enc)
 	if enc != "" {
 		w.Header().Set("Content-Encoding", enc)

@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"html/template"
 	"strings"
 	"testing"
 	"time"
@@ -48,10 +49,11 @@ func TestPlainMessageMatchesTemplate(t *testing.T) {
 
 	quoted := views[0]
 	quoted.Fragment = ""
-	quoted.Creator = `A & B < "C"`
-	quoted.CreatorTitle = `T & T`
-	quoted.RoomName = `R <oom>`
+	quoted.Creator = "A & B < \"C\" + D\x00"
+	quoted.CreatorTitle = "T + T\x00"
+	quoted.RoomName = "R <oom> + x"
 	quoted.Permalink = `http://example.org/rooms/1?x=1&y=2`
+
 	quoted.HTML = `<p>keep &amp; this</p>`
 	quoted.CreatedAt = time.Date(2026, 3, 1, 2, 3, 4, 123000000, time.UTC)
 	quoted.UpdatedAt = quoted.CreatedAt
@@ -83,5 +85,19 @@ func TestPlainMessageMatchesTemplate(t *testing.T) {
 	attached.Attachment = &storage.Blob{}
 	if plainMessage(attached) {
 		t.Fatal("an attachment must leave the fast path")
+	}
+}
+
+func TestTemplateEscapeMatchesHTMLTemplate(t *testing.T) {
+	cases := []string{"plain", `A & B < "C" 'D'`, "plus+sign", "nul\x00byte", "mix+&\x00<>\"'"}
+	tmpl := template.Must(template.New("t").Parse(`{{.}}`))
+	for _, in := range cases {
+		var want bytes.Buffer
+		if err := tmpl.Execute(&want, in); err != nil {
+			t.Fatal(err)
+		}
+		if got := templateEscape(in); got != want.String() {
+			t.Fatalf("%q: got %q want %q", in, got, want.String())
+		}
 	}
 }

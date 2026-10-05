@@ -67,11 +67,13 @@ func (s *Server) roomShellEntry(p page) (fragmentEntry, error) {
 }
 
 func roomShellKey(p page) string {
+	plat := p.Platform
 	sum := sha256.Sum256([]byte(fmt.Sprintf(
-		"frame=%t\ttitle=%s\tuid=%d\tname=%s\tbio=%s\trole=%d\tuat=%d\tvapid=%s\tacc=%d\tlogo=%t\tjoin=%s\tstyles=%s\treload=%t\tchat=%t\trid=%d\trtype=%s\trname=%s\tbody=%s\tscreen=%s\tnotice=%s\terr=%s\torigin=%s\tinv=%t\tstream=%s\tver=%s",
+		"frame=%t\ttitle=%s\tuid=%d\tname=%s\tbio=%s\trole=%d\tuat=%d\tvapid=%s\tacc=%d\tlogo=%t\tjoin=%s\tstyles=%s\treload=%t\tchat=%t\trid=%d\trtype=%s\trname=%s\tbody=%s\tscreen=%s\tnotice=%s\terr=%s\torigin=%s\tinv=%t\tstream=%s\tver=%s\tplat=%t/%t/%t/%t/%t/%t/%t/%t/%t/%t/%t/%s/%s",
 		p.Frame, p.Title, p.User.ID, p.User.Name, p.User.Bio, p.User.Role, p.User.UpdatedAt.UnixMicro(), p.VAPIDPublicKey,
 		p.Account.UpdatedAt.UnixMicro(), p.Account.HasLogo, p.Account.JoinCode, string(p.CustomStyles), p.Reload, p.Chat,
 		p.Room.ID, p.Room.Type, p.Room.Name, p.BodyClass, p.Screen, p.Notice, p.Error, p.Origin, p.Invitation, p.Stream, p.Version,
+		plat.IOS, plat.Android, plat.Mac, plat.Windows, plat.Chrome, plat.Firefox, plat.Safari, plat.Edge, plat.Mobile, plat.Desktop, plat.AppleMessages, plat.Browser, plat.OperatingSystem,
 	)))
 	return fmt.Sprintf("room-shell/%x", sum[:])
 }

@@ -867,8 +867,10 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 		http.Redirect(w, r, "/searches", 302)
 		return
 	}
-	key := fmt.Sprintf("se/%d/%d/%d/%d/%s/%t", u.ID, u.Role, u.UpdatedAt.UnixMicro(), s.DB.ContentGeneration(), q, r.Header.Get("Turbo-Frame") != "")
-	if s.writeCached(w, r, "search", key) {
+	returnRoom, _ := s.lastRoom(r, u.ID)
+	key := fmt.Sprintf("se/%d/%d/%d/%d/%d/%s/%t", u.ID, u.Role, u.UpdatedAt.UnixMicro(), s.DB.ContentGeneration(), returnRoom, q, r.Header.Get("Turbo-Frame") != "")
+	flash := s.hasFlash(r)
+	if !flash && s.writeCached(w, r, "search", key) {
 		return
 	}
 	recent, err := s.DB.RecentSearches(r.Context(), u.ID)
@@ -887,7 +889,9 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 		return
 	}
 	s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Rooms: rooms, Messages: viewMessages(messages), RecentSearches: recent})
-	s.saveCached(w, key)
+	if !flash {
+		s.saveCached(w, key)
+	}
 }
 
 func (s *Server) serveCable(w http.ResponseWriter, r *http.Request, u database.User) {

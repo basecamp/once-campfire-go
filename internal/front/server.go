@@ -78,7 +78,7 @@ func forward(next http.Handler, c Config) http.Handler {
 // process. The ACME manager is Go's autocert, also used by Thruster.
 func Serve(ctx context.Context, c Config, app http.Handler) error {
 	app = bodyLimit(Deflate(app), c.MaxRequestBody)
-	public := forward(PublicCompression(NewCache(c.CacheSize, c.MaxCacheItemSize).Handler(app), c), c)
+	public := forward(PublicCompression(NewCache(c.CacheSize, c.MaxCacheItemSize).AllowCompression(c.Gzip, c.DisableGzipOnAuth).Handler(app), c), c)
 	var servers []*http.Server
 	var listeners []net.Listener
 	add := func(server *http.Server) error {

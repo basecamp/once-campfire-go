@@ -172,16 +172,20 @@ func templateEscape(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		switch r {
+		case '\x00':
+			b.WriteRune('\uFFFD')
 		case '&':
 			b.WriteString("&amp;")
+		case '\'':
+			b.WriteString("&#39;")
+		case '"':
+			b.WriteString("&#34;")
+		case '+':
+			b.WriteString("&#43;")
 		case '<':
 			b.WriteString("&lt;")
 		case '>':
 			b.WriteString("&gt;")
-		case '"':
-			b.WriteString("&#34;")
-		case '\'':
-			b.WriteString("&#39;")
 		default:
 			b.WriteRune(r)
 		}

@@ -7,11 +7,48 @@ import (
 	"hash/crc32"
 	"math/bits"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/basecamp/once-campfire-go/internal/zstd"
 )
+
+func envBool(key string, fallback bool) bool {
+	raw, ok := os.LookupEnv(key)
+	if !ok {
+		if raw, ok = os.LookupEnv("THRUSTER_" + key); !ok {
+			return fallback
+		}
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return fallback
+	}
+	return v
+}
+
+// responseEncoding applies the same vetoes as the public front compressor
+// before negotiating Accept-Encoding for a cached private response.
+func responseEncoding(w http.ResponseWriter, r *http.Request) string {
+	if r == nil || r.Method == "HEAD" {
+		return ""
+	}
+	if !envBool("GZIP_COMPRESSION_ENABLED", true) {
+		return ""
+	}
+	if envBool("GZIP_COMPRESSION_DISABLE_ON_AUTH", false) {
+		for _, name := range []string{"Cookie", "Authorization", "X-CSRF-Token"} {
+			if r.Header.Get(name) != "" {
+				return ""
+			}
+		}
+	}
+	if w != nil && w.Header().Get("No-Gzip-Compression") != "" {
+		return ""
+	}
+	return negotiatedEncoding(r)
+}
 
 // negotiatedEncoding matches the public front server: zstd when it is at least
 // as acceptable as gzip, otherwise gzip, otherwise identity.

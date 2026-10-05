@@ -102,3 +102,61 @@ func TestLatestWindowAndGenerations(t *testing.T) {
 		t.Fatalf("present should bump only the user generation: %d/%d -> %d/%d", userGen, content, again, againContent)
 	}
 }
+
+func TestUserMutationsBumpContentGeneration(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	user, err := d.Setup(ctx, "David", "david@example.test", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := d.ContentGeneration()
+	member, err := d.CreateUser(ctx, "Member", "member@test", "digest", "", 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ContentGeneration() == before {
+		t.Fatal("CreateUser did not bump content generation")
+	}
+	before = d.ContentGeneration()
+	if err = d.UpdateUser(ctx, member.ID, map[string]string{"name": "Renamed"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if d.ContentGeneration() == before {
+		t.Fatal("UpdateUser did not bump content generation")
+	}
+	before = d.ContentGeneration()
+	if err = d.DeactivateUser(ctx, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if d.ContentGeneration() == before {
+		t.Fatal("DeactivateUser did not bump content generation")
+	}
+	_ = user
+}
+
+func TestInvalidateAccountClearsHasLogo(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	if _, err := d.Setup(ctx, "David", "david@example.test", "digest"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := d.Account(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.storeAccount(Account{ID: first.ID, Name: first.Name, JoinCode: first.JoinCode, UpdatedAt: first.UpdatedAt, HasLogo: true, Settings: first.Settings})
+	cached, err := d.Account(ctx)
+	if err != nil || !cached.HasLogo {
+		t.Fatalf("expected cached HasLogo: %+v %v", cached, err)
+	}
+	before := d.ContentGeneration()
+	d.InvalidateAccount()
+	if d.ContentGeneration() == before {
+		t.Fatal("InvalidateAccount did not bump content generation")
+	}
+	again, err := d.Account(ctx)
+	if err != nil || again.HasLogo {
+		t.Fatalf("account cache kept HasLogo: %+v %v", again, err)
+	}
+}

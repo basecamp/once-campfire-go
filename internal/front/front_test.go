@@ -288,3 +288,55 @@ func TestTLSCertificateCacheAndHTTPRedirect(t *testing.T) {
 		t.Fatal("TLS shutdown hung")
 	}
 }
+
+func TestCacheRespectsCompressionVetoes(t *testing.T) {
+	body := "<html>" + strings.Repeat("room ", 400) + "</html>"
+	newHandler := func(gzip, disableAuth bool) (*Cache, http.Handler) {
+		c := NewCache(8<<20, 1<<20).AllowCompression(gzip, disableAuth)
+		return c, c.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "public, max-age=30")
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if r.URL.Path == "/veto" {
+				w.Header().Set("No-Gzip-Compression", "1")
+			}
+			io.WriteString(w, body)
+		}))
+	}
+	request := func(handler http.Handler, path, encoding, cookie string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", path, nil)
+		if encoding != "" {
+			r.Header.Set("Accept-Encoding", encoding)
+		}
+		if cookie != "" {
+			r.Header.Set("Cookie", cookie)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+
+	_, disabled := newHandler(false, false)
+	request(disabled, "/off", "gzip", "")
+	hit := request(disabled, "/off", "gzip", "")
+	if hit.Header().Get("X-Cache") != "hit" || hit.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("gzip disabled still compressed: %v", hit.Header())
+	}
+
+	_, guarded := newHandler(true, true)
+	request(guarded, "/auth", "gzip", "")
+	withCookie := request(guarded, "/auth", "gzip", "session_token=secret")
+	if withCookie.Header().Get("X-Cache") != "hit" || withCookie.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("DisableGzipOnAuth still compressed: %v", withCookie.Header())
+	}
+	without := request(guarded, "/auth", "gzip", "")
+	if without.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("anonymous hit should stay compressed: %v", without.Header())
+	}
+
+	_, veto := newHandler(true, false)
+	request(veto, "/veto", "gzip", "")
+	vetoed := request(veto, "/veto", "gzip", "")
+	if vetoed.Header().Get("X-Cache") != "hit" || vetoed.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("No-Gzip-Compression still compressed: %v", vetoed.Header())
+	}
+}

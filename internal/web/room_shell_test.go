@@ -40,6 +40,9 @@ func TestRoomShellPreservesBytesAndRequestData(t *testing.T) {
 		"frame":                  func(p *page) { p.Frame = true },
 		"invitation":             func(p *page) { p.Invitation = true; p.JoinCode = "new-code" },
 		"stream":                 func(p *page) { p.Stream = "new-stream" },
+		"platform": func(p *page) {
+			p.Platform.Safari, p.Platform.IOS, p.Platform.Browser, p.Platform.OperatingSystem = true, true, "Safari", "iPhone"
+		},
 	}
 	for name, change := range changes {
 		t.Run(name, func(t *testing.T) { p := base; change(&p); check(p); check(base) })

@@ -105,6 +105,13 @@ func (d *DB) clearAccount() {
 	s.mu.Unlock()
 }
 
+// InvalidateAccount drops the cached account row after logo or other
+// attachment changes that bypass UpdateAccount.
+func (d *DB) InvalidateAccount() {
+	d.clearAccount()
+	d.changed()
+}
+
 func (d *DB) cachedLatest(room int64) ([]Message, bool) {
 	s := d.state()
 	if s == nil {

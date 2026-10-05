@@ -33,10 +33,18 @@ type Cache struct {
 	order                   *list.List
 	size, capacity, maxItem int64
 	hits, misses            atomic.Uint64
+	gzip, disableGzipOnAuth bool
 }
 
 func NewCache(capacity, maxItem int64) *Cache {
-	return &Cache{entries: map[string]*list.Element{}, order: list.New(), capacity: capacity, maxItem: maxItem}
+	return &Cache{entries: map[string]*list.Element{}, order: list.New(), capacity: capacity, maxItem: maxItem, gzip: true}
+}
+
+// AllowCompression mirrors PublicCompression: only serve stored gzip/zstd
+// variants when the front server would compress the same request.
+func (c *Cache) AllowCompression(gzip, disableOnAuth bool) *Cache {
+	c.gzip, c.disableGzipOnAuth = gzip, disableOnAuth
+	return c
 }
 
 var publicDirective = regexp.MustCompile(`\bpublic\b`)
@@ -182,7 +190,7 @@ func (c *Cache) Handler(next http.Handler) http.Handler {
 					}
 				}
 			}
-			body, encoding := entry.encoded(r)
+			body, encoding := entry.encoded(r, c.compressionOK(r, entry))
 			if encoding != "" {
 				w.Header().Set("Content-Encoding", encoding)
 				w.Header().Set("Content-Length", strconv.Itoa(len(body)))
@@ -224,7 +232,7 @@ func (c *Cache) Handler(next http.Handler) http.Handler {
 		// Keep gzip and zstd beside the identity body when the response does not
 		// vary on Accept-Encoding. Variants count toward capacity, but an entry
 		// that fits as identity is still stored when the copies would not.
-		if len(body) >= 1024 && !variesOnEncoding(capture.header) && compressibleCached(capture.header, body) {
+		if c.gzip && len(body) >= 1024 && !variesOnEncoding(capture.header) && compressibleCached(capture.header, body) && capture.header.Get("No-Gzip-Compression") == "" {
 			gz, zs := cachedVariants(body)
 			extra := int64(len(gz) + len(zs))
 			if extra > 0 && size+extra <= c.maxItem && size+extra <= c.capacity {
@@ -245,15 +253,34 @@ func (c *Cache) ResetStats() {
 	c.misses.Store(0)
 }
 
-func (e *cacheEntry) encoded(r *http.Request) ([]byte, string) {
-	switch publicEncoding(r) {
-	case "gzip":
-		if len(e.gzip) > 0 {
-			return e.gzip, "gzip"
+func (c *Cache) compressionOK(r *http.Request, entry *cacheEntry) bool {
+	if c == nil || !c.gzip {
+		return false
+	}
+	if entry.header.Get("No-Gzip-Compression") != "" {
+		return false
+	}
+	if c.disableGzipOnAuth {
+		for _, name := range []string{"Cookie", "Authorization", "X-CSRF-Token"} {
+			if r.Header.Get(name) != "" {
+				return false
+			}
 		}
-	case "zstd":
-		if len(e.zstd) > 0 {
-			return e.zstd, "zstd"
+	}
+	return true
+}
+
+func (e *cacheEntry) encoded(r *http.Request, allow bool) ([]byte, string) {
+	if allow {
+		switch publicEncoding(r) {
+		case "gzip":
+			if len(e.gzip) > 0 {
+				return e.gzip, "gzip"
+			}
+		case "zstd":
+			if len(e.zstd) > 0 {
+				return e.zstd, "zstd"
+			}
 		}
 	}
 	return e.body, ""

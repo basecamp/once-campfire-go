@@ -46,6 +46,9 @@ func (s *Store) Detach(ctx context.Context, kind string, id int64, name string) 
 	})
 	if err == nil {
 		s.DB.PurgeDetached(blobs)
+		if kind == "Account" {
+			s.DB.InvalidateAccount()
+		}
 	}
 	return err
 }
