@@ -1,3 +1,5 @@
-{% comment %}reference/crates/views/templates/sessions/transfers/show.html; TODO: body{% endcomment %}
+{% comment %}sessions/transfers/show.html: blocks of SessionsTransfersShow, which renders them in its layout (layouts/application.html).{% endcomment %}
 {% func (p *SessionsTransfersShow) Head() %}{% endfunc %}
-{% func (p *SessionsTransfersShow) Content() %}{% endfunc %}
+{% func (p *SessionsTransfersShow) Content() %}
+{%s= string(FormWith(p.Action).Method("put").AutoSubmit().Open()) %}
+{% endfunc %}

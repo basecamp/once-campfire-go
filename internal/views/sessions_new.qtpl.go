@@ -15,6 +15,7 @@ var (
 )
 
 func (p *SessionsNew) StreamHead(qw422016 *qt422016.Writer) {
+	qw422016.N().S(string(TurboPageRequiresReloadTag()))
 }
 
 func (p *SessionsNew) WriteHead(qq422016 qtio422016.Writer) {
@@ -32,6 +33,80 @@ func (p *SessionsNew) Head() string {
 }
 
 func (p *SessionsNew) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`<section class="txt-align-center">
+  <div class="panel `)
+	if p.Ctx.FlashAlert != nil {
+		qw422016.N().S(`shake`)
+	}
+	qw422016.N().S(`">
+    `)
+	qw422016.N().S(string(AccountLogoTag(p.Ctx, "center margin-block-end txt-xx-large")))
+	qw422016.N().S(`
+
+`)
+	form := FormWith(p.Ctx.URL(RouteSession())).Class("flex flex-column gap")
+
+	qw422016.N().S(`    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      <fieldset class="flex flex-column gap center-block upad">
+        <legend class="txt-large txt-align-center"><strong>`)
+	qw422016.E().S(p.Ctx.Account.Name)
+	qw422016.N().S(`</strong></legend>
+
+        <div class="flex align-center gap">
+          `)
+	qw422016.N().S(string(TranslationButton(p.Ctx, "email_address")))
+	qw422016.N().S(`
+          <label class="flex align-center gap input input--actor txt-large">
+            `)
+	qw422016.N().S(string(form.EmailField("email_address", nil, NewAttrs().Required(true).Class("input").Autofocus().Autocomplete("username").Placeholder("Enter your email address").AttrOpt("value", p.EmailAddress))))
+	qw422016.N().S(`
+            `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "email.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	qw422016.N().S(`
+          </label>
+        </div>
+
+        <div class="flex align-center gap">
+          `)
+	qw422016.N().S(string(TranslationButton(p.Ctx, "password")))
+	qw422016.N().S(`
+          <label class="flex align-center gap input input--actor txt-large">
+            `)
+	qw422016.N().S(string(form.PasswordField("password", NewAttrs().Required(true).Class("input").Autocomplete("current-password").Placeholder("Enter your password").Maxlength(72))))
+	qw422016.N().S(`
+            `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "password.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	qw422016.N().S(`
+          </label>
+        </div>
+
+        `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+          `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "arrow-right.svg", NewAttrs().AriaHidden())))
+	qw422016.N().S(`
+          <span class="for-screen-reader">Go</span>
+`)
+	capture2 := EndCapture(qw422016)
+
+	qw422016.N().S(string(Button(capture2, NewAttrs().Class("btn btn--reversed center txt-large").Type("submit").Name("log_in"))))
+	qw422016.N().S(`      </fieldset>
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(FormWithBlock(capture1, form)))
+	qw422016.N().S(`  </div>
+
+  `)
+	StreamAccountsHelpContact(qw422016, p.Ctx, p.HelpContact)
+	qw422016.N().S(`
+</section>
+`)
 }
 
 func (p *SessionsNew) WriteContent(qq422016 qtio422016.Writer) {

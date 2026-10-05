@@ -1,4 +1,12 @@
-{% comment %}reference/crates/views/templates/welcome/show.html; TODO: body{% endcomment %}
+{% comment %}welcome/show.html: blocks of WelcomeShow, which renders them in its layout (layouts/application.html).{% endcomment %}
 {% func (p *WelcomeShow) Head() %}{% endfunc %}
-{% func (p *WelcomeShow) Sidebar() %}{% endfunc %}
-{% func (p *WelcomeShow) Content() %}{% endfunc %}
+{% func (p *WelcomeShow) Sidebar() %}{%s= string(SidebarTurboFrameTag(Ptr(RouteUserSidebar()), "")) %}{% endfunc %}
+{% func (p *WelcomeShow) Content() %}<div id="message-area" class="message-area">
+  <div class="message-area--empty min-width center">
+    <figure class="center pad">
+      {%s= string(ImageTag(p.Ctx, "messages-empty.svg", NewAttrs().AriaHidden().Class("colorize--black translucent"))) %}
+      <span class="for-screen-reader">{%s p.CurrentUserName %}</span>
+    </figure>
+  </div>
+</div>
+{% endfunc %}

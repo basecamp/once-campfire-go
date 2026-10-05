@@ -66,7 +66,7 @@ func (s *Server) accountsEdit(w http.ResponseWriter, r *http.Request, u database
 // accountsUpdate is AccountsController#update:
 // `@account.update!(params.require(:account).permit(:name, :logo, settings: {}))`.
 func (s *Server) accountsUpdate(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !ensureCanAdminister(w, u) {
+	if !ensureCanAdminister(w, r, u) {
 		return
 	}
 	account, ok := s.currentAccount(w, r)
@@ -117,7 +117,7 @@ func (s *Server) currentAccount(w http.ResponseWriter, r *http.Request) (databas
 
 // accountsJoinCodesCreate is Accounts::JoinCodesController#create: `Current.account.reset_join_code`.
 func (s *Server) accountsJoinCodesCreate(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !ensureCanAdminister(w, u) {
+	if !ensureCanAdminister(w, r, u) {
 		return
 	}
 	account, ok := s.currentAccount(w, r)
@@ -133,7 +133,7 @@ func (s *Server) accountsJoinCodesCreate(w http.ResponseWriter, r *http.Request,
 
 // accountsCustomStylesEdit is Accounts::CustomStylesController#edit.
 func (s *Server) accountsCustomStylesEdit(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !ensureCanAdminister(w, u) {
+	if !ensureCanAdminister(w, r, u) {
 		return
 	}
 	account, ok := s.currentAccount(w, r)
@@ -152,7 +152,7 @@ func (s *Server) accountsCustomStylesEdit(w http.ResponseWriter, r *http.Request
 // accountsCustomStylesUpdate is Accounts::CustomStylesController#update:
 // `@account.update!(params.require(:account).permit(:custom_styles))`.
 func (s *Server) accountsCustomStylesUpdate(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !ensureCanAdminister(w, u) {
+	if !ensureCanAdminister(w, r, u) {
 		return
 	}
 	account, ok := s.currentAccount(w, r)
@@ -203,7 +203,7 @@ func (s *Server) accountsUsersIndex(w http.ResponseWriter, r *http.Request, u da
 // accountsUsersUpdate is Accounts::UsersController#update:
 // `@user.update(role: params.require(:user)[:role].presence_in(%w[ member administrator ]) || "member")`.
 func (s *Server) accountsUsersUpdate(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !ensureCanAdminister(w, u) {
+	if !ensureCanAdminister(w, r, u) {
 		return
 	}
 	user, ok := s.setActiveUser(w, r)
@@ -223,7 +223,7 @@ func (s *Server) accountsUsersUpdate(w http.ResponseWriter, r *http.Request, u d
 
 // accountsUsersDestroy is Accounts::UsersController#destroy: `@user.deactivate`.
 func (s *Server) accountsUsersDestroy(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !ensureCanAdminister(w, u) {
+	if !ensureCanAdminister(w, r, u) {
 		return
 	}
 	user, ok := s.setActiveUser(w, r)
@@ -264,7 +264,7 @@ func (s *Server) setActiveUser(w http.ResponseWriter, r *http.Request) (database
 
 // accountsBotsIndex is Accounts::BotsController#index: `@bots = User.active_bots.ordered`.
 func (s *Server) accountsBotsIndex(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !ensureCanAdminister(w, u) || !s.findTemplate(w, r) {
+	if !ensureCanAdminister(w, r, u) || !s.findTemplate(w, r) {
 		return
 	}
 	users, err := s.DB.UsersActiveBotsOrdered(r.Context())
@@ -313,7 +313,7 @@ func asciiLower(s string) string {
 
 // accountsBotsNew is Accounts::BotsController#new.
 func (s *Server) accountsBotsNew(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !ensureCanAdminister(w, u) || !s.findTemplate(w, r) {
+	if !ensureCanAdminister(w, r, u) || !s.findTemplate(w, r) {
 		return
 	}
 	s.pageOrFrame(w, r, &u, http.StatusOK, &botsNewSize, func(ctx *views.ViewContext) views.Page {
@@ -323,7 +323,7 @@ func (s *Server) accountsBotsNew(w http.ResponseWriter, r *http.Request, u datab
 
 // accountsBotsCreate is Accounts::BotsController#create: `User.create_bot! bot_params`.
 func (s *Server) accountsBotsCreate(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !ensureCanAdminister(w, u) || !requireParam(w, r, "user") {
+	if !ensureCanAdminister(w, r, u) || !requireParam(w, r, "user") {
 		return
 	}
 	name := scalarParam(r, "user[name]")
@@ -348,7 +348,7 @@ func (s *Server) accountsBotsCreate(w http.ResponseWriter, r *http.Request, u da
 
 // accountsBotsEdit is Accounts::BotsController#edit.
 func (s *Server) accountsBotsEdit(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !ensureCanAdminister(w, u) {
+	if !ensureCanAdminister(w, r, u) {
 		return
 	}
 	bot, ok := s.findActiveBot(w, r, "id")
@@ -385,7 +385,7 @@ func (s *Server) presentBotForm(r *http.Request, bot database.User) (views.BotFo
 
 // accountsBotsUpdate is Accounts::BotsController#update: `@bot.update_bot! bot_params`.
 func (s *Server) accountsBotsUpdate(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !ensureCanAdminister(w, u) {
+	if !ensureCanAdminister(w, r, u) {
 		return
 	}
 	bot, ok := s.findActiveBot(w, r, "id")
@@ -408,7 +408,7 @@ func (s *Server) accountsBotsUpdate(w http.ResponseWriter, r *http.Request, u da
 
 // accountsBotsDestroy is Accounts::BotsController#destroy: `@bot.deactivate`.
 func (s *Server) accountsBotsDestroy(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !ensureCanAdminister(w, u) {
+	if !ensureCanAdminister(w, r, u) {
 		return
 	}
 	bot, ok := s.findActiveBot(w, r, "id")
@@ -426,7 +426,7 @@ func (s *Server) accountsBotsDestroy(w http.ResponseWriter, r *http.Request, u d
 // accountsBotsKeysUpdate is Accounts::Bots::KeysController#update:
 // `User.active_bots.find(params[:bot_id]).reset_bot_key`.
 func (s *Server) accountsBotsKeysUpdate(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !ensureCanAdminister(w, u) {
+	if !ensureCanAdminister(w, r, u) {
 		return
 	}
 	bot, ok := s.findActiveBot(w, r, "bot_id")
@@ -524,7 +524,7 @@ func (s *Server) roomsOpensEdit(w http.ResponseWriter, r *http.Request, u databa
 // then the room replaced in everyone's sidebar.
 func (s *Server) roomsOpensUpdate(w http.ResponseWriter, r *http.Request, u database.User) {
 	room, ok := s.setFormRoom(w, r, u, false)
-	if !ok || !ensureCanAdministerRoom(w, u, room) {
+	if !ok || !ensureCanAdministerRoom(w, r, u, room) {
 		return
 	}
 	name, ok := roomNameParam(w, r)
@@ -624,7 +624,7 @@ func (s *Server) roomsClosedsEdit(w http.ResponseWriter, r *http.Request, u data
 // replaced in each remaining member's sidebar.
 func (s *Server) roomsClosedsUpdate(w http.ResponseWriter, r *http.Request, u database.User) {
 	room, ok := s.setFormRoom(w, r, u, false)
-	if !ok || !ensureCanAdministerRoom(w, u, room) {
+	if !ok || !ensureCanAdministerRoom(w, r, u, room) {
 		return
 	}
 	name, ok := roomNameParam(w, r)
@@ -876,16 +876,16 @@ func (s *Server) ensurePermissionToCreateRooms(w http.ResponseWriter, r *http.Re
 		return false
 	}
 	if found && database.AccountSettingsRestrictRoomCreation(account.Settings) && u.Role != 1 {
-		headStatus(w, http.StatusForbidden)
+		headStatus(w, r, http.StatusForbidden)
 		return false
 	}
 	return true
 }
 
 // ensureCanAdministerRoom is `head :forbidden unless Current.user.can_administer?(@room)`.
-func ensureCanAdministerRoom(w http.ResponseWriter, u database.User, room database.ReferenceRoom) bool {
+func ensureCanAdministerRoom(w http.ResponseWriter, r *http.Request, u database.User, room database.ReferenceRoom) bool {
 	if !canAdministerRoom(u, room) {
-		headStatus(w, http.StatusForbidden)
+		headStatus(w, r, http.StatusForbidden)
 		return false
 	}
 	return true
@@ -1009,18 +1009,12 @@ func presentRoomKind(roomType string) views.RoomKind {
 
 // ensureCanAdminister is ApplicationController's ensure_can_administer: `head :forbidden` unless
 // Current.user is an administrator.
-func ensureCanAdminister(w http.ResponseWriter, u database.User) bool {
+func ensureCanAdminister(w http.ResponseWriter, r *http.Request, u database.User) bool {
 	if u.Role != 1 {
-		headStatus(w, http.StatusForbidden)
+		headStatus(w, r, http.StatusForbidden)
 		return false
 	}
 	return true
-}
-
-// headStatus is `head status`: no body, and a bare text/html content type.
-func headStatus(w http.ResponseWriter, status int) {
-	w.Header().Set("Content-Type", "text/html")
-	w.WriteHeader(status)
 }
 
 // redirectToPath is redirect_to(url_for(path)): a 302 to the absolute URL, with no body.

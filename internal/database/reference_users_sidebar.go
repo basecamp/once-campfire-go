@@ -2,12 +2,9 @@ package database
 
 import (
 	"context"
-	"errors"
 	"strconv"
 	"strings"
 	"time"
-
-	"crawshaw.io/sqlite"
 )
 
 // The reference's queries behind the users screens (sidebar, profile, push subscriptions, user
@@ -166,15 +163,6 @@ func (d *DB) AutocompletableUsers(ctx context.Context, room *int64, query *strin
 	return d.UsersBySQL(ctx, b.String(), args...)
 }
 
-// HelpContact is presenters::accounts::help_contact: `User.administrator.first`'s name and email.
-func (d *DB) HelpContact(ctx context.Context) (name string, email NullString, found bool, err error) {
-	err = d.Read.QueryRowContext(ctx, `SELECT "users"."name", "users"."email_address" FROM "users" WHERE "users"."role" = 1 ORDER BY "users"."id" ASC LIMIT 1`).Scan(&name, &email)
-	if err == ErrNoRows {
-		return "", NullString{}, false, nil
-	}
-	return name, email, err == nil, err
-}
-
 // ReferencePushSubscription is a push_subscriptions row as the reference's PushSubscription reads it.
 type ReferencePushSubscription struct {
 	ID, UserID                              int64
@@ -220,13 +208,4 @@ func (d *DB) CreateMember(ctx context.Context, name string, email, passwordDiges
 		return err
 	})
 	return u, err
-}
-
-// IsRecordNotUnique is ActiveRecord::RecordNotUnique: a unique or primary key constraint failed.
-func IsRecordNotUnique(err error) bool {
-	var sqliteErr sqlite.Error
-	if !errors.As(err, &sqliteErr) {
-		return false
-	}
-	return sqliteErr.Code == sqlite.SQLITE_CONSTRAINT_UNIQUE || sqliteErr.Code == sqlite.SQLITE_CONSTRAINT_PRIMARYKEY
 }

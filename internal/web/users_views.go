@@ -98,13 +98,6 @@ func restrictRoomCreation(settings []byte) bool {
 // errNoAccount is `Current.account.join_code` on a nil account (NoMethodError).
 var errNoAccount = errors.New("undefined method 'join_code' for nil")
 
-// redirectTo is redirect_to: a 302 to the absolute URL of path, with no body.
-func (s *Server) redirectTo(w http.ResponseWriter, r *http.Request, path string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Location", s.origin(r)+path)
-	w.WriteHeader(http.StatusFound)
-}
-
 // --- Users::SidebarsController ----------------------------------------------------------------
 
 // usersSidebarShow is Users::SidebarsController#show: the room list, loaded into the
@@ -453,7 +446,7 @@ func (s *Server) usersNew(w http.ResponseWriter, r *http.Request) {
 	if !ok || !s.findTemplate(w, r) {
 		return
 	}
-	helpContact, err := s.helpContact(r.Context())
+	helpContact, err := s.helpContact(r)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -504,7 +497,7 @@ func (s *Server) requireUnauthenticatedAccess(w http.ResponseWriter, r *http.Req
 	if !found {
 		return true
 	}
-	s.redirectTo(w, r, views.RouteRoot())
+	s.redirectToPath(w, r, views.RouteRoot())
 	return false
 }
 
@@ -523,16 +516,6 @@ func (s *Server) verifyJoinCode(w http.ResponseWriter, r *http.Request) (databas
 		return account, false
 	}
 	return account, true
-}
-
-// helpContact is presenters::accounts::help_contact: `User.administrator.first`, for
-// accounts/_help_contact.
-func (s *Server) helpContact(ctx context.Context) (*views.HelpContact, error) {
-	name, email, found, err := s.DB.HelpContact(ctx)
-	if err != nil || !found {
-		return nil, err
-	}
-	return &views.HelpContact{Name: name, EmailAddress: email.String}, nil
 }
 
 // --- Autocompletable::UsersController ---------------------------------------------------------

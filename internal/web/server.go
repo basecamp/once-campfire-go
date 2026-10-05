@@ -156,17 +156,17 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 	s.initJobs()
 	s.mux.HandleFunc("POST /unfurl_link", s.auth(s.unfurl))
 	s.registerPWARoutes()
-	s.mux.HandleFunc("GET /qr_code/{code}", s.browserCheck(s.qrCode))
+	s.mux.HandleFunc("GET /qr_code/{code}", s.browserCheck(s.qrCodeShow))
 	s.mux.HandleFunc("GET /autocompletable/users", s.auth(s.autocompletableUsersIndex))
 	s.mux.HandleFunc("GET /cable", s.auth(s.serveCable))
 	s.mux.HandleFunc("GET /up", s.health)
 	s.mux.HandleFunc("GET /up.json", s.health)
-	s.mux.HandleFunc("GET /session/new", s.browserCheck(s.loginForm))
-	s.mux.HandleFunc("POST /session", s.browserCheck(s.login))
-	s.mux.HandleFunc("DELETE /session", s.auth(s.logout))
-	s.mux.HandleFunc("GET /first_run", s.browserCheck(s.setupForm))
-	s.mux.HandleFunc("POST /first_run", s.browserCheck(s.setup))
-	s.mux.HandleFunc("GET /{$}", s.auth(s.home))
+	s.mux.HandleFunc("GET /session/new", s.browserCheck(s.sessionsNew))
+	s.mux.HandleFunc("POST /session", s.browserCheck(s.sessionsCreate))
+	s.mux.HandleFunc("DELETE /session", s.auth(s.sessionsDestroy))
+	s.mux.HandleFunc("GET /first_run", s.browserCheck(s.firstRunsShow))
+	s.mux.HandleFunc("POST /first_run", s.browserCheck(s.firstRunsCreate))
+	s.mux.HandleFunc("GET /{$}", s.auth(s.welcomeShow))
 	s.mux.HandleFunc("GET /rooms", s.auth(s.home))
 	s.mux.HandleFunc("GET /rooms/{id}", s.auth(s.room))
 	s.mux.HandleFunc("GET /rooms/{id}/messages", s.auth(s.messages))
@@ -507,7 +507,7 @@ func (s *Server) auth(next func(http.ResponseWriter, *http.Request, database.Use
 			s.requestAuthentication(w, r)
 			return
 		}
-		if s.blockBrowser(w, r) {
+		if s.blockBrowserFor(w, r, &u) {
 			return
 		}
 		next(w, r, u)

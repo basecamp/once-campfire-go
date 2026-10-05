@@ -40,9 +40,9 @@ func (s *Server) registerAccountRoutes() {
 	s.mux.HandleFunc("DELETE /account/bots/{bot}", s.auth(s.accountsBotsDestroy))
 	s.mux.HandleFunc("PATCH /account/bots/{bot}/key", s.auth(s.accountsBotsKeysUpdate))
 	s.mux.HandleFunc("PUT /account/bots/{bot}/key", s.auth(s.accountsBotsKeysUpdate))
-	s.mux.HandleFunc("GET /session/transfers/{token}", s.browserCheck(s.transfer))
-	s.mux.HandleFunc("PATCH /session/transfers/{token}", s.browserCheck(s.transfer))
-	s.mux.HandleFunc("PUT /session/transfers/{token}", s.browserCheck(s.transfer))
+	s.mux.HandleFunc("GET /session/transfers/{token}", s.browserCheck(s.sessionTransfersShow))
+	s.mux.HandleFunc("PATCH /session/transfers/{token}", s.browserCheck(s.sessionTransfersUpdate))
+	s.mux.HandleFunc("PUT /session/transfers/{token}", s.browserCheck(s.sessionTransfersUpdate))
 }
 func administrator(w http.ResponseWriter, u database.User) bool {
 	if u.Role != 1 {

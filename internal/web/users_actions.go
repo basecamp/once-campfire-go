@@ -93,7 +93,7 @@ func (s *Server) usersProfileUpdate(w http.ResponseWriter, r *http.Request, u da
 	}
 	s.analyzeUpload(upload)
 	s.flash(r, "notice", notice)
-	s.redirectTo(w, r, views.RouteUserProfile())
+	s.redirectToPath(w, r, views.RouteUserProfile())
 }
 
 // usersBan is Users::BansController#create (ban) and #destroy (unban):
@@ -116,7 +116,7 @@ func (s *Server) usersBan(ban bool) func(http.ResponseWriter, *http.Request, dat
 			// apply_ban's close_remote_connections
 			s.Cable.Disconnect(user.ID)
 		}
-		s.redirectTo(w, r, views.RouteUser(user.ID))
+		s.redirectToPath(w, r, views.RouteUser(user.ID))
 	}
 }
 
@@ -162,7 +162,7 @@ func (s *Server) usersCreate(w http.ResponseWriter, r *http.Request) {
 		if email != nil {
 			location += "?email_address=" + views.CGIEscape(*email)
 		}
-		s.redirectTo(w, r, location)
+		s.redirectToPath(w, r, location)
 		return
 	}
 	if err != nil {
@@ -180,5 +180,5 @@ func (s *Server) usersCreate(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.redirectTo(w, r, views.RouteRoot())
+	s.redirectToPath(w, r, views.RouteRoot())
 }

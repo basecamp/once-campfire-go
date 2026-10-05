@@ -1,0 +1,77 @@
+# Sessions and the rest: sign in, session transfers, the root URL, PWA files, avatars, QR codes and
+# the incompatible-browser page.
+#
+# The transfer ids are User#transfer_id signed with the parity SECRET_KEY_BASE at the seed clock
+# (the seed's labels.json has no transfers.* yet): the first valid until clock.now + 4h, the second
+# expired an hour before clock.now.
+
+# Sign in: anonymous, signed in (allow_unauthenticated_access doesn't restore the session), with
+# params[:email_address], in a frame, and formats it can't answer.
+/session/new | !anon
+/session/new
+/session/new?email_address=david%4037signals.com | !anon
+/session/new?email_address=%22%3E%3Cb%3E | !anon
+/session/new | !anon | Turbo-Frame: login
+/session/new.json | !anon
+/session/new | !anon | Accept: application/json
+
+# Session transfers.
+/session/transfers/eyJfcmFpbHMiOnsiZGF0YSI6MTI3MzI2MTQxLCJleHAiOiIyMDI2LTAzLTAyVDIwOjAwOjAwLjAwMFoiLCJwdXIiOiJ1c2VyL3RyYW5zZmVyIn19--476cf868cb8cf4840014cdfa2913750a0adb93110f2e0ecb9c8ff1a32edd0161 | !anon
+/session/transfers/eyJfcmFpbHMiOnsiZGF0YSI6MTI3MzI2MTQxLCJleHAiOiIyMDI2LTAzLTAyVDE1OjAwOjAwLjAwMFoiLCJwdXIiOiJ1c2VyL3RyYW5zZmVyIn19--be00f8d4b515189e626e9425bcd60bc1f9dc963e0082e18898fcb742c5b840b4 | !anon
+/session/transfers/eyJfcmFpbHMiOnsiZGF0YSI6MTI3MzI2MTQxLCJleHAiOiIyMDI2LTAzLTAyVDIwOjAwOjAwLjAwMFoiLCJwdXIiOiJ1c2VyL3RyYW5zZmVyIn19--476cf868cb8cf4840014cdfa2913750a0adb93110f2e0ecb9c8ff1a32edd0161
+/session/transfers/not-a-transfer-id | !anon | Turbo-Frame: transfer
+
+# The root URL: to the last room visited, the welcome page for a user in no rooms, sign in when
+# signed out. /rooms redirects to the user's newest room, a 500 for a user in no rooms (/rooms/opens
+# and the like route to rooms#show first).
+/ | !nofollow
+/ | !as loner
+/ | !as loner | Turbo-Frame: content
+/ | !as loner | Accept: application/json
+/ | !anon | !nofollow
+/rooms | !nofollow
+/rooms.json | !nofollow
+/rooms | !as loner
+
+# PWA.
+/webmanifest.json | !anon
+/webmanifest
+/service-worker.js | !anon
+/service-worker
+
+# Avatars: initials (no avatar), an uploaded image's variant, bots (by their tokens, signed like
+# avatar_tokens.*), a bad token, a token for no user, a fresh ETag, signed out.
+/users/{avatar_tokens.david}/avatar
+/users/{avatar_tokens.david}/avatar | Accept: image/*
+/users/{avatar_tokens.david}/avatar | Turbo-Frame: avatar
+/users/{avatar_tokens.david}/avatar | If-None-Match: W/"6bd452b9114127dff5c3f46f079f7a4a"
+/users/{avatar_tokens.jason}/avatar
+/users/eyJfcmFpbHMiOnsiZGF0YSI6NzczNTIzOTU2LCJwdXIiOiJ1c2VyL2F2YXRhciJ9fQ--3082ce6e219f07d789fa73ff1dbcb901211ea80c27c9b679e277ca21bd416ce4/avatar
+/users/eyJfcmFpbHMiOnsiZGF0YSI6Mzk0OTU5ODU5LCJwdXIiOiJ1c2VyL2F2YXRhciJ9fQ--48059d515a972512c695caed73bb6d52d0b1a84609515f2e0de0748414b0da37/avatar
+/users/eyJfcmFpbHMiOnsiZGF0YSI6OTk5OTk5OTk5LCJwdXIiOiJ1c2VyL2F2YXRhciJ9fQ--907eba67f05aa2b58c6c80c751fa933d41717f2fbc9a97f6445481291864669a/avatar
+/users/not-a-token/avatar
+/users/not-a-token/avatar.json
+/users/{avatar_tokens.david}/avatar | !anon | !nofollow
+
+# QR codes.
+/qr_code/aHR0cDovL2NhbXBmaXJlLnRlc3Qvam9pbi9DUk11LWw4R2UtS0I5Qg== | !anon
+/qr_code/aHR0cDovL2NhbXBmaXJlLnRlc3Qvam9pbi9DUk11LWw4R2UtS0I5Qg
+/qr_code/aHR0cDovL2NhbXBmaXJlLnRlc3Qvc2Vzc2lvbi90cmFuc2ZlcnMvYWJjP3g9MQ==
+/qr_code/aHR0cDovL2NhbXBmaXJlLnRlc3Qvam9pbi9DUk11LWw4R2UtS0I5Qg | Accept: image/*
+/qr_code/a | !anon
+
+# First run: the seed has an account, so it goes to the root.
+/first_run | !anon | !nofollow
+
+# Incompatible browsers (AllowBrowser): signed out, signed in (the layout has Current.user), in a
+# frame, in MessagesController (its own layout), and for formats the action can't render.
+/session/new | !anon | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36
+/session/new | !anon | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_1) AppleWebKit/601.2.4 (KHTML, like Gecko) Version/9.0.1 Safari/601.2.4 facebookexternalhit/1.1 Facebot Twitterbot/1.0
+/session/new | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36
+/users/me/profile | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36
+/users/me/profile | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36 | Turbo-Frame: profile
+/rooms/{rooms.designers}/messages | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36 | Turbo-Frame: messages
+/webmanifest.json | !anon | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36
+/qr_code/aHR0cDovL2NhbXBmaXJlLnRlc3Qvam9pbi9DUk11LWw4R2UtS0I5Qg | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_1) AppleWebKit/601.2.4 (KHTML, like Gecko) Version/9.0.1 Safari/601.2.4 facebookexternalhit/1.1 Facebot Twitterbot/1.0
+/ | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36
+/ | !as loner | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_1) AppleWebKit/601.2.4 (KHTML, like Gecko) Version/9.0.1 Safari/601.2.4 facebookexternalhit/1.1 Facebot Twitterbot/1.0

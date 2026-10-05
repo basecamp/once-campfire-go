@@ -1,3 +1,56 @@
-{% comment %}reference/crates/views/templates/first_runs/show.html; TODO: body{% endcomment %}
+{% comment %}first_runs/show.html: blocks of FirstRunsShow, which renders them in its layout (layouts/application.html).{% endcomment %}
 {% func (p *FirstRunsShow) Head() %}{% endfunc %}
-{% func (p *FirstRunsShow) Content() %}{% endfunc %}
+{% func (p *FirstRunsShow) Content() %}{% code form := FormWith(RouteFirstRun()).Model("user").Class("center max-width") %}{% code BeginCapture(qw422016) %}
+  <section class="nametag u-relative">
+    <div class="flex justify-center align-center pad-block">
+      {%s= string(ImageTag(p.Ctx, "lanyard.svg", NewAttrs().Class("nametag__lanyard").AriaHidden())) %}
+    </div>
+
+    <div class="nametag__inner flex flex-column gap">
+      <fieldset class="flex flex-column center-block">
+        <legend class="txt-large txt-align-center"><strong>{%s *p.PageTitle() %}</strong></legend>
+
+        <label class="align-center center avatar__form gap" data-controller="upload-preview">
+          <div class="btn input--file">
+            {%s= string(ImageTag(p.Ctx, "camera.svg", NewAttrs().AriaHidden())) %}
+            {%s= string(form.FileField("avatar", NewAttrs().Class("input").Accept("image/*").Data("upload_preview_target", "input").Data("action", "upload-preview#previewImage"))) %}
+            <span class="for-screen-reader">Add your avatar</span>
+          </div>
+
+          <div class="btn avatar input--file txt-xx-large">
+            {%s= string(ImageTag(p.Ctx, "default-avatar.svg", NewAttrs().AriaHidden().Data("upload_preview_target", "image").Alt("Add your avatar"))) %}
+            <span class="for-screen-reader">Avatar</span>
+          </div>
+        </label>
+      </fieldset>
+
+      <div class="flex align-center gap">
+        {%s= string(TranslationButton(p.Ctx, "user_name")) %}
+        <label class="flex align-center gap flex-item-grow txt-large input input--actor">
+          {%s= string(form.TextField("name", nil, NewAttrs().Class("input").Autocomplete("name").Placeholder("Name").Autofocus().Required(true).Data("1p-ignore", true))) %}
+          {%s= string(ImageTag(p.Ctx, "person.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))) %}
+        </label>
+      </div>
+
+      <div class="flex align-center gap">
+        {%s= string(TranslationButton(p.Ctx, "email_address")) %}
+        <label class="flex align-center gap flex-item-grow txt-large input input--actor">
+          {%s= string(form.EmailField("email_address", nil, NewAttrs().Class("input").Autocomplete("username").Placeholder("Email address").Required(true))) %}
+          {%s= string(ImageTag(p.Ctx, "email.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))) %}
+        </label>
+      </div>
+
+      <div class="flex align-center gap">
+        {%s= string(TranslationButton(p.Ctx, "password")) %}
+        <label class="flex align-center gap flex-item-grow txt-large input input--actor">
+          {%s= string(form.PasswordField("password", NewAttrs().Class("input").Autocomplete("new-password").Placeholder("Password").Required(true).Maxlength(72))) %}
+          {%s= string(ImageTag(p.Ctx, "password.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))) %}
+        </label>
+      </div>
+
+      {% code BeginCapture(qw422016) %}
+        {%s= string(ImageTag(p.Ctx, "arrow-right.svg", NewAttrs().AriaHidden())) %}
+        <span class="for-screen-reader">Save</span>
+{% code capture2 := EndCapture(qw422016) %}{%s= string(Button(capture2, NewAttrs().Class("btn btn--reversed center txt-large").Type("submit"))) %}    </div>
+  </section>
+{% code capture1 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture1, form)) %}{% endfunc %}

@@ -15,6 +15,93 @@ var (
 )
 
 func StreamPwaManifestJson(qw422016 *qt422016.Writer, accountName *string, logoPathSmall, logoPath, baseURL string, assetPath func(string) string) {
+	name := "Campfire"
+
+	if accountName != nil {
+		name = *accountName
+
+	}
+	qw422016.N().S(`{
+  "name": `)
+	qw422016.N().S(string(ManifestJSON(name)))
+	qw422016.N().S(`,
+  "icons": [
+    {
+      "src": `)
+	qw422016.N().S(string(ManifestJSON(logoPathSmall)))
+	qw422016.N().S(`,
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": `)
+	qw422016.N().S(string(ManifestJSON(logoPath)))
+	qw422016.N().S(`,
+      "type": "image/png",
+      "sizes": "512x512"
+    },
+    {
+      "src": `)
+	qw422016.N().S(string(ManifestJSON(logoPath)))
+	qw422016.N().S(`,
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "scope": "/",
+  "description": "A chat app from the makers of Basecamp and HEY.",
+  "categories": ["social", "business", "productivity"],
+  "theme_color": "#ffffff",
+  "background_color": "#ffffff",
+  "shortcuts": [
+    {
+      "name": "New chat room",
+      "description": "Open Campfire and start a new chat room",
+      "url": "rooms/opens/new",
+      "icons": [{ "src": `)
+	qw422016.N().S(string(ManifestJSON(ManifestImageURL(baseURL, assetPath, "add.svg"))))
+	qw422016.N().S(`, "sizes": "any" }]
+    },
+    {
+      "name": "My profile",
+      "description": "Open Campfire and view your profile",
+      "url": "/users/me/profile",
+      "icons": [{ "src": `)
+	qw422016.N().S(string(ManifestJSON(ManifestImageURL(baseURL, assetPath, "person.svg"))))
+	qw422016.N().S(`, "sizes": "any" }]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": `)
+	qw422016.N().S(string(ManifestJSON(ManifestImageURL(baseURL, assetPath, "screenshots/android-chat.png"))))
+	qw422016.N().S(`,
+      "sizes": "1080x2400",
+      "form_factor": "narrow",
+      "label": "Campfire is an installable, self-hosted group chat system."
+    },
+    {
+      "src": `)
+	qw422016.N().S(string(ManifestJSON(ManifestImageURL(baseURL, assetPath, "screenshots/android-sidebar.png"))))
+	qw422016.N().S(`,
+      "sizes": "1080x2400",
+      "form_factor": "narrow",
+      "label": "Easily invite people. Make rooms. @mentions, DMs, and mobile support."
+    },
+    {
+      "src": `)
+	qw422016.N().S(string(ManifestJSON(ManifestImageURL(baseURL, assetPath, "screenshots/android-dark-mode.png"))))
+	qw422016.N().S(`,
+      "sizes": "1080x2400",
+      "form_factor": "narrow",
+      "label": "Full support for dark mode, customizable to your brand."
+    }
+  ]
+}
+`)
 }
 
 func WritePwaManifestJson(qq422016 qtio422016.Writer, accountName *string, logoPathSmall, logoPath, baseURL string, assetPath func(string) string) {

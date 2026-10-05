@@ -74,7 +74,10 @@ func (s *browserSession) commit(w http.ResponseWriter) error {
 		}
 	}
 	if !anyValue {
-		http.SetCookie(w, &http.Cookie{Name: browserSessionCookie, Path: "/", MaxAge: -1, Secure: s.server.Secure, SameSite: http.SameSiteLaxMode})
+		// cookies.delete: only a cookie the request sent.
+		if _, err := s.request.Cookie(browserSessionCookie); err == nil {
+			w.Header().Add("Set-Cookie", browserSessionCookie+"=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; samesite=lax")
+		}
 		return nil
 	}
 	expiry := s.server.DB.Now().AddDate(20, 0, 0)
@@ -141,7 +144,7 @@ func (s *Server) withBrowserSession(w http.ResponseWriter, r *http.Request) (htt
 }
 func (s *Server) requestAuthentication(w http.ResponseWriter, r *http.Request) {
 	browserState(r).set("return_to_after_authenticating", s.origin(r)+r.URL.RequestURI())
-	http.Redirect(w, r, s.origin(r)+"/session/new", 302)
+	s.redirectTo(w, r, s.origin(r)+"/session/new")
 }
 func (s *Server) postAuthenticationURL(r *http.Request) string {
 	value := browserState(r).remove("return_to_after_authenticating")

@@ -6,11 +6,17 @@
 Both applications start on fresh copies of the Rust checkout's default seed with the seed's frozen
 clock and the reference's fixed environment, sign in as David, and fetch every URL in --urls
 (label placeholders like {rooms.watercooler} come from the seed's labels.json). Each pair of bodies
-must be identical once per-request tokens (CSRF) are masked; differences are reported with their
-first differing byte and both bodies are kept in --out for `diff`.
+must be identical once per-request tokens (CSRF) are masked and each server's base URL (absolute
+URLs) reads {base}; differences are reported with their first differing byte and both bodies are
+kept in --out for `diff`.
 
 A URL line may carry request headers after the path, separated by ` | `:
     /rooms/{rooms.watercooler} | Turbo-Frame: messages
+and these markers in the same place:
+    !anon        send no session cookie (signed out)
+    !as <label>  sign in as emails.<label> instead of David
+    !nofollow    don't follow a redirect: compare its Location (the server's base URL replaced
+                 by {base}) along with the body
 """
 import argparse, json, os, re, shutil, sqlite3, socket, subprocess, sys, tempfile, time, urllib.request
 from pathlib import Path
@@ -65,13 +71,23 @@ def start(name, binary, seed, env, work):
     return proc, base
 
 
-def fetch(base, path, cookie, headers):
-    request = urllib.request.Request(base + path, headers={'Cookie': cookie, 'Accept-Encoding': 'identity', **headers})
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args):
+        return None
+
+
+def fetch(base, path, cookie, headers, follow=True):
+    cookies = {'Cookie': cookie} if cookie else {}
+    request = urllib.request.Request(base + path, headers={**cookies, 'Accept-Encoding': 'identity', **headers})
+    opener = urllib.request.build_opener(*([] if follow else [NoRedirect]))
     try:
-        with urllib.request.urlopen(request) as response:
+        with opener.open(request) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as error:
-        return error.code, error.read()
+        body = error.read()
+        if not follow and 'Location' in error.headers:
+            body = f'Location: {error.headers["Location"].replace(base, "{base}")}\n\n'.encode() + body
+        return error.code, body
 
 
 def mask(body):
@@ -105,21 +121,30 @@ def main():
     servers = []
     try:
         bases, cookies = {}, {}
+
+        def cookie(name, user):
+            if (name, user) not in cookies:
+                login = subprocess.check_output([str(loadgen), 'login', '--base', bases[name], '--email', labels[f'emails.{user}'], '--password', labels['passwords.all']], text=True)
+                cookies[name, user] = json.loads(login)['cookie']
+            return cookies[name, user]
+
         for name, binary in (('rust', a.rust), ('go', a.go)):
             work = Path(tempfile.mkdtemp(prefix=f'parity-{name}-'))
             proc, base = start(name, binary, seed, env, work)
             servers.append((proc, work))
             bases[name] = base
-            login = subprocess.check_output([str(loadgen), 'login', '--base', base, '--email', labels['emails.david'], '--password', labels['passwords.all']], text=True)
-            cookies[name] = json.loads(login)['cookie']
+            cookie(name, 'david')
         failures = 0
         for line in urls:
             path, *header_parts = [part.strip() for part in line.split(' | ')]
             path = re.sub(r'\{([a-z_]+\.[a-z0-9_]+)\}', lambda m: str(labels[m.group(1)]), path)
-            headers = dict(h.split(': ', 1) for h in header_parts)
-            results = {name: fetch(bases[name], path, cookies[name], headers) for name in bases}
+            markers = [h for h in header_parts if h.startswith('!')]
+            headers = dict(h.split(': ', 1) for h in header_parts if not h.startswith('!'))
+            user = next((m.split()[1] for m in markers if m.startswith('!as ')), 'david')
+            follow = '!nofollow' not in markers
+            results = {name: fetch(bases[name], path, None if '!anon' in markers else cookie(name, user), headers, follow) for name in bases}
             (rust_status, rust_body), (go_status, go_body) = results['rust'], results['go']
-            rust_body, go_body = mask(rust_body), mask(go_body)
+            rust_body, go_body = (mask(results[name][1]).replace(bases[name].encode(), b'{base}') for name in ('rust', 'go'))
             slug = re.sub(r'[^a-z0-9]+', '_', line.lower()).strip('_')[:80]
             if rust_status == go_status and rust_body == go_body:
                 print(f'same  {rust_status} {len(rust_body):>7} {line}')

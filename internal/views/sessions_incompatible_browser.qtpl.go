@@ -32,6 +32,40 @@ func (p *SessionsIncompatibleBrowser) Head() string {
 }
 
 func (p *SessionsIncompatibleBrowser) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`<div class="panel center">
+  <header>
+    <h1 class="txt-x-large txt-tight-lines txt-align-center margin-none-block-start margin-block-end">
+      Upgrade to a supported web browser
+    </h1>
+    <div class="flex align-start gap">
+      `)
+	qw422016.N().S(string(TranslationButton(p.Ctx, "incompatible_browser_messsage")))
+	qw422016.N().S(`
+      <p class="margin-none-block-start">Campfire requires a modern web browser. Please use one of the browsers listed below and make sure auto-updates are enabled.</p>
+    </div>
+  </header>
+
+  <div class="browser-list flex align-center flex-wrap gap justify-center margin-block">
+`)
+	for _, v := range AllowBrowserVersions {
+		qw422016.N().S(`      <div class="browser flex flex-column">
+        `)
+		qw422016.N().S(string(ImageTag(p.Ctx, "browsers/"+v.Browser+".svg", NewAttrs().AriaHidden().Class("center"))))
+		qw422016.N().S(`
+        <div class="flex flex-column align-center margin-block-start-half">
+          <strong>`)
+		qw422016.E().S(Capitalize(v.Browser))
+		qw422016.N().S(`</strong>
+          <span> `)
+		qw422016.E().S(v.Version)
+		qw422016.N().S(`+</span>
+        </div>
+      </div>
+`)
+	}
+	qw422016.N().S(`  </div>
+</div>
+`)
 }
 
 func (p *SessionsIncompatibleBrowser) WriteContent(qq422016 qtio422016.Writer) {

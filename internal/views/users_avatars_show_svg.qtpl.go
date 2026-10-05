@@ -3,6 +3,8 @@
 
 package views
 
+import "unicode/utf8"
+
 import (
 	qtio422016 "io"
 
@@ -15,6 +17,37 @@ var (
 )
 
 func StreamUsersAvatarsShowSvg(qw422016 *qt422016.Writer, userID int64, initials string) {
+	qw422016.N().S(`<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+  viewBox="0 0 512 512" class="avatar" aria-hidden="true">
+  <defs>
+    <clipPath id="porthole">
+      <circle cx="50%" cy="50%" r="50%" />
+    </clipPath>
+  </defs>
+
+  <g>
+    <rect width="100%" height="100%" rx="50" fill="`)
+	qw422016.E().S(AvatarBackgroundColor(userID))
+	qw422016.N().S(`" />
+
+    <text x="50%" y="50%" fill="#FFFFFF"
+      text-anchor="middle" dy="0.35em"
+      `)
+	if utf8.RuneCountInString(initials) >= 3 {
+		qw422016.N().S(`textLength="85%" lengthAdjust="spacingAndGlyphs"`)
+	}
+	qw422016.N().S(`
+      font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+      font-size="230"
+      font-weight="800"
+      letter-spacing="-5">
+      `)
+	qw422016.E().S(initials)
+	qw422016.N().S(`
+    </text>
+  </g>
+</svg>
+`)
 }
 
 func WriteUsersAvatarsShowSvg(qq422016 qtio422016.Writer, userID int64, initials string) {

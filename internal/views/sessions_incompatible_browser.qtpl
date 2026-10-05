@@ -1,3 +1,24 @@
-{% comment %}reference/crates/views/templates/sessions/incompatible_browser.html; TODO: body{% endcomment %}
+{% comment %}sessions/incompatible_browser.html: blocks of SessionsIncompatibleBrowser, which renders them in its layout (layouts/application.html).{% endcomment %}
 {% func (p *SessionsIncompatibleBrowser) Head() %}{% endfunc %}
-{% func (p *SessionsIncompatibleBrowser) Content() %}{% endfunc %}
+{% func (p *SessionsIncompatibleBrowser) Content() %}<div class="panel center">
+  <header>
+    <h1 class="txt-x-large txt-tight-lines txt-align-center margin-none-block-start margin-block-end">
+      Upgrade to a supported web browser
+    </h1>
+    <div class="flex align-start gap">
+      {%s= string(TranslationButton(p.Ctx, "incompatible_browser_messsage")) %}
+      <p class="margin-none-block-start">Campfire requires a modern web browser. Please use one of the browsers listed below and make sure auto-updates are enabled.</p>
+    </div>
+  </header>
+
+  <div class="browser-list flex align-center flex-wrap gap justify-center margin-block">
+{% for _, v := range AllowBrowserVersions %}      <div class="browser flex flex-column">
+        {%s= string(ImageTag(p.Ctx, "browsers/"+v.Browser+".svg", NewAttrs().AriaHidden().Class("center"))) %}
+        <div class="flex flex-column align-center margin-block-start-half">
+          <strong>{%s Capitalize(v.Browser) %}</strong>
+          <span> {%s v.Version %}+</span>
+        </div>
+      </div>
+{% endfor %}  </div>
+</div>
+{% endfunc %}
