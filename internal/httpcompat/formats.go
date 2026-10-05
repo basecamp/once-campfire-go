@@ -16,6 +16,16 @@ type MIME struct {
 	Synonyms, Extensions []string
 }
 
+// TypeOf is the MIME type registered for a format ("html" is "text/html"), or "".
+func TypeOf(format string) string {
+	for _, m := range mimeTypes {
+		if m.Symbol == format {
+			return m.Type
+		}
+	}
+	return ""
+}
+
 func extension(value string) string {
 	for _, m := range mimeTypes {
 		if m.Symbol == value || slices.Contains(m.Extensions, value) {

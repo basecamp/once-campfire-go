@@ -112,12 +112,23 @@ func (s *Store) Analyze(ctx context.Context, b Blob) (Blob, error) {
 func (s *Store) existingVariant(ctx context.Context, blob int64, digest string) (Blob, error) {
 	return scanBlob(s.DB.Read.QueryRowContext(ctx, "SELECT "+columns+" FROM active_storage_blobs b JOIN active_storage_attachments a ON a.blob_id=b.id JOIN active_storage_variant_records v ON v.id=a.record_id WHERE a.record_type='ActiveStorage::VariantRecord' AND a.name='image' AND v.blob_id=? AND v.variation_digest=? LIMIT 1", blob, digest))
 }
-func (s *Store) Variant(ctx context.Context, b Blob, variation Variation) (Blob, error) {
+
+// variationFor is the variation with b's default format filled in, whose digest the variant is
+// recorded under (the reference's Storage::variation_for).
+func variationFor(b Blob, variation Variation) Variation {
 	defaultFormat := b.DefaultFormat()
 	v := variation.DefaultFormat(defaultFormat)
 	if v.Get("format") == Symbol(defaultFormat) && variation.Get("format") == nil {
 		v[0].Value = defaultFormat
 	}
+	return v
+}
+
+// VariantDigest is the variation digest b's variant is recorded under.
+func VariantDigest(b Blob, variation Variation) string { return variationFor(b, variation).Digest() }
+
+func (s *Store) Variant(ctx context.Context, b Blob, variation Variation) (Blob, error) {
+	v := variationFor(b, variation)
 	digest := v.Digest()
 	if existing, err := s.existingVariant(ctx, b.ID, digest); err == nil {
 		return existing, nil

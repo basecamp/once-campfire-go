@@ -1,2 +1,25 @@
-{% comment %}reference/crates/views/templates/users/avatars/show.svg; TODO: body{% endcomment %}
-{% func UsersAvatarsShowSvg(userID int64, initials string) %}{% endfunc %}
+{% comment %}users/avatars/show.svg{% endcomment %}
+{% import "unicode/utf8" %}
+{% func UsersAvatarsShowSvg(userID int64, initials string) %}<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+  viewBox="0 0 512 512" class="avatar" aria-hidden="true">
+  <defs>
+    <clipPath id="porthole">
+      <circle cx="50%" cy="50%" r="50%" />
+    </clipPath>
+  </defs>
+
+  <g>
+    <rect width="100%" height="100%" rx="50" fill="{%s AvatarBackgroundColor(userID) %}" />
+
+    <text x="50%" y="50%" fill="#FFFFFF"
+      text-anchor="middle" dy="0.35em"
+      {% if utf8.RuneCountInString(initials) >= 3 %}textLength="85%" lengthAdjust="spacingAndGlyphs"{% endif %}
+      font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+      font-size="230"
+      font-weight="800"
+      letter-spacing="-5">
+      {%s initials %}
+    </text>
+  </g>
+</svg>
+{% endfunc %}

@@ -32,6 +32,11 @@ func (p *SessionsTransfersShow) Head() string {
 }
 
 func (p *SessionsTransfersShow) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`
+`)
+	qw422016.N().S(string(FormWith(p.Action).Method("put").AutoSubmit().Open()))
+	qw422016.N().S(`
+`)
 }
 
 func (p *SessionsTransfersShow) WriteContent(qq422016 qtio422016.Writer) {

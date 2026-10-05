@@ -15,6 +15,31 @@ var (
 )
 
 func StreamAccountsHelpContact(qw422016 *qt422016.Writer, ctx *ViewContext, helpContact *HelpContact) {
+	if helpContact != nil {
+		owner := helpContact
+
+		qw422016.N().S(`  <div class="txt-align-center margin-block-double full-width">
+    `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+      `)
+		qw422016.N().S(string(ImageTag(ctx, "lifebuoy.svg", NewAttrs().AriaHidden())))
+		qw422016.N().S(`
+      <span>`)
+		qw422016.E().S(owner.EmailAddress)
+		qw422016.N().S(`</span>
+`)
+		capture1 := EndCapture(qw422016)
+
+		qw422016.N().S(string(LinkToBlock(capture1, "mailto:\""+owner.Name+"\" <"+owner.EmailAddress+">", NewAttrs().Class("btn center").Title("Email "+owner.Name))))
+		qw422016.N().S(`
+    <div class="txt-align-center center margin-block txt-subtle">Campfire&trade; version `)
+		qw422016.N().S(string(VersionBadge(ctx)))
+		qw422016.N().S(`</div>
+  </div>
+`)
+	}
 }
 
 func WriteAccountsHelpContact(qq422016 qtio422016.Writer, ctx *ViewContext, helpContact *HelpContact) {

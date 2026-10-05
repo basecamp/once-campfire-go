@@ -32,6 +32,104 @@ func (p *FirstRunsShow) Head() string {
 }
 
 func (p *FirstRunsShow) StreamContent(qw422016 *qt422016.Writer) {
+	form := FormWith(RouteFirstRun()).Model("user").Class("center max-width")
+
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+  <section class="nametag u-relative">
+    <div class="flex justify-center align-center pad-block">
+      `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "lanyard.svg", NewAttrs().Class("nametag__lanyard").AriaHidden())))
+	qw422016.N().S(`
+    </div>
+
+    <div class="nametag__inner flex flex-column gap">
+      <fieldset class="flex flex-column center-block">
+        <legend class="txt-large txt-align-center"><strong>`)
+	qw422016.E().S(*p.PageTitle())
+	qw422016.N().S(`</strong></legend>
+
+        <label class="align-center center avatar__form gap" data-controller="upload-preview">
+          <div class="btn input--file">
+            `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "camera.svg", NewAttrs().AriaHidden())))
+	qw422016.N().S(`
+            `)
+	qw422016.N().S(string(form.FileField("avatar", NewAttrs().Class("input").Accept("image/*").Data("upload_preview_target", "input").Data("action", "upload-preview#previewImage"))))
+	qw422016.N().S(`
+            <span class="for-screen-reader">Add your avatar</span>
+          </div>
+
+          <div class="btn avatar input--file txt-xx-large">
+            `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "default-avatar.svg", NewAttrs().AriaHidden().Data("upload_preview_target", "image").Alt("Add your avatar"))))
+	qw422016.N().S(`
+            <span class="for-screen-reader">Avatar</span>
+          </div>
+        </label>
+      </fieldset>
+
+      <div class="flex align-center gap">
+        `)
+	qw422016.N().S(string(TranslationButton(p.Ctx, "user_name")))
+	qw422016.N().S(`
+        <label class="flex align-center gap flex-item-grow txt-large input input--actor">
+          `)
+	qw422016.N().S(string(form.TextField("name", nil, NewAttrs().Class("input").Autocomplete("name").Placeholder("Name").Autofocus().Required(true).Data("1p-ignore", true))))
+	qw422016.N().S(`
+          `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "person.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	qw422016.N().S(`
+        </label>
+      </div>
+
+      <div class="flex align-center gap">
+        `)
+	qw422016.N().S(string(TranslationButton(p.Ctx, "email_address")))
+	qw422016.N().S(`
+        <label class="flex align-center gap flex-item-grow txt-large input input--actor">
+          `)
+	qw422016.N().S(string(form.EmailField("email_address", nil, NewAttrs().Class("input").Autocomplete("username").Placeholder("Email address").Required(true))))
+	qw422016.N().S(`
+          `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "email.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	qw422016.N().S(`
+        </label>
+      </div>
+
+      <div class="flex align-center gap">
+        `)
+	qw422016.N().S(string(TranslationButton(p.Ctx, "password")))
+	qw422016.N().S(`
+        <label class="flex align-center gap flex-item-grow txt-large input input--actor">
+          `)
+	qw422016.N().S(string(form.PasswordField("password", NewAttrs().Class("input").Autocomplete("new-password").Placeholder("Password").Required(true).Maxlength(72))))
+	qw422016.N().S(`
+          `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "password.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	qw422016.N().S(`
+        </label>
+      </div>
+
+      `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+        `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "arrow-right.svg", NewAttrs().AriaHidden())))
+	qw422016.N().S(`
+        <span class="for-screen-reader">Save</span>
+`)
+	capture2 := EndCapture(qw422016)
+
+	qw422016.N().S(string(Button(capture2, NewAttrs().Class("btn btn--reversed center txt-large").Type("submit"))))
+	qw422016.N().S(`    </div>
+  </section>
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(FormWithBlock(capture1, form)))
 }
 
 func (p *FirstRunsShow) WriteContent(qq422016 qtio422016.Writer) {

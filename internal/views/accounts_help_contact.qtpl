@@ -1,2 +1,9 @@
-{% comment %}reference/crates/views/templates/accounts/_help_contact.html; TODO: body{% endcomment %}
-{% func AccountsHelpContact(ctx *ViewContext, helpContact *HelpContact) %}{% endfunc %}
+{% comment %}accounts/_help_contact.html{% endcomment %}
+{% func AccountsHelpContact(ctx *ViewContext, helpContact *HelpContact) %}{% if helpContact != nil %}{% code owner := helpContact %}  <div class="txt-align-center margin-block-double full-width">
+    {% code BeginCapture(qw422016) %}
+      {%s= string(ImageTag(ctx, "lifebuoy.svg", NewAttrs().AriaHidden())) %}
+      <span>{%s owner.EmailAddress %}</span>
+{% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture1, "mailto:\""+owner.Name+"\" <"+owner.EmailAddress+">", NewAttrs().Class("btn center").Title("Email "+owner.Name))) %}
+    <div class="txt-align-center center margin-block txt-subtle">Campfire&trade; version {%s= string(VersionBadge(ctx)) %}</div>
+  </div>
+{% endif %}{% endfunc %}

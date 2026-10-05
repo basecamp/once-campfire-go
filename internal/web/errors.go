@@ -17,7 +17,7 @@ func publicError(w http.ResponseWriter, r *http.Request, status int) {
 			buffered.exception = true
 		}
 	}
-	for _, key := range []string{"X-Frame-Options", "X-XSS-Protection", "X-Content-Type-Options", "X-Permitted-Cross-Domain-Policies", "Referrer-Policy", "Cache-Control"} {
+	for _, key := range []string{"X-Frame-Options", "X-XSS-Protection", "X-Content-Type-Options", "X-Permitted-Cross-Domain-Policies", "Referrer-Policy", "Cache-Control", "X-Version", "X-Rev"} {
 		w.Header().Del(key)
 	}
 	formats, _ := httpcompat.Formats(formatInput(r))

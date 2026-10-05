@@ -26,20 +26,10 @@ var manifestTemplate = template.Must(template.New("manifest.json").Funcs(templat
 
 func (s *Server) registerPWARoutes() {
 	for _, path := range []string{"/webmanifest", "/webmanifest.json"} {
-		s.mux.HandleFunc("GET "+path, s.browserCheck(s.manifest))
+		s.mux.HandleFunc("GET "+path, s.browserCheck(s.pwaManifest))
 	}
-	worker, _ := pwaFiles.ReadFile("pwa/service_worker.js")
 	for _, path := range []string{"/service-worker", "/service-worker.js"} {
-		s.mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
-			if s.blockBrowser(w, r) {
-				return
-			}
-			if respondFormat(w, r, "js") == "" {
-				return
-			}
-			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-			w.Write(worker)
-		})
+		s.mux.HandleFunc("GET "+path, s.browserCheck(s.pwaServiceWorker))
 	}
 }
 func (s *Server) manifest(w http.ResponseWriter, r *http.Request) {

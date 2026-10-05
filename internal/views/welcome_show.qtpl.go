@@ -32,6 +32,7 @@ func (p *WelcomeShow) Head() string {
 }
 
 func (p *WelcomeShow) StreamSidebar(qw422016 *qt422016.Writer) {
+	qw422016.N().S(string(SidebarTurboFrameTag(Ptr(RouteUserSidebar()), "")))
 }
 
 func (p *WelcomeShow) WriteSidebar(qq422016 qtio422016.Writer) {
@@ -49,6 +50,19 @@ func (p *WelcomeShow) Sidebar() string {
 }
 
 func (p *WelcomeShow) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`<div id="message-area" class="message-area">
+  <div class="message-area--empty min-width center">
+    <figure class="center pad">
+      `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "messages-empty.svg", NewAttrs().AriaHidden().Class("colorize--black translucent"))))
+	qw422016.N().S(`
+      <span class="for-screen-reader">`)
+	qw422016.E().S(p.CurrentUserName)
+	qw422016.N().S(`</span>
+    </figure>
+  </div>
+</div>
+`)
 }
 
 func (p *WelcomeShow) WriteContent(qq422016 qtio422016.Writer) {

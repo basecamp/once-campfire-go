@@ -190,6 +190,11 @@ func (s *Server) pageOrFrame(w http.ResponseWriter, r *http.Request, user *datab
 	if !s.findTemplate(w, r) {
 		return
 	}
+	s.pageOrFrameInAnyFormat(w, r, user, status, size, build)
+}
+
+// pageOrFrameInAnyFormat is pageOrFrame without the template lookup (page_or_frame_in_any_format).
+func (s *Server) pageOrFrameInAnyFormat(w http.ResponseWriter, r *http.Request, user *database.User, status int, size *views.RenderSize, build func(ctx *views.ViewContext) views.Page) {
 	l, err := s.loadLayout(r, user)
 	if err != nil {
 		s.fail(w, err)

@@ -21,11 +21,11 @@ func respondFormat(w http.ResponseWriter, r *http.Request, available ...string) 
 	input := formatInput(r)
 	format, err := httpcompat.Negotiate(input, available...)
 	if err != nil {
-		http.Error(w, "Invalid MIME type", 400)
+		publicError(w, r, http.StatusBadRequest)
 		return ""
 	}
 	if format == "" {
-		http.Error(w, "Not acceptable", 406)
+		publicError(w, r, http.StatusNotAcceptable)
 		return ""
 	}
 	if input.UsesAccept() {

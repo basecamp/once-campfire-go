@@ -151,7 +151,7 @@ func (s *Server) routeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if route.Action == "rooms::index" {
-		s.auth(s.roomsIndex)(w, r)
+		s.auth(s.roomsIndexView)(w, r)
 		return
 	}
 	if route.bot {

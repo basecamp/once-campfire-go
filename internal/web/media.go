@@ -19,7 +19,7 @@ import (
 )
 
 func (s *Server) registerMediaRoutes() {
-	s.mux.HandleFunc("GET /users/{token}/avatar", s.auth(s.avatar))
+	s.mux.HandleFunc("GET /users/{token}/avatar", liveResponse(s.auth(s.avatarShow)))
 	s.mux.HandleFunc("DELETE /users/{user}/avatar", s.auth(s.deleteAvatar))
 	s.mux.HandleFunc("GET /account/logo", s.browserCheck(s.logo))
 	s.mux.HandleFunc("DELETE /account/logo", s.auth(s.deleteLogo))
