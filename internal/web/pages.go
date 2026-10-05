@@ -204,6 +204,70 @@ func (s *Server) pageOrFrame(w http.ResponseWriter, r *http.Request, user *datab
 	s.writePage(w, r, status, "text/html; charset=utf-8", true, size.Render(0, func(qw *qt.Writer) { views.StreamLayoutsApplication(qw, ctx, page) }))
 }
 
+// content renders a content-only template in the application layout, or in turbo-rails' frame
+// layout for a Turbo-Frame request (page::content).
+func (s *Server) content(w http.ResponseWriter, r *http.Request, user *database.User, status int, render func(ctx *views.ViewContext) views.HTML) {
+	if !s.findTemplate(w, r) {
+		return
+	}
+	l, err := s.loadLayout(r, user)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	ctx := s.viewContext(r, l)
+	page := views.ApplicationContent(render(ctx))
+	if r.Header.Get("Turbo-Frame") != "" {
+		s.writePage(w, r, status, "text/html; charset=utf-8", false, views.Render(0, func(qw *qt.Writer) { views.StreamLayoutsTurboRailsFrame(qw, ctx, page) }))
+		return
+	}
+	s.writePage(w, r, status, "text/html; charset=utf-8", true, views.Render(0, func(qw *qt.Writer) { views.StreamLayoutsApplication(qw, ctx, page) }))
+}
+
+// contentInApplicationLayout renders a content-only template in the application layout even for
+// Turbo-Frame requests (a controller that declares its own layout replaces turbo-rails' choice).
+func (s *Server) contentInApplicationLayout(w http.ResponseWriter, r *http.Request, user *database.User, status int, render func(ctx *views.ViewContext) views.HTML) {
+	if !s.findTemplate(w, r) {
+		return
+	}
+	l, err := s.loadLayout(r, user)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	ctx := s.viewContext(r, l)
+	page := views.ApplicationContent(render(ctx))
+	s.writePage(w, r, status, "text/html; charset=utf-8", true, views.Render(0, func(qw *qt.Writer) { views.StreamLayoutsApplication(qw, ctx, page) }))
+}
+
+// bare renders a template with `layout false` (or a turbo stream): no layout, labelled with the
+// template's content type (page::bare). format is the template's format for the respond_to lookup
+// ("html", "turbo_stream", "json").
+func (s *Server) bare(w http.ResponseWriter, r *http.Request, user *database.User, status int, format, contentType string, render func(ctx *views.ViewContext) *views.RecordedPage) {
+	if respondFormat(w, r, format) == "" {
+		return
+	}
+	l, err := s.loadLayout(r, user)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.writePage(w, r, status, contentType, false, render(s.viewContext(r, l)))
+}
+
+// pageInAnyFormat renders a page in the application layout without the template lookup: an
+// explicit `render template:` answers HTML whatever the request's format.
+func (s *Server) pageInAnyFormat(w http.ResponseWriter, r *http.Request, user *database.User, status int, size *views.RenderSize, build func(ctx *views.ViewContext) views.Page) {
+	l, err := s.loadLayout(r, user)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	ctx := s.viewContext(r, l)
+	page := build(ctx)
+	s.writePage(w, r, status, "text/html; charset=utf-8", true, size.Render(0, func(qw *qt.Writer) { views.StreamLayoutsApplication(qw, ctx, page) }))
+}
+
 // findTemplate is the implicit render's template lookup: an action whose only template is HTML
 // can't answer a request that doesn't accept HTML (406).
 func (s *Server) findTemplate(w http.ResponseWriter, r *http.Request) bool {
