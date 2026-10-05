@@ -111,6 +111,7 @@ func (d *DB) UpdateMessageWithUpload(ctx context.Context, user, id int64, body *
 		defer staged.Discard()
 	}
 	var purged []int64
+	var touched bool
 	err := d.Transaction(ctx, func(tx *sql.Tx) error {
 		room, err := messagePermission(ctx, tx, user, id, true)
 		if err != nil {
@@ -163,7 +164,11 @@ func (d *DB) UpdateMessageWithUpload(ctx context.Context, user, id int64, body *
 		if _, err = tx.ExecContext(ctx, "UPDATE message_search_index SET body=? WHERE rowid=?", plain, id); err != nil {
 			return err
 		}
-		return touchMessage(ctx, tx, id, room, now)
+		if err = touchMessage(ctx, tx, id, room, now); err != nil {
+			return err
+		}
+		touched = true
+		return nil
 	})
 	if err != nil {
 		return Message{}, err
@@ -172,7 +177,14 @@ func (d *DB) UpdateMessageWithUpload(ctx context.Context, user, id int64, body *
 		staged.Keep()
 	}
 	d.PurgeDetached(purged)
-	return d.ReachableMessage(ctx, user, id)
+	message, err := d.ReachableMessage(ctx, user, id)
+	if err != nil {
+		return message, err
+	}
+	if touched {
+		d.noteTouch(message)
+	}
+	return message, nil
 }
 func (d *DB) DeleteMessage(ctx context.Context, user, id int64) error {
 	return d.deleteMessage(ctx, user, id, true)
@@ -182,8 +194,8 @@ func (d *DB) RemoveBannedMessage(ctx context.Context, id int64) error {
 }
 func (d *DB) deleteMessage(ctx context.Context, user, id int64, checkPermission bool) error {
 	var blobs []int64
+	var room int64
 	err := d.Transaction(ctx, func(tx *sql.Tx) error {
-		var room int64
 		var err error
 		if checkPermission {
 			room, err = messagePermission(ctx, tx, user, id, true)
@@ -214,6 +226,7 @@ func (d *DB) deleteMessage(ctx context.Context, user, id int64, checkPermission 
 	})
 	if err == nil {
 		d.PurgeDetached(blobs)
+		d.noteDelete(room)
 	}
 	return err
 }
@@ -247,8 +260,10 @@ func (d *DB) Boosts(ctx context.Context, message int64) ([]Boost, error) {
 func (d *DB) CreateBoost(ctx context.Context, user, message int64, content string) (Boost, error) {
 	now := d.Now()
 	b := Boost{MessageID: message, BoosterID: user, Content: content, CreatedAt: now, UpdatedAt: now}
+	var room int64
 	err := d.Transaction(ctx, func(tx *sql.Tx) error {
-		room, err := messagePermission(ctx, tx, user, message, false)
+		var err error
+		room, err = messagePermission(ctx, tx, user, message, false)
 		if err != nil {
 			return err
 		}
@@ -267,11 +282,17 @@ func (d *DB) CreateBoost(ctx context.Context, user, message int64, content strin
 		}
 		return touchMessage(ctx, tx, message, room, Stamp(now))
 	})
+	if err == nil {
+		d.noteTouch(Message{ID: message, RoomID: room, UpdatedAt: now})
+	}
 	return b, err
 }
 func (d *DB) DeleteBoost(ctx context.Context, user, message, id int64) error {
-	return d.Transaction(ctx, func(tx *sql.Tx) error {
-		room, err := messagePermission(ctx, tx, user, message, false)
+	now := d.Now()
+	var room int64
+	err := d.Transaction(ctx, func(tx *sql.Tx) error {
+		var err error
+		room, err = messagePermission(ctx, tx, user, message, false)
 		if err != nil {
 			return err
 		}
@@ -286,8 +307,12 @@ func (d *DB) DeleteBoost(ctx context.Context, user, message, id int64) error {
 		if n == 0 {
 			return sql.ErrNoRows
 		}
-		return touchMessage(ctx, tx, message, room, Stamp(d.Now()))
+		return touchMessage(ctx, tx, message, room, Stamp(now))
 	})
+	if err == nil {
+		d.noteTouch(Message{ID: message, RoomID: room, UpdatedAt: now})
+	}
+	return err
 }
 
 // Message is the unscoped model lookup used by background jobs.
@@ -313,10 +338,30 @@ func (d *DB) FindRoom(ctx context.Context, id int64) (Room, error) {
 
 // MessagePageReferences leaves rich text and author loading to cache misses.
 // Around/after pagination retains the same full-record path and ordering.
+// The anchor-zero window (the room page and "after" with no cursor) is served
+// from memory and refreshed by create, update, and delete.
 func (d *DB) MessagePageReferences(ctx context.Context, room, anchor int64, direction string) ([]Message, error) {
 	if direction != "before" && anchor != 0 {
 		return d.MessagePage(ctx, room, anchor, direction)
 	}
+	if anchor == 0 {
+		if messages, ok := d.cachedLatest(room); ok {
+			d.countPage(true)
+			return messages, nil
+		}
+		d.countPage(false)
+		seen := d.beginRoom(room)
+		messages, err := d.queryMessageWindow(ctx, room, 0)
+		if err != nil {
+			return nil, err
+		}
+		d.storeLatest(room, seen, messages)
+		return messages, nil
+	}
+	return d.queryMessageWindow(ctx, room, anchor)
+}
+
+func (d *DB) queryMessageWindow(ctx context.Context, room, anchor int64) ([]Message, error) {
 	query := "SELECT id,updated_at FROM messages WHERE room_id=? "
 	args := []any{room}
 	if anchor != 0 {

@@ -2,34 +2,49 @@ package front
 
 import (
 	"bytes"
+	"compress/gzip"
 	"container/list"
+	"encoding/binary"
 	"net/http"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/basecamp/once-campfire-go/internal/zstd"
 )
 
 type cacheEntry struct {
-	key     string
-	header  http.Header
-	body    []byte
-	status  int
-	variant map[string]string
-	expires time.Time
-	size    int64
+	key        string
+	header     http.Header
+	body       []byte
+	gzip, zstd []byte
+	status     int
+	variant    map[string]string
+	expires    time.Time
+	size       int64
 }
 type Cache struct {
 	mu                      sync.Mutex
 	entries                 map[string]*list.Element
 	order                   *list.List
 	size, capacity, maxItem int64
+	hits, misses            atomic.Uint64
+	gzip, disableGzipOnAuth bool
 }
 
 func NewCache(capacity, maxItem int64) *Cache {
-	return &Cache{entries: map[string]*list.Element{}, order: list.New(), capacity: capacity, maxItem: maxItem}
+	return &Cache{entries: map[string]*list.Element{}, order: list.New(), capacity: capacity, maxItem: maxItem, gzip: true}
+}
+
+// AllowCompression mirrors PublicCompression: only serve stored gzip/zstd
+// variants when the front server would compress the same request.
+func (c *Cache) AllowCompression(gzip, disableOnAuth bool) *Cache {
+	c.gzip, c.disableGzipOnAuth = gzip, disableOnAuth
+	return c
 }
 
 var publicDirective = regexp.MustCompile(`\bpublic\b`)
@@ -161,6 +176,7 @@ func (c *Cache) Handler(next http.Handler) http.Handler {
 		}
 		key := baseKey(r)
 		if entry := c.get(key, r); entry != nil {
+			c.hits.Add(1)
 			for name, values := range entry.header {
 				w.Header()[name] = append([]string(nil), values...)
 			}
@@ -174,12 +190,18 @@ func (c *Cache) Handler(next http.Handler) http.Handler {
 					}
 				}
 			}
+			body, encoding := entry.encoded(r, c.compressionOK(r, entry))
+			if encoding != "" {
+				w.Header().Set("Content-Encoding", encoding)
+				w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			}
 			w.WriteHeader(entry.status)
 			if r.Method != "HEAD" {
-				w.Write(entry.body)
+				w.Write(body)
 			}
 			return
 		}
+		c.misses.Add(1)
 		w.Header().Set("X-Cache", "miss")
 		capture := &recordResponse{ResponseWriter: w, max: c.maxItem}
 		next.ServeHTTP(capture, r)
@@ -205,6 +227,106 @@ func (c *Cache) Handler(next http.Handler) http.Handler {
 				size += int64(len(name) + len(value))
 			}
 		}
-		c.put(&cacheEntry{key: key, header: capture.header, body: bytes.Clone(capture.body.Bytes()), status: capture.status, variant: variant, expires: time.Now().Add(capture.ttl), size: size})
+		body := bytes.Clone(capture.body.Bytes())
+		entry := &cacheEntry{key: key, header: capture.header, body: body, status: capture.status, variant: variant, expires: time.Now().Add(capture.ttl), size: size}
+		// Keep gzip and zstd beside the identity body when the response does not
+		// vary on Accept-Encoding. Variants count toward capacity, but an entry
+		// that fits as identity is still stored when the copies would not.
+		if c.gzip && len(body) >= 1024 && !variesOnEncoding(capture.header) && compressibleCached(capture.header, body) && capture.header.Get("No-Gzip-Compression") == "" {
+			gz, zs := cachedVariants(body)
+			extra := int64(len(gz) + len(zs))
+			if extra > 0 && size+extra <= c.maxItem && size+extra <= c.capacity {
+				entry.gzip, entry.zstd = gz, zs
+				entry.size += extra
+			}
+		}
+		c.put(entry)
 	})
+}
+
+func (c *Cache) Stats() (hits, misses uint64) {
+	return c.hits.Load(), c.misses.Load()
+}
+
+func (c *Cache) ResetStats() {
+	c.hits.Store(0)
+	c.misses.Store(0)
+}
+
+func (c *Cache) compressionOK(r *http.Request, entry *cacheEntry) bool {
+	if c == nil {
+		return false
+	}
+	return compressionAllowed(c.gzip, c.disableGzipOnAuth, r, entry.header)
+}
+
+func (e *cacheEntry) encoded(r *http.Request, allow bool) ([]byte, string) {
+	if allow {
+		switch publicEncoding(r) {
+		case "gzip":
+			if len(e.gzip) > 0 {
+				return e.gzip, "gzip"
+			}
+		case "zstd":
+			if len(e.zstd) > 0 {
+				return e.zstd, "zstd"
+			}
+		}
+	}
+	return e.body, ""
+}
+
+func variesOnEncoding(h http.Header) bool {
+	for _, name := range strings.Split(h.Get("Vary"), ",") {
+		if strings.EqualFold(strings.TrimSpace(name), "Accept-Encoding") {
+			return true
+		}
+	}
+	return false
+}
+
+func compressibleCached(h http.Header, body []byte) bool {
+	kind := h.Get("Content-Type")
+	if kind == "" {
+		kind = http.DetectContentType(body)
+	}
+	return compressibleType(kind)
+}
+
+// cachedVariants matches the public compressor's default jitter so a cached
+// gzip or zstd body decompresses to the same bytes as a live encoding.
+func cachedVariants(body []byte) (gz, zs []byte) {
+	jitter := jitterFor(body, 32)
+	var buf bytes.Buffer
+	w, err := gzip.NewWriterLevel(&buf, 6)
+	if err != nil {
+		return nil, nil
+	}
+	w.Comment = string(jitter)
+	if _, err = w.Write(body); err != nil {
+		return nil, nil
+	}
+	if err = w.Close(); err != nil {
+		return nil, nil
+	}
+	gz = bytes.Clone(buf.Bytes())
+	buf.Reset()
+	zw, err := zstd.NewWriter(&buf)
+	if err != nil {
+		return gz, nil
+	}
+	if _, err = zw.Write(body); err != nil {
+		return gz, nil
+	}
+	if err = zw.Close(); err != nil {
+		return gz, nil
+	}
+	if len(jitter) > 0 {
+		trailer := make([]byte, 8+len(jitter))
+		binary.LittleEndian.PutUint32(trailer, 0x184D2A50)
+		binary.LittleEndian.PutUint32(trailer[4:], uint32(len(jitter)))
+		copy(trailer[8:], jitter)
+		buf.Write(trailer)
+	}
+	return gz, bytes.Clone(buf.Bytes())
 }

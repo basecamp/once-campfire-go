@@ -15,6 +15,26 @@ import (
 
 var gzipPool = sync.Pool{New: func() any { writer, _ := gzip.NewWriterLevel(nil, 6); return writer }}
 
+// compressionAllowed is the shared gate for Deflate, the public cache, and
+// PublicCompression request/response vetoes. It matches web.responseEncoding:
+// GZIP off, DisableGzipOnAuth with credential headers, and No-Gzip-Compression.
+func compressionAllowed(enabled, disableOnAuth bool, r *http.Request, response http.Header) bool {
+	if !enabled {
+		return false
+	}
+	if r != nil && disableOnAuth {
+		for _, name := range []string{"Cookie", "Authorization", "X-CSRF-Token"} {
+			if r.Header.Get(name) != "" {
+				return false
+			}
+		}
+	}
+	if response != nil && response.Get("No-Gzip-Compression") != "" {
+		return false
+	}
+	return true
+}
+
 func encoding(header string) string {
 	type item struct {
 		name       string
@@ -134,6 +154,12 @@ func (w *gzipResponse) WriteHeader(status int) {
 	}
 	w.status = status
 	h := w.Header()
+	if h.Get("No-Gzip-Compression") != "" {
+		h.Del("No-Gzip-Compression")
+		if w.selected == "gzip" {
+			w.selected = "identity"
+		}
+	}
 	if status < 200 || status == 204 || status == 304 || strings.Contains(h.Get("Cache-Control"), "no-transform") || h.Get("Content-Encoding") != "" && h.Get("Content-Encoding") != "identity" || h.Get("Content-Length") == "0" {
 		w.ResponseWriter.WriteHeader(status)
 		return
@@ -201,13 +227,20 @@ func (w *gzipResponse) Flush() {
 	}
 	http.NewResponseController(w.ResponseWriter).Flush()
 }
-func Deflate(next http.Handler) http.Handler {
+func Deflate(next http.Handler, c Config) http.Handler {
+	if !c.Gzip {
+		return next
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Upgrade") != "" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		wrapped := &gzipResponse{ResponseWriter: w, request: r, selected: encoding(r.Header.Get("Accept-Encoding"))}
+		selected := encoding(r.Header.Get("Accept-Encoding"))
+		if selected == "gzip" && !compressionAllowed(true, c.DisableGzipOnAuth, r, nil) {
+			selected = "identity"
+		}
+		wrapped := &gzipResponse{ResponseWriter: w, request: r, selected: selected}
 		next.ServeHTTP(wrapped, r)
 		if wrapped.status == 0 {
 			wrapped.WriteHeader(200)

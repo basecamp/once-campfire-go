@@ -16,7 +16,7 @@ func SearchQuery(query string) string {
 	}, query)
 }
 func (d *DB) RecordSearch(ctx context.Context, user int64, query string) error {
-	return d.Transaction(ctx, func(tx *sql.Tx) error {
+	err := d.Transaction(ctx, func(tx *sql.Tx) error {
 		now := Stamp(d.Now())
 		var id int64
 		err := tx.QueryRowContext(ctx, "SELECT id FROM searches WHERE user_id=? AND query=? LIMIT 1", user, query).Scan(&id)
@@ -38,6 +38,10 @@ func (d *DB) RecordSearch(ctx context.Context, user int64, query string) error {
 		_, err = tx.ExecContext(ctx, "UPDATE searches SET updated_at=? WHERE id=?", now, id)
 		return err
 	})
+	if err == nil {
+		d.changed()
+	}
+	return err
 }
 func (d *DB) RecentSearches(ctx context.Context, user int64) ([]string, error) {
 	rows, err := d.Read.QueryContext(ctx, "SELECT query FROM searches WHERE user_id=? ORDER BY updated_at DESC", user)

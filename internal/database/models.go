@@ -271,10 +271,14 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 		}
 		return nil
 	})
-	if err == nil && staged != nil {
+	if err != nil {
+		return m, err
+	}
+	if staged != nil {
 		staged.Keep()
 	}
-	return m, err
+	d.noteCreate(m)
+	return m, nil
 }
 func (d *DB) Search(ctx context.Context, user int64, query string) ([]Message, error) {
 	words := strings.Fields(SearchQuery(query))

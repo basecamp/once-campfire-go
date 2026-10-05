@@ -141,6 +141,11 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 	return views, nil
 }
 func (s *Server) markup(name string, data any) (string, error) {
+	if name == "message-uncached" {
+		if view, ok := data.(messageView); ok && plainMessage(view) {
+			return s.renderPlainMessage(view), nil
+		}
+	}
 	var b bytes.Buffer
 	err := s.templates.ExecuteTemplate(&b, name, data)
 	return b.String(), err

@@ -247,12 +247,8 @@ func PublicCompression(next http.Handler, c Config) http.Handler {
 			return
 		}
 		selected := publicEncoding(r)
-		if c.DisableGzipOnAuth {
-			for _, h := range []string{"Cookie", "Authorization", "X-CSRF-Token"} {
-				if r.Header.Get(h) != "" {
-					selected = ""
-				}
-			}
+		if selected != "" && !compressionAllowed(true, c.DisableGzipOnAuth, r, nil) {
+			selected = ""
 		}
 		response := &publicResponse{ResponseWriter: w, request: r, config: c, selected: selected}
 		defer response.finish()

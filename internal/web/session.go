@@ -183,6 +183,38 @@ func (s *Server) consumeFlash(r *http.Request) (notice, alert string) {
 	alert, _ = flashes["alert"].(string)
 	return
 }
+
+// hasFlash reports pending flash without consuming it, so search can skip the
+// page cache when the next render would embed request-specific notice/alert HTML.
+func (s *Server) hasFlash(r *http.Request) bool {
+	state := browserState(r)
+	state.load()
+	raw, _ := state.values["flash"].(map[string]any)
+	if raw == nil {
+		return false
+	}
+	flashes, _ := raw["flashes"].(map[string]any)
+	if len(flashes) == 0 {
+		return false
+	}
+	discarded := map[string]bool{}
+	if keys, ok := raw["discard"].([]any); ok {
+		for _, key := range keys {
+			if name, ok := key.(string); ok {
+				discarded[name] = true
+			}
+		}
+	}
+	for name, value := range flashes {
+		if discarded[name] {
+			continue
+		}
+		if text, ok := value.(string); ok && text != "" {
+			return true
+		}
+	}
+	return false
+}
 func safeRedirect(location, origin string) bool {
 	u, err := url.Parse(location)
 	return err == nil && !strings.HasPrefix(location, "//") && (u.Host == "" || u.Scheme+"://"+u.Host == origin)
