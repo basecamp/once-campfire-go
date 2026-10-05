@@ -82,3 +82,36 @@ and the existing deleted-room typing difference remain. An initial navigation Ab
 concurrent browser runs is retained in the record; a standalone rerun passed without masking it.
 The focused three-binary benchmark verified 345,913 writes and nine identical-byte thumbnails
 with zero HTTP errors. It did not repeat the full Cable workload or production-container checks.
+
+## Engine fork — M0 environment (2026-10-05)
+
+- Fork: `engine` branch of basecamp/once-campfire-go at `8d2f7f2`, plus design
+  (`plans/2026-10-05-engine-design.md`) and plan (`plans/2026-10-05-engine.md`).
+- Host: AMD Ryzen AI MAX+ 395, 32 threads, Omarchy; Go 1.27.1 via mise. The
+  official Elixir harness rebuilds its loadgen with `mise exec rust@1.98.1`;
+  that toolchain is installed for this machine. The Rust checkout itself built
+  cleanly with the on-PATH cargo 1.97.1.
+- Go build: `bin/build` produced `campfire` (39,689,520 B); `/up` answered 200
+  on both listeners; `go test -tags sqlite_fts5 ./...` PASS on the unmodified
+  tree. Published-baseline binary preserved at
+  `tmp/baseline/campfire-published` sha256
+  `6b69111097e197ce737df7efe1026efe74aa2400c1561b268d7b3d4d68b163ab`.
+- Rust checkout: once-campfire-rust at `ccece30` with reference submodule
+  `90b3300`; release binary sha256
+  `c027ef78cf9f55ff64fe94191853930d5c427a5facd3d2395267296d19dcc2ad`; shared
+  loadgen sha256
+  `e88f7d0c0b0bc5a53bc5d4d43f0ea1a23def2c0be5a685420f74d0d697af5379`; default
+  seed DB sha256
+  `64ecbb80af6ad55fb1f73a9b0cc261f0f33744bf1e447970405c15c145a5e88c`; Rails
+  reference image `campfire-reference:app` (`ed09003899ed`).
+- Elixir harness checkout: once-campfire-elixir at `f15fc9e`; its loadgen
+  built. Gate note: `bench/run` runs `bench/validate.py ledger`, which demands a
+  complete `bin/verify-parity` run of the Elixir application whose committed
+  verification digest is stale on a clean clone (upstream history was
+  densified). Baseline reproduction therefore uses the Rust repository's
+  container harness (Rails vs Rust, same seed, same CPU pinning) and the Go
+  repository's native A/B harness (Go vs Rust binaries, same loadgen). The
+  Elixir harness is reserved for the final cross-language comparison; its gate
+  will be satisfied by a full `verify-parity` run or bypassed by a local,
+  explicitly documented change that touches only the Elixir-provenance
+  assertion, never the load generator, preflight or report code.
