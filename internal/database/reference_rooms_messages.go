@@ -112,6 +112,23 @@ func (d *DB) referenceUsers(ctx context.Context, query string, args ...any) ([]U
 	return users, rows.Err()
 }
 
+// UserAuthenticateBot is User::authenticate_bot: the active bot with the key's id and token
+// (split on "-" as Ruby does, so a key without a token finds nothing).
+func (d *DB) UserAuthenticateBot(ctx context.Context, key string) (User, bool, error) {
+	parts := strings.Split(key, "-")
+	for len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) < 2 {
+		return User{}, false, nil
+	}
+	users, err := d.referenceUsers(ctx, `SELECT `+UserColumns+` FROM "users" WHERE "users"."status" = 0 AND "users"."role" = 2 AND "users"."id" = ? AND "users"."bot_token" = ? LIMIT 1`, parts[0], parts[1])
+	if err != nil || len(users) == 0 {
+		return User{}, false, err
+	}
+	return users[0], true, nil
+}
+
 // RoomUsers is room.users.
 func (d *DB) RoomUsers(ctx context.Context, room int64) ([]User, error) {
 	return d.referenceUsers(ctx, selectRoomUsers, room)

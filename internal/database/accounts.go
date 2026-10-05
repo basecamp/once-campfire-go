@@ -255,9 +255,7 @@ func (d *DB) BanUser(ctx context.Context, id int64, ban bool) error {
 	return err
 }
 func (d *DB) BannedIP(ctx context.Context, ip string) (bool, error) {
-	var n int
-	err := d.Read.QueryRowContext(ctx, "SELECT count(*) FROM bans WHERE ip_address=?", ip).Scan(&n)
-	return n > 0, err
+	return d.exists(ctx, `SELECT 1 AS one FROM "bans" WHERE "bans"."ip_address" = ? LIMIT 1`, ip)
 }
 func (d *DB) RefreshSession(ctx context.Context, token, agent, ip string) (bool, error) {
 	now := d.Now()

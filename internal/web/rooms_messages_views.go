@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"strconv"
@@ -139,6 +140,53 @@ func (s *Server) setMessage(r *http.Request, room *database.ReferenceRoom) (data
 	return message, err
 }
 
+// rememberLastRoomVisited is remember_last_room_visited: the last_room cookie, which the rest of
+// the request reads back as cookies[:last_room] does (the layout's last_room_visited).
+func rememberLastRoomVisited(s *Server, w http.ResponseWriter, r *http.Request, id int64) {
+	value := strconv.FormatInt(id, 10)
+	s.rememberRoom(w, r, value)
+	cookies := []string{"last_room=" + value}
+	for _, c := range r.Cookies() {
+		if c.Name != "last_room" {
+			cookies = append(cookies, c.String())
+		}
+	}
+	r.Header.Set("Cookie", strings.Join(cookies, "; "))
+}
+
+// requireParams is params.require(key): ParameterMissing, a 400, without key's params.
+func requireParams(w http.ResponseWriter, r *http.Request, key string) bool {
+	for name := range r.Form {
+		if strings.HasPrefix(name, key+"[") {
+			return true
+		}
+	}
+	if r.MultipartForm != nil {
+		for name := range r.MultipartForm.File {
+			if strings.HasPrefix(name, key+"[") {
+				return true
+			}
+		}
+	}
+	publicError(w, r, http.StatusBadRequest)
+	return false
+}
+
+// failWith is fail for an error the request's own format renders: the bot API's routes default
+// to JSON.
+func (s *Server) failWith(w http.ResponseWriter, r *http.Request, err error) {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, database.ErrNoRows):
+		status = http.StatusNotFound
+	case errors.Is(err, database.ErrForbidden):
+		status = http.StatusForbidden
+	default:
+		slog.Error("request failed", "error", err)
+	}
+	publicError(w, r, status)
+}
+
 // canAdminister is Current.user.can_administer?(record): administrators and the record's creator.
 func canAdminister(u *database.User, creatorID int64) bool { return u.Role == 1 || u.ID == creatorID }
 
@@ -149,7 +197,7 @@ func (s *Server) roomShow(w http.ResponseWriter, r *http.Request, u database.Use
 	if !ok {
 		return
 	}
-	s.rememberRoom(w, r, strconv.FormatInt(room.ID, 10))
+	rememberLastRoomVisited(s, w, r, room.ID)
 	ctx := r.Context()
 	var anchor database.ReferenceMessage
 	found := false
@@ -296,6 +344,8 @@ func (s *Server) messagesIndex(w http.ResponseWriter, r *http.Request, u databas
 // (a 400) without message params.
 type messageParams struct {
 	body, clientMessageID *string
+	// The attachment's param: message[attachment], or the bot API's attachment.
+	attachmentField string
 	// attachment= was given: an upload, nil or "" (removal), or something else (invalid).
 	attachmentGiven, attachmentInvalid bool
 }
@@ -325,10 +375,14 @@ func (s *Server) createMessageRecord(r *http.Request, u *database.User, room *da
 	if params.attachmentInvalid {
 		return database.ReferenceMessage{}, errors.New("could not find or build blob: expected attachable")
 	}
+	field := params.attachmentField
+	if field == "" {
+		field = "message[attachment]"
+	}
 	var staged *storage.Staged
-	if params.attachmentGiven && r.MultipartForm != nil && len(r.MultipartForm.File["message[attachment]"]) > 0 {
+	if params.attachmentGiven && r.MultipartForm != nil && len(r.MultipartForm.File[field]) > 0 {
 		var err error
-		if staged, err = s.stageAttachment(r, "message[attachment]"); err != nil {
+		if staged, err = s.stageAttachment(r, field); err != nil {
 			return database.ReferenceMessage{}, err
 		}
 		defer staged.Discard()
@@ -475,7 +529,7 @@ func (s *Server) messagesCreate(w http.ResponseWriter, r *http.Request, u databa
 		s.fail(w, err)
 		return
 	}
-	if !requireMessage(w, r) {
+	if !requireParams(w, r, "message") {
 		return
 	}
 	message, err := s.createMessageRecord(r, &u, &room, messageParamsOf(r))
@@ -584,7 +638,7 @@ func (s *Server) messagesUpdate(w http.ResponseWriter, r *http.Request, u databa
 		headFromBeforeAction(w, http.StatusForbidden)
 		return
 	}
-	if !requireMessage(w, r) {
+	if !requireParams(w, r, "message") {
 		return
 	}
 	legacy, err := s.DB.Message(r.Context(), message.ID)
@@ -721,14 +775,7 @@ func (s *Server) boostsCreate(w http.ResponseWriter, r *http.Request, u database
 
 // requireBoostContent is params.require(:boost).permit(:content): a 400 without boost params.
 func requireBoostContent(w http.ResponseWriter, r *http.Request) (*string, bool) {
-	given := false
-	for key := range r.Form {
-		if strings.HasPrefix(key, "boost[") {
-			given = true
-		}
-	}
-	if !given {
-		http.Error(w, "Missing boost parameter", http.StatusBadRequest)
+	if !requireParams(w, r, "boost") {
 		return nil, false
 	}
 	if values, ok := r.Form["boost[content]"]; ok && len(values) > 0 && !nullParam(r, "boost[content]") {
@@ -885,10 +932,12 @@ func (s *Server) involvementShow(w http.ResponseWriter, r *http.Request, u datab
 		s.fail(w, err)
 		return
 	}
-	involvement := &views.InvolvementView{RoomID: room.ID, Kind: roomKind(room.Type)}
-	if membership.Involvement != nil {
-		involvement.Involvement = *membership.Involvement
+	if membership.Involvement == nil {
+		// button_to_change_involvement's image_tag("notification-bell-.svg") raises: no such asset.
+		s.fail(w, errors.New("the asset notification-bell-.svg is not present in the asset pipeline"))
+		return
 	}
+	involvement := &views.InvolvementView{RoomID: room.ID, Kind: roomKind(room.Type), Involvement: *membership.Involvement}
 	s.content(w, r, &u, http.StatusOK, func(ctx *views.ViewContext) views.HTML {
 		return views.HTML(views.RenderString(0, func(qw *qt.Writer) { views.StreamRoomsInvolvementsShow(qw, ctx, involvement) }))
 	})
