@@ -91,3 +91,17 @@
 /searches?q=zzzzqqqq | Host: campfire.test
 /searches?q=hello%2C+world%21 | Host: campfire.test
 /searches?q=coffee | Turbo-Frame: search-results | Host: campfire.test
+
+# The notification bell's PWA help (pwa/_browser_settings, _system_settings, _install_instructions)
+# on each platform it distinguishes.
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 | Host: campfire.test
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 | Host: campfire.test
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15 | Host: campfire.test
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1 | Host: campfire.test
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/140.0.0.0 Mobile/15E148 Safari/604.1 | Host: campfire.test
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36 | Host: campfire.test
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 14.5; rv:131.0) Gecko/20100101 Firefox/131.0 | Host: campfire.test
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0 | Host: campfire.test
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Android 14; Mobile; rv:131.0) Gecko/131.0 Firefox/131.0 | Host: campfire.test
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0 | Host: campfire.test
+/rooms/{rooms.hq} | User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0 | Host: campfire.test
