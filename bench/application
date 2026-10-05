@@ -25,6 +25,7 @@ def main():
     p.add_argument('--concurrency',type=int,nargs='+',default=[1,16,64])
     p.add_argument('--cable-clients',type=int,nargs='*',default=[100,1000,10000])
     p.add_argument('--deflate',type=int,nargs='+',default=[0,1],choices=[0,1])
+    p.add_argument('--gzip',type=int,default=0,choices=[0,1],help='HTTP workloads send Accept-Encoding: gzip (1) or identity (0)')
     p.add_argument('--cable-seconds',type=float,default=5)
     p.add_argument('--upload-reps',type=int,default=5)
     p.add_argument('--server-cpus',default='8-11')
@@ -43,10 +44,10 @@ def main():
     env.update(TMPDIR=str(ROOT/'.cache/tmp'),DISABLE_SSL='true',TARGET_BIND='127.0.0.1',GOMAXPROCS='4',TOKIO_WORKER_THREADS='4',RAILS_MAX_THREADS='4')
     metadata={'time':datetime.datetime.now(datetime.timezone.utc).isoformat(),'host':platform.platform(),'cpu':text('lscpu'),
         'rust_commit':text('git','-C',str(rust),'rev-parse','HEAD'),'settings':{k:str(v) if isinstance(v,Path) else v for k,v in vars(a).items()},
-        'binaries':{k:{'sha256':digest(v),'bytes':v.stat().st_size} for k,v in binaries.items()},'seed_sha256':digest(seed/'db/production.sqlite3'),
+        'binaries':{k:{'sha256':digest(v),'bytes':v.stat().st_size} for k,v in binaries.items() if k in a.apps},'seed_sha256':digest(seed/'db/production.sqlite3'),
         'go_version':text('mise','exec','go@1.27.1','--','go','version'),'rust_version':text('mise','exec','rust@1.98.1','--','rustc','--version'),'vips_version':text('pkg-config','--modversion','vips'),'go_mod_sha256':digest(ROOT/'go.mod'),'go_sum_sha256':digest(ROOT/'go.sum'),'rust_lock_sha256':digest(rust/'Cargo.lock'),'loadgen_sha256':digest(lg),'load_before':Path('/proc/loadavg').read_text(),
         'go_sources_sha256':{str(f.relative_to(ROOT)):digest(f) for folder in ('cmd','internal','assets','third_party') for f in sorted((ROOT/folder).rglob('*')) if f.is_file()},
-        'scope':'Native release binaries; direct HTTP/1.1 application listeners; identity encoding; identical seed and CPU affinity. Media use installed native libraries. Workstation background load recorded.'}
+        'scope':'Native release binaries; direct HTTP/1.1 application listeners; '+('gzip' if a.gzip else 'identity')+' encoding; identical seed and CPU affinity. Media use installed native libraries. Workstation background load recorded.'}
     results=[]; contracts={}; thumbnail_hash=None
     if a.resume:
         prior=json.loads((out/'metadata.json').read_text())
@@ -105,7 +106,7 @@ def main():
           routes=[('room_show',f'/rooms/{room}'),('messages_page',f'/rooms/{room}/messages?before={labels["messages.busy_060"]}'),('sidebar','/users/me/sidebar'),('search','/searches?q=coffee'),('avatar',f'/users/{labels["avatar_tokens.jason"]}/avatar'),('static_css',scrape['css']),('post_message',None)]
           if a.routes:routes=[(name,path) for name,path in routes if name in a.routes]
           for name,path in routes:
-           opts=dict(cookie=cookie,gzip=0)
+           opts=dict(cookie=cookie,gzip=a.gzip)
            opts.update(dict(path=path) if path else dict(post_room=write_room,csrf=scrape['csrf'] or ''))
            # Verify representative content before timing, including nonempty message lists.
            if path:
