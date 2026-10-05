@@ -3,7 +3,7 @@
 The initial three-way pass was stopped during repetition 2 after concurrent VM
 compilation activity. Its whole attempt is excluded from acceptance, including
 completed samples. Unedited raw samples and logs remain in
-[`../final-contended/`](../final-contended/). Optimized Go history fell to 1,790
+[`final-contended/`](https://github.com/nick-potts/once-campfire-go/tree/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005/final-contended). Optimized Go history fell to 1,790
 requests/sec and writes to 574/sec; write p99 reached 1,141 ms.
 
 The complete exploratory passes in `step12-priority`, `step13-priority` and

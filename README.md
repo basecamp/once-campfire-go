@@ -133,8 +133,8 @@ five workloads, and HTTP Pss is 123.9 versus Rust's 101.1 MiB. All six runs comp
 with zero HTTP errors, 136,104 acknowledged writes verified in messages and FTS, and
 six thumbnails with identical bytes. See the [full report](bench/results/rust-parity-20261005/final/report.md)
 for ranges, latency, memory, hashes, reproduction and host-activity limits. Earlier
-three-way comparisons, including the unchanged Go baseline and failed optimization
-trials, are retained alongside it. Absolute rates differ from earlier workstations.
+comparisons, including the unchanged Go baseline and failed optimization trials,
+are retained in a separate [evidence archive](https://github.com/nick-potts/once-campfire-go/tree/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005). Absolute rates differ from earlier workstations.
 
 This focused pass did not remeasure Cable throughput. In the
 [earlier full-workload comparison](bench/results/application-optimized-20261003/report.md),

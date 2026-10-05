@@ -1,8 +1,8 @@
 # Go/Rust HTTP throughput comparison, 2026-10-05
 
 The optimized Go port exceeds Rust's median throughput on each of the five requested
-HTTP workloads in the final three-repetition comparison. `bench/target final` passes
-all five. This is a measured throughput result, not a latency or memory win.
+HTTP workloads in the final three-repetition comparison. Checking the archived
+final samples with `bench/target` passes all five. This is a measured throughput result, not a latency or memory win.
 
 | Workload | Go req/s | Rust req/s | Go advantage |
 |---|---:|---:|---:|
@@ -12,8 +12,8 @@ all five. This is a measured throughput result, not a latency or memory win.
 | Search | 12,261 | 9,258 | +32.4% |
 | Post message | 3,483 | 3,438 | +1.3% |
 
-[Full report](final/report.md), [raw samples](final/raw.json),
-[metadata and source hashes](final/metadata.json), [acceptance output](final/target.md),
+[Full report](final/report.md), [raw samples](https://github.com/nick-potts/once-campfire-go/blob/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005/final/raw.json),
+[metadata and source hashes](https://github.com/nick-potts/once-campfire-go/blob/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005/final/metadata.json), [acceptance output](final/target.md),
 and [harness hashes/build commands](final/harness.json).
 
 ## What changed and why it belongs in the app
@@ -50,24 +50,34 @@ submodule, schema, dependencies, frontend JavaScript and CSS were not changed.
 ## Correctness
 
 - `bin/check`: gofmt, asset consistency, vet, all package tests with `-race`, including
-  the vendored WebSocket module. [Log](validation/race-vet.log.gz).
+  the vendored WebSocket module. [Log](https://github.com/nick-potts/once-campfire-go/blob/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005/validation/race-vet.log.gz).
 - Added tests compare slot-rendered HTML against `html/template` across attachments,
   emoji, boosts and escaping cases; compare cached page bytes and search counts;
   verify grouped sidebar ordering; and exercise external edits, revoked memberships,
   account settings isolation and background checkpoint persistence.
 - A live HTTP test verifies full GET bodies and HEAD lengths without chunked framing.
-  [Response race tests](validation/response-race.log.gz).
+  [Response race tests](https://github.com/nick-potts/once-campfire-go/blob/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005/validation/response-race.log.gz).
 - `golangci-lint run --build-tags sqlite_fts5 --new-from-rev=HEAD`: zero new issues.
-  [Log](validation/lint.log.gz).
+  [Log](https://github.com/nick-potts/once-campfire-go/blob/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005/validation/lint.log.gz).
 - `bin/check-upgrade --rust-root reference`: cookies accepted in both directions,
-  and Go-written messages/FTS read by Rust. [Log](validation/upgrade.log.gz).
+  and Go-written messages/FTS read by Rust. [Log](https://github.com/nick-potts/once-campfire-go/blob/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005/validation/upgrade.log.gz).
 - Chromium smoke test: setup, two-tab messaging, all eight reaction submissions and
   broadcasts, edits/search, account/profile changes, room operations, bot APIs,
-  styles, session transfer, invitations and direct pings. [Log](validation/browser.log.gz).
+  styles, session transfer, invitations and direct pings. [Log](https://github.com/nick-potts/once-campfire-go/blob/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005/validation/browser.log.gz).
 - All six measured application runs completed with zero HTTP errors. All
   136,104 acknowledged writes, including warmup,
   were counted in both messages and FTS. Six real thumbnails had identical bytes.
   Message/room IDs matched across representative responses, and the seed was unchanged.
+
+## Check archived evidence
+
+```sh
+mkdir -p .cache/rust-parity-evidence
+curl -fsSL \
+  https://raw.githubusercontent.com/nick-potts/once-campfire-go/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005/final/raw.json \
+  -o .cache/rust-parity-evidence/raw.json
+bench/target .cache/rust-parity-evidence
+```
 
 ## Reproduce
 
@@ -113,10 +123,11 @@ and full HTML/network parity are outside the five-workload target. Grouped react
 forms deliberately change markup while preserving behavior. No response was made
 incomplete for timing. [Host activity record](final/CONTENTION.md).
 
-`baseline` retains the initial three-repetition comparison. `step*` directories retain
+The [evidence archive](https://github.com/nick-potts/once-campfire-go/tree/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005) retains the initial three-repetition comparison. `step*` directories retain
 intermediate results, including failed targets; `final-contended` is an interrupted
 attempt. `pgo-trial` was exploratory, did not give useful gains, and its initial room
 sample overlapped a diagnostic profile; it is excluded from acceptance. No PGO was
-retained. Final acceptance uses only `final`, the sole complete comparison of the
-final application binaries. Repetitive server logs are gzip-compressed without
+retained. Final acceptance uses only the archived `final` samples, the sole complete comparison
+of the final application binaries. The archive is preserved on the separate
+`bench/evidence-rust-parity-20261005` branch; only readable summaries are included here. Repetitive server logs are gzip-compressed without
 editing; raw JSON and metadata remain uncompressed.

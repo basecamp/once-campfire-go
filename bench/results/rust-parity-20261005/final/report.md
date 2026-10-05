@@ -41,7 +41,7 @@ Startup includes application initialization, measured to a successful health req
 
 ## Reproduction and limits
 
-- [Raw samples](raw.json) include statuses, errors, latency distributions, delivery counters, byte hashes and memory snapshots. [Metadata](metadata.json) records source/binary/seed hashes, CPU details, affinity and load averages.
+- [Raw samples](https://github.com/nick-potts/once-campfire-go/blob/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005/final/raw.json) include statuses, errors, latency distributions, delivery counters, byte hashes and memory snapshots. [Metadata](https://github.com/nick-potts/once-campfire-go/blob/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005/final/metadata.json) records source/binary/seed hashes, CPU details, affinity and load averages.
 - These are local workstation measurements, sequential within the harness. Background host activity is recorded, not eliminated. They are not a language-wide performance claim.
 - This comparison uses direct application HTTP listeners. TLS, ACME, gzip/zstd and the public response cache have separate functional tests; these numbers do not measure their throughput.
 - Screen-level HTML and network comparisons remain stricter than the functional response contracts used here. Benchmark validation is not a declaration of complete byte-for-byte UI parity.
@@ -65,6 +65,6 @@ Generated HTML has different whitespace, attributes and serialization. Represent
 
 Default application logging is retained: Rust logs completed jobs; Go logs startup and job failures. Native media libraries are identical between the two applications in this run. Container byte goldens use the separately pinned toolchain.
 
-[Harness hashes and build commands](harness.json). Native binary sizes reflect these build flags; the production Go image strips symbols. Server/load-generator logs are retained alongside the raw JSON (gzip-compressed after measurement when archived).
+[Harness hashes and build commands](harness.json). Native binary sizes reflect these build flags; the production Go image strips symbols. Server/load-generator logs are retained in the [evidence archive](https://github.com/nick-potts/once-campfire-go/tree/32c6f7507c75c629e7f0f642a67637e90abeb0e0/bench/results/rust-parity-20261005/final) (gzip-compressed after measurement when archived).
 
 [Interrupted repetitions and resumption](CONTENTION.md): incomplete contention-affected attempts were excluded and retried with unchanged binaries and settings. Completed samples were retained. See that record for host-noise limits.
