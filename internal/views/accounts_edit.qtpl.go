@@ -3,6 +3,8 @@
 
 package views
 
+import "strconv"
+
 import (
 	qtio422016 "io"
 
@@ -32,6 +34,43 @@ func (p *AccountsEdit) Head() string {
 }
 
 func (p *AccountsEdit) StreamNav(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`  <div class="flex-item-justify-start">
+    `)
+	qw422016.N().S(string(LinkBackToLastRoomVisited(p.Ctx)))
+	qw422016.N().S(`
+  </div>
+
+`)
+	if p.Ctx.CanAdminister() {
+		qw422016.N().S(`    <div class="flex align-center gap flex-item-justify-end">
+      `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+        `)
+		qw422016.N().S(string(ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))))
+		qw422016.N().S(`
+        <span class="for-screen-reader">Set up chat bots</span>
+`)
+		capture1 := EndCapture(qw422016)
+
+		qw422016.N().S(string(LinkToBlock(capture1, RouteAccountBots(), NewAttrs().Class("btn").Style("view-transition-name: chat-bots"))))
+		qw422016.N().S(`
+      `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+        `)
+		qw422016.N().S(string(ImageTag(p.Ctx, "art.svg", NewAttrs().Size(20).AriaHidden())))
+		qw422016.N().S(`
+        <span class="for-screen-reader">Custom styles</span>
+`)
+		capture2 := EndCapture(qw422016)
+
+		qw422016.N().S(string(LinkToBlock(capture2, RouteEditAccountCustomStyles(), NewAttrs().Class("btn").Style("view-transition-name: custom-styles"))))
+		qw422016.N().S(`    </div>
+`)
+	}
 }
 
 func (p *AccountsEdit) WriteNav(qq422016 qtio422016.Writer) {
@@ -49,6 +88,192 @@ func (p *AccountsEdit) Nav() string {
 }
 
 func (p *AccountsEdit) StreamContent(qw422016 *qt422016.Writer) {
+	ctx := p.Ctx
+
+	qw422016.N().S(`<section class="panel txt-align-center flex flex-column gap" style="view-transition-name: account-settings">
+`)
+	if ctx.CanAdminister() {
+		qw422016.N().S(`    <div class="align-center center avatar__form gap" data-controller="upload-preview">
+`)
+		form1 := FormWith(p.AccountAction()).Model("account").Method("patch").Class("txt--medium").Data("controller", "form")
+
+		qw422016.N().S(`      `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+        <label class="btn input--file">
+          `)
+		qw422016.N().S(string(ImageTag(ctx, "camera.svg", NewAttrs().AriaHidden().Size(20))))
+		qw422016.N().S(`
+          `)
+		qw422016.N().S(string(form1.FileField("logo", NewAttrs().Class("input").Accept("image/*").Data("action", "upload-preview#previewImage change->form#submit"))))
+		qw422016.N().S(`
+          <span class="for-screen-reader">Upload logo</span>
+        </label>
+`)
+		capture1 := EndCapture(qw422016)
+
+		qw422016.N().S(string(FormWithBlock(capture1, form1)))
+		qw422016.N().S(`
+`)
+		form2 := FormWith(p.AccountAction()).Model("account").Method("patch").Data("controller", "form")
+
+		qw422016.N().S(`      `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+        <label class="btn avatar input--file account-logo txt-xx-large">
+          `)
+		qw422016.N().S(string(ImageTag(ctx, ctx.Account.LogoURL, NewAttrs().Role("presentation").Size(48).Data("upload_preview_target", "image"))))
+		qw422016.N().S(`
+          `)
+		qw422016.N().S(string(form2.FileField("logo", NewAttrs().Class("input").Accept("image/*").Data("action", "upload-preview#previewImage change->form#submit"))))
+		qw422016.N().S(`
+          <span class="for-screen-reader">Upload logo</span>
+        </label>
+`)
+		capture2 := EndCapture(qw422016)
+
+		qw422016.N().S(string(FormWithBlock(capture2, form2)))
+		qw422016.N().S(`
+`)
+		if ctx.Account.HasLogo {
+			qw422016.N().S(`        `)
+			BeginCapture(qw422016)
+
+			qw422016.N().S(`
+          `)
+			qw422016.N().S(string(ImageTag(ctx, "minus.svg", NewAttrs().AriaHidden().Size(20))))
+			qw422016.N().S(`
+          <span class="for-screen-reader">Delete logo</span>
+`)
+			capture3 := EndCapture(qw422016)
+
+			qw422016.N().S(string(ButtonToBlock(capture3, ctx.Account.LogoURL, NewAttrs().Method("delete").Class("btn btn--negative txt-small avatar__delete-btn"))))
+		}
+		qw422016.N().S(`    </div>
+
+`)
+		form3 := FormWith(p.AccountAction()).Model("account").Method("patch").Data("controller", "form").Class("flex flex-column gap")
+
+		qw422016.N().S(`    `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+      <div class="flex align-center gap">
+        `)
+		qw422016.N().S(string(TranslationButton(ctx, "account_name")))
+		qw422016.N().S(`
+
+        <label class="flex align-center gap flex-item-grow">
+          `)
+		qw422016.N().S(string(form3.TextField("name", Ptr(ctx.Account.Name), NewAttrs().Class("input txt-large").Autocomplete("off").Placeholder("Name this account").Autofocus().Data("action", "keydown.enter->form#submit"))))
+		qw422016.N().S(`
+        </label>
+
+        `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+          `)
+		qw422016.N().S(string(ImageTag(ctx, "check.svg", NewAttrs().AriaHidden().Size(20))))
+		qw422016.N().S(`
+          <span class="for-screen-reader">Save changes</span>
+`)
+		capture5 := EndCapture(qw422016)
+
+		qw422016.N().S(string(Button(capture5, NewAttrs().Class("btn btn--reversed center").Type("submit"))))
+		qw422016.N().S(`      </div>
+`)
+		capture4 := EndCapture(qw422016)
+
+		qw422016.N().S(string(FormWithBlock(capture4, form3)))
+		qw422016.N().S(`
+    <div class="margin-block-start pad-block pad-inline-double fill-shade border-radius">
+`)
+		form4 := FormWith(p.AccountAction()).Model("account").Method("put").Data("controller", "form").Class("flex align-center gap center")
+
+		qw422016.N().S(`      `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+        <div class="flex-item-grow flex align-center gap txt-align-start">
+          `)
+		qw422016.N().S(string(ImageTag(ctx, "crown.svg", NewAttrs().Class("colorize--black").AriaHidden().Size(18))))
+		qw422016.N().S(` Must be admin to create new rooms
+        </div>
+`)
+		settingsForm := form4.FieldsFor("settings")
+
+		qw422016.N().S(`          `)
+		qw422016.N().S(string(settingsForm.HiddenField("restrict_room_creation_to_administrators", nil, NewAttrs().Value(strconv.FormatBool(!p.RestrictRoomCreationToAdministrators)))))
+		qw422016.N().S(`
+
+        <label class="switch">
+          <input type="checkbox"
+                class="switch__input"
+                `)
+		if p.RestrictRoomCreationToAdministrators {
+			qw422016.N().S(`checked`)
+		}
+		qw422016.N().S(`
+                data-action="change->form#submit">
+          <span class="switch__btn round"></span>
+          <span class="for-screen-reader">
+            Must be admin to create new rooms
+          </span>
+        </label>
+
+`)
+		capture6 := EndCapture(qw422016)
+
+		qw422016.N().S(string(FormWithBlock(capture6, form4)))
+		qw422016.N().S(`    </div>
+`)
+	} else {
+		qw422016.N().S(`    `)
+		qw422016.N().S(string(AccountLogoTag(ctx, "txt-xx-large center")))
+		qw422016.N().S(`
+    <h1 class="flex-item-grow txt-x-large">`)
+		qw422016.E().S(ctx.Account.Name)
+		qw422016.N().S(`</h1>
+`)
+	}
+	qw422016.N().S(`
+  <div class="margin-block pad-inline pad-block-start fill-shade border-radius">
+    `)
+	StreamAccountsInvite(qw422016, ctx, p.JoinCode)
+	qw422016.N().S(`
+
+    <hr class="margin-block separator full-width" style="--border-style: solid">
+
+    <menu class="flex flex-column gap margin-none pad">
+      <turbo-frame id="account_users">
+        `)
+	for i := range p.Administrators {
+		StreamAccountsUsersUser(qw422016, ctx, &p.Administrators[i])
+	}
+	qw422016.N().S(`
+`)
+	if len(p.Administrators) > 0 && len(p.Members) > 0 {
+		qw422016.N().S(`          <hr class="separator full-width" style="--border-style: solid">
+`)
+	}
+	qw422016.N().S(`
+        `)
+	for i := range p.Members {
+		StreamAccountsUsersUser(qw422016, ctx, &p.Members[i])
+	}
+	qw422016.N().S(`        `)
+	if p.NextPage != nil {
+		StreamAccountsUsersNextPageContainer(qw422016, *p.NextPage)
+	}
+	qw422016.N().S(`
+      </turbo-frame>
+    </menu>
+  </div>
+</section>
+`)
 }
 
 func (p *AccountsEdit) WriteContent(qq422016 qtio422016.Writer) {
@@ -66,6 +291,10 @@ func (p *AccountsEdit) Content() string {
 }
 
 func (p *AccountsEdit) StreamFooter(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`  <div class="txt-align-center center margin-block-double txt-subtle">Campfire&trade; version `)
+	qw422016.N().S(string(VersionBadge(p.Ctx)))
+	qw422016.N().S(`</div>
+`)
 }
 
 func (p *AccountsEdit) WriteFooter(qq422016 qtio422016.Writer) {

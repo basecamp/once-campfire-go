@@ -1,2 +1,32 @@
-{% comment %}reference/crates/views/templates/rooms/closeds/_form.html; TODO: body{% endcomment %}
-{% func RoomsClosedsForm(ctx *ViewContext, form *ClosedFormView, typeChangePath string) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/rooms/closeds/_form.html{% endcomment %}
+{% func RoomsClosedsForm(ctx *ViewContext, form *ClosedFormView, typeChangePath string) %}{% code BeginCapture(qw422016) %}{% code BeginCapture(qw422016) %}{% if form.CanAdminister %}
+      <li class="flex align-center gap margin-none">
+        <figure class="avatar flex-item-no-shrink" style="--avatar-border-radius: 0; --avatar-size: 4ch;">
+          <img aria-hidden="true" class="colorize--black" style="background-color: transparent" src="{%s ctx.Asset("everyone.svg") %}" />
+          <span class="for-screen-reader">Everyone</span>
+        </figure>
+
+        <div class="min-width">
+          <div class="overflow-ellipsis fill-shade"><strong>Everyone</strong></div>
+        </div>
+
+        <hr class="separator" aria-hidden="true">
+
+        <a class="btn--faux flex-inline" tabindex="-1" data-turbo-action="replace" href="{%s typeChangePath %}">
+          <label for="room_type" class="switch">
+            <input type="checkbox" id="room_type" class="switch__input">
+            <span class="switch__btn round"></span>
+            <span class="for-screen-reader">Give everyone access to this room</span>
+          </label>
+</a>
+      </li>
+
+      <hr class="separator full-width" style="--border-style: solid">{% endif %}{% if len(form.SelectedUsers)+len(form.UnselectedUsers) > 20 %}
+    {%s= string(UserFilterSearchTag()) %}{% endif %}
+
+    <div data-filter-target="list" contents>{% for i := range form.SelectedUsers %}
+      {%= RoomsClosedsUser(ctx, form, &form.SelectedUsers[i], true) %}{% endfor %}{% if len(form.SelectedUsers) > 0 && len(form.UnselectedUsers) > 0 %}
+        <hr class="separator full-width" style="--border-style: solid">{% endif %}{% for i := range form.UnselectedUsers %}
+      {%= RoomsClosedsUser(ctx, form, &form.UnselectedUsers[i], false) %}{% endfor %}
+    </div>
+{% code capture2 := EndCapture(qw422016) %}{%s= string(UserFilterMenuTag(capture2)) %}{% code capture1 := EndCapture(qw422016) %}{%= RoomsLayoutsForm(ctx, &form.Room, form.CanAdminister, RoomKindClosed, capture1) %}{% endfunc %}

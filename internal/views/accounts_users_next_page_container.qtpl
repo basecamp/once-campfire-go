@@ -1,2 +1,4 @@
-{% comment %}reference/crates/views/templates/accounts/users/_next_page_container.html; TODO: body{% endcomment %}
-{% func AccountsUsersNextPageContainer(page string) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/accounts/users/_next_page_container.html{% endcomment %}
+{% func AccountsUsersNextPageContainer(page string) %}{% code BeginCapture(qw422016) %}
+  <div class="spinner center"></div>
+{% code capture1 := EndCapture(qw422016) %}{%s= string(TurboFrameTag(capture1, "next_page_container", NewAttrs().Loading("lazy").Attr("src", "/account/users.turbo_stream?page="+CGIEscape(page)).Class("flex center"))) %}{% endfunc %}

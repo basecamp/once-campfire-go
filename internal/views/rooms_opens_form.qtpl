@@ -1,2 +1,29 @@
-{% comment %}reference/crates/views/templates/rooms/opens/_form.html; TODO: body{% endcomment %}
-{% func RoomsOpensForm(ctx *ViewContext, form *OpenFormView, typeChangePath string) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/rooms/opens/_form.html{% endcomment %}
+{% func RoomsOpensForm(ctx *ViewContext, form *OpenFormView, typeChangePath string) %}{% code BeginCapture(qw422016) %}{% code BeginCapture(qw422016) %}
+    <li class="flex align-center gap margin-none">
+      <figure class="avatar flex-item-no-shrink" style="--avatar-border-radius: 0; --avatar-size: 4ch;">
+        <img aria-hidden="true" class="colorize--black" style="background-color: transparent" src="{%s ctx.Asset("everyone.svg") %}" />
+        <span class="for-screen-reader">Everyone</span>
+      </figure>
+
+      <div class="min-width">
+        <div class="overflow-ellipsis fill-shade"><strong>Everyone</strong></div>
+      </div>
+
+      <hr class="separator" aria-hidden="true">{% if form.CanAdminister %}
+        <a class="btn--faux flex-inline" tabindex="-1" data-turbo-action="replace" href="{%s typeChangePath %}">
+          <label for="room_type" class="switch">
+            <input type="checkbox" id="room_type" class="switch__input" checked="checked">
+            <span class="switch__btn round"></span>
+            <span class="for-screen-reader">Give only some access to this room</span>
+          </label>
+</a>{% endif %}
+    </li>
+
+    <hr class="separator full-width" style="--border-style: solid">{% if len(form.Users) > 20 %}
+    {%s= string(UserFilterSearchTag()) %}{% endif %}
+
+    <div data-filter-target="list" contents>{% for i := range form.Users %}
+      {%= RoomsOpensUser(ctx, form, &form.Users[i]) %}{% endfor %}
+    </div>
+{% code capture2 := EndCapture(qw422016) %}{%s= string(UserFilterMenuTag(capture2)) %}{% code capture1 := EndCapture(qw422016) %}{%= RoomsLayoutsForm(ctx, &form.Room, form.CanAdminister, RoomKindOpen, capture1) %}{% endfunc %}

@@ -15,6 +15,7 @@ var (
 )
 
 func (p *RoomsClosedsNew) StreamRoomForm(qw422016 *qt422016.Writer) {
+	StreamRoomsClosedsForm(qw422016, p.Ctx, p.Form, RouteNewRoomsOpen())
 }
 
 func (p *RoomsClosedsNew) WriteRoomForm(qq422016 qtio422016.Writer) {

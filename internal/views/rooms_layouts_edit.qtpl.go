@@ -32,6 +32,12 @@ func (p *RoomsLayoutsEdit) Head() string {
 }
 
 func (p *RoomsLayoutsEdit) StreamNav(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`
+  <div class="flex-item-justify-start">
+    `)
+	qw422016.N().S(string(LinkBackToLastRoomVisited(p.Ctx)))
+	qw422016.N().S(`
+  </div>`)
 }
 
 func (p *RoomsLayoutsEdit) WriteNav(qq422016 qtio422016.Writer) {
@@ -49,6 +55,22 @@ func (p *RoomsLayoutsEdit) Nav() string {
 }
 
 func (p *RoomsLayoutsEdit) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`
+<section class="panel txt-align-center" style="view-transition-name: edit-room-`)
+	qw422016.N().DL(p.RoomID())
+	qw422016.N().S(`">
+  `)
+	p.Page.StreamRoomForm(qw422016)
+	qw422016.N().S(`
+</section>`)
+	if p.CanAdminister {
+		qw422016.N().S(`
+  <section class="panel txt-align-center">
+    `)
+		qw422016.N().S(string(ButtonToDeleteRoom(p.Ctx, p.RoomID(), p.Room.DisplayName())))
+		qw422016.N().S(`
+  </section>`)
+	}
 }
 
 func (p *RoomsLayoutsEdit) WriteContent(qq422016 qtio422016.Writer) {

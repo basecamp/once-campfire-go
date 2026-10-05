@@ -1,4 +1,10 @@
-{% comment %}reference/crates/views/templates/rooms/layouts/_new.html; TODO: body{% endcomment %}
+{% comment %}reference/crates/views/templates/rooms/layouts/_new.html{% endcomment %}
 {% func (p *RoomsLayoutsNew) Head() %}{% endfunc %}
-{% func (p *RoomsLayoutsNew) Nav() %}{% endfunc %}
-{% func (p *RoomsLayoutsNew) Content() %}{% endfunc %}
+{% func (p *RoomsLayoutsNew) Nav() %}
+  <div class="flex-item-justify-start">
+    {%s= string(LinkBackToLastRoomVisited(p.Ctx)) %}
+  </div>{% endfunc %}
+{% func (p *RoomsLayoutsNew) Content() %}
+<section class="panel txt-align-center" style="view-transition-name: new-room">
+  {%= p.Page.RoomForm() %}
+</section>{% endfunc %}

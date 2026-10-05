@@ -15,6 +15,91 @@ var (
 )
 
 func StreamAccountsUsersUser(qw422016 *qt422016.Writer, ctx *ViewContext, user *UserSummary) {
+	qw422016.N().S(`<li class="flex align-center gap margin-none `)
+	if user.Banned() {
+		qw422016.N().S(`banned`)
+	}
+	qw422016.N().S(`">
+  <figure class="avatar flex-item-no-shrink" style="--avatar-size: 3.75ch;">
+    `)
+	qw422016.N().S(string(AvatarTag(ctx, user.Avatar(), NewAttrs().Loading("lazy"))))
+	qw422016.N().S(`
+  </figure>
+
+  <div class="min-width">
+    <div class="overflow-ellipsis fill-shade"><strong>`)
+	qw422016.E().S(user.Name)
+	qw422016.N().S(`</strong></div>
+  </div>
+
+  <hr class="separator" aria-hidden="true">
+
+`)
+	if ctx.CanAdminister() && user.Active() {
+		if !user.Bot() {
+			form := FormWith(RouteAccountUser(user.ID)).Model("user").Data("controller", "form").Method("patch")
+
+			qw422016.N().S(`      `)
+			BeginCapture(qw422016)
+
+			qw422016.N().S(`
+        <label class="btn txt-small flex-item-no-shrink" for="`)
+			qw422016.E().S(DomID("user", user.ID, "role"))
+			qw422016.N().S(`">
+          <span class="for-screen-reader">Role: `)
+			if user.Administrator() {
+				qw422016.N().S(`Administrator`)
+			} else {
+				qw422016.N().S(`Member`)
+			}
+			qw422016.N().S(`</span>
+          `)
+			qw422016.N().S(string(ImageTag(ctx, "crown.svg", NewAttrs().Size(20).AriaHidden())))
+			qw422016.N().S(`
+          `)
+			qw422016.N().S(string(form.CheckBox("role", NewAttrs().Data("action", "form#submit").Hidden().ID(DomID("user", user.ID, "role")).Disabled(ctx.IsCurrentUser(user.ID)), "administrator", "member", user.Role.String())))
+			qw422016.N().S(`
+        </label>
+`)
+			capture1 := EndCapture(qw422016)
+
+			qw422016.N().S(string(FormWithBlock(capture1, form)))
+		}
+		qw422016.N().S(`
+`)
+		if !ctx.IsCurrentUser(user.ID) {
+			qw422016.N().S(`      `)
+			BeginCapture(qw422016)
+
+			qw422016.N().S(`
+        `)
+			qw422016.N().S(string(ImageTag(ctx, "minus.svg", NewAttrs().Size(20).AriaHidden())))
+			qw422016.N().S(`
+        <span class="for-screen-reader">Delete `)
+			qw422016.E().S(user.Name)
+			qw422016.N().S(`</span>
+`)
+			capture2 := EndCapture(qw422016)
+
+			qw422016.N().S(string(ButtonToBlock(capture2, RouteAccountUser(user.ID), NewAttrs().Method("delete").Class("btn txt-small flex-item-no-shrink btn--negative").Data("turbo_confirm", "Are you sure you want to permanently remove this person from the account? This can’t be undone."))))
+		}
+	}
+	if ctx.IsCurrentUser(user.ID) {
+		qw422016.N().S(`    `)
+		BeginCapture(qw422016)
+
+		qw422016.N().S(`
+      `)
+		qw422016.N().S(string(ImageTag(ctx, "pencil.svg", NewAttrs().Size(20).AriaHidden())))
+		qw422016.N().S(`
+      <span class="for-screen-reader">My settings</span>
+`)
+		capture3 := EndCapture(qw422016)
+
+		qw422016.N().S(string(LinkToBlock(capture3, RouteUserProfile(), NewAttrs().Class("btn txt-small flex-item-no-shrink").Target("_top"))))
+	}
+	qw422016.N().S(`</li>
+`)
 }
 
 func WriteAccountsUsersUser(qq422016 qtio422016.Writer, ctx *ViewContext, user *UserSummary) {

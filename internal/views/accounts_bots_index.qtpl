@@ -1,4 +1,27 @@
-{% comment %}reference/crates/views/templates/accounts/bots/index.html; TODO: body{% endcomment %}
+{% comment %}reference/crates/views/templates/accounts/bots/index.html{% endcomment %}
 {% func (p *AccountsBotsIndex) Head() %}{% endfunc %}
-{% func (p *AccountsBotsIndex) Nav() %}{% endfunc %}
-{% func (p *AccountsBotsIndex) Content() %}{% endfunc %}
+{% func (p *AccountsBotsIndex) Nav() %}  <div class="flex-item-justify-start">
+    {%s= string(LinkBackTo(p.Ctx, RouteEditAccount())) %}
+  </div>
+{% endfunc %}
+{% func (p *AccountsBotsIndex) Content() %}<section class="panel panel--wide txt-align-center flex flex-column position-relative" style="view-transition-name: chat-bots">
+  <div class="flex align-center gap">
+    <div class="panel__button">
+      {%s= string(TranslationButton(p.Ctx, "chat_bots")) %}
+    </div>
+    <div class="pad-inline-double center">
+      <h1 class="margin-none">Chat bots</h1>
+      <p class="margin-none-block-start">With Chat bots, other sites and services can post updates directly to Campfire.</p>
+
+      {% code BeginCapture(qw422016) %}
+        {%s= string(ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))) %}
+        {%s= string(ImageTag(p.Ctx, "add.svg", NewAttrs().AriaHidden().Size(20))) %}
+{% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture1, RouteNewAccountBot(), NewAttrs().Class("btn btn--reversed txt-large").Aria("label", "Add a chat bot"))) %}    </div>
+  </div>
+
+  <div class="pad-inline pad-block-start ">
+    <menu class="flex flex-column gap margin-none pad">
+      {% for i := range p.Bots %}{%= AccountsBotsBot(p.Ctx, &p.Bots[i]) %}{% endfor %}    </menu>
+  </div>
+</section>
+{% endfunc %}

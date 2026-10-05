@@ -32,6 +32,12 @@ func (p *AccountsCustomStylesEdit) Head() string {
 }
 
 func (p *AccountsCustomStylesEdit) StreamNav(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`  <div class="flex-item-justify-start">
+    `)
+	qw422016.N().S(string(LinkBackTo(p.Ctx, RouteEditAccount())))
+	qw422016.N().S(`
+  </div>
+`)
 }
 
 func (p *AccountsCustomStylesEdit) WriteNav(qq422016 qtio422016.Writer) {
@@ -49,6 +55,54 @@ func (p *AccountsCustomStylesEdit) Nav() string {
 }
 
 func (p *AccountsCustomStylesEdit) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`<section class="panel panel--wide txt-align-center flex flex-column position-relative" style="view-transition-name: custom-styles">
+`)
+	form := FormWith(p.Ctx.URL(RouteAccountCustomStyles())).Model("account").Method("patch").Class("flex flex-column gap").Data("controller", "form").Data("action", "keydown.ctrl+enter->form#submit keydown.meta+enter->form#submit")
+
+	qw422016.N().S(`  `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+    <div class="panel__button">
+      `)
+	qw422016.N().S(string(TranslationButton(p.Ctx, "custom_styles")))
+	qw422016.N().S(`
+    </div>
+
+    <div class="pad-inline-double margin-inline">
+      <h1 class="margin-none">Custom CSS</h1>
+      <p class="flex flex-wrap align-center justify-center gap margin-none-block-start" style="--column-gap: 0.5ch; --row-gap: 0">
+        <span>Add custom CSS styles.</span>
+        `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "alert.svg", NewAttrs().Class("flex-inline colorize--black").Size(16).AriaHidden())))
+	qw422016.N().S(`
+        <span>Use Caution: you could break things.</span>
+      </p>
+    </div>
+
+    <label class="flex align-start gap flex-item-grow">
+      `)
+	qw422016.N().S(string(form.TextArea("custom_styles", p.CustomStyles, NewAttrs().Class("input input--code txt--small").Placeholder("Add CSS styles…").Autocomplete("off").Attr("spellcheck", "false").Attr("autocorrect", "off").Attr("autocapitalize", "off").Rows(16).Required(false))))
+	qw422016.N().S(`
+    </label>
+
+    `)
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+      `)
+	qw422016.N().S(string(ImageTag(p.Ctx, "check.svg", NewAttrs().AriaHidden().Size(20))))
+	qw422016.N().S(`
+      <span class="for-screen-reader">Save changes</span>
+`)
+	capture2 := EndCapture(qw422016)
+
+	qw422016.N().S(string(Button(capture2, NewAttrs().Class("btn btn--reversed center txt-large").Type("submit"))))
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(FormWithBlock(capture1, form)))
+	qw422016.N().S(`</section>
+`)
 }
 
 func (p *AccountsCustomStylesEdit) WriteContent(qq422016 qtio422016.Writer) {

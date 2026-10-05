@@ -15,6 +15,20 @@ var (
 )
 
 func StreamUsersAutocompletablesTemplate(qw422016 *qt422016.Writer, ctx *ViewContext) {
+	qw422016.N().S(`<template id="autocompletable-user">
+  <div class="autocomplete__pill max-width" data-value="" tabindex="0">
+    <img class="avatar flex-item-no-shrink" data-content="avatar" src="" />
+    <span class="autocomplete-field__selected-value-text overflow-ellipsis flex-item-grow" data-content="label"></span>
+
+    <button type="button" data-action="autocomplete#remove:prevent" data-value="" tabindex="-1" class="btn btn--plain txt-small translucent flex-item-no-shrink">
+      `)
+	qw422016.N().S(string(ImageTag(ctx, "remove-circle.svg", NewAttrs().AriaHidden().Class("colorize--black"))))
+	qw422016.N().S(`
+      <span class="for-screen-reader">Remove <span data-content="screenReaderLabel"></span></span>
+    </button>
+  </div>
+</template>
+`)
 }
 
 func WriteUsersAutocompletablesTemplate(qq422016 qtio422016.Writer, ctx *ViewContext) {

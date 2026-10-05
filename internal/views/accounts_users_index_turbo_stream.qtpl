@@ -1,2 +1,5 @@
-{% comment %}reference/crates/views/templates/accounts/users/index.turbo_stream.html; TODO: body{% endcomment %}
-{% func AccountsUsersIndexTurboStream(ctx *ViewContext, users []UserSummary, nextPage *string) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/accounts/users/index.turbo_stream.html{% endcomment %}
+{% func AccountsUsersIndexTurboStream(ctx *ViewContext, users []UserSummary, nextPage *string) %}<turbo-stream action="replace" target="next_page_container"><template>{% for i := range users %}{%= AccountsUsersUser(ctx, &users[i]) %}{% endfor %}</template></turbo-stream>
+
+{% if nextPage != nil %}<turbo-stream action="append" target="account_users"><template>{%= AccountsUsersNextPageContainer(*nextPage) %}</template></turbo-stream>
+{% endif %}{% endfunc %}

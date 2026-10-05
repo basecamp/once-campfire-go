@@ -1,4 +1,13 @@
-{% comment %}reference/crates/views/templates/rooms/layouts/_edit.html; TODO: body{% endcomment %}
+{% comment %}reference/crates/views/templates/rooms/layouts/_edit.html{% endcomment %}
 {% func (p *RoomsLayoutsEdit) Head() %}{% endfunc %}
-{% func (p *RoomsLayoutsEdit) Nav() %}{% endfunc %}
-{% func (p *RoomsLayoutsEdit) Content() %}{% endfunc %}
+{% func (p *RoomsLayoutsEdit) Nav() %}
+  <div class="flex-item-justify-start">
+    {%s= string(LinkBackToLastRoomVisited(p.Ctx)) %}
+  </div>{% endfunc %}
+{% func (p *RoomsLayoutsEdit) Content() %}
+<section class="panel txt-align-center" style="view-transition-name: edit-room-{%dl p.RoomID() %}">
+  {%= p.Page.RoomForm() %}
+</section>{% if p.CanAdminister %}
+  <section class="panel txt-align-center">
+    {%s= string(ButtonToDeleteRoom(p.Ctx, p.RoomID(), p.Room.DisplayName())) %}
+  </section>{% endif %}{% endfunc %}

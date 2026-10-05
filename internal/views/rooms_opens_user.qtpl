@@ -1,2 +1,13 @@
-{% comment %}reference/crates/views/templates/rooms/opens/_user.html; TODO: body{% endcomment %}
-{% func RoomsOpensUser(ctx *ViewContext, form *OpenFormView, user *UserView) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/rooms/opens/_user.html{% endcomment %}
+{% func RoomsOpensUser(ctx *ViewContext, form *OpenFormView, user *UserView) %}<li class="flex align-center gap margin-none" data-value="{%s Lowercase(user.Name) %}">
+  <figure class="avatar flex-item-no-shrink" style="--avatar-size: 4ch;">
+    <a title="{%s user.Title %}" class="btn avatar" data-turbo-frame="_top" href="{%s user.Path() %}"><img aria-hidden="true" loading="lazy" src="{%s user.AvatarURL %}" width="48" height="48" /></a>
+  </figure>
+
+  <div class="min-width">
+    <div class="overflow-ellipsis fill-shade"><strong>{%s user.Name %}</strong></div>
+  </div>
+
+  <hr class="separator" aria-hidden="true">{% if form.CanAdminister %}
+    <img class="colorize--black flex-item-no-shrink" aria-hidden="true" src="{%s ctx.Asset("check.svg") %}" width="20" height="20" />{% endif %}
+</li>{% endfunc %}

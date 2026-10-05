@@ -15,6 +15,19 @@ var (
 )
 
 func StreamAccountsUsersIndexTurboStream(qw422016 *qt422016.Writer, ctx *ViewContext, users []UserSummary, nextPage *string) {
+	qw422016.N().S(`<turbo-stream action="replace" target="next_page_container"><template>`)
+	for i := range users {
+		StreamAccountsUsersUser(qw422016, ctx, &users[i])
+	}
+	qw422016.N().S(`</template></turbo-stream>
+
+`)
+	if nextPage != nil {
+		qw422016.N().S(`<turbo-stream action="append" target="account_users"><template>`)
+		StreamAccountsUsersNextPageContainer(qw422016, *nextPage)
+		qw422016.N().S(`</template></turbo-stream>
+`)
+	}
 }
 
 func WriteAccountsUsersIndexTurboStream(qq422016 qtio422016.Writer, ctx *ViewContext, users []UserSummary, nextPage *string) {

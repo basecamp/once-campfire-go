@@ -1,2 +1,27 @@
-{% comment %}reference/crates/views/templates/accounts/users/_user.html; TODO: body{% endcomment %}
-{% func AccountsUsersUser(ctx *ViewContext, user *UserSummary) %}{% endfunc %}
+{% comment %}reference/crates/views/templates/accounts/users/_user.html{% endcomment %}
+{% func AccountsUsersUser(ctx *ViewContext, user *UserSummary) %}<li class="flex align-center gap margin-none {% if user.Banned() %}banned{% endif %}">
+  <figure class="avatar flex-item-no-shrink" style="--avatar-size: 3.75ch;">
+    {%s= string(AvatarTag(ctx, user.Avatar(), NewAttrs().Loading("lazy"))) %}
+  </figure>
+
+  <div class="min-width">
+    <div class="overflow-ellipsis fill-shade"><strong>{%s user.Name %}</strong></div>
+  </div>
+
+  <hr class="separator" aria-hidden="true">
+
+{% if ctx.CanAdminister() && user.Active() %}{% if !user.Bot() %}{% code form := FormWith(RouteAccountUser(user.ID)).Model("user").Data("controller", "form").Method("patch") %}      {% code BeginCapture(qw422016) %}
+        <label class="btn txt-small flex-item-no-shrink" for="{%s DomID("user", user.ID, "role") %}">
+          <span class="for-screen-reader">Role: {% if user.Administrator() %}Administrator{% else %}Member{% endif %}</span>
+          {%s= string(ImageTag(ctx, "crown.svg", NewAttrs().Size(20).AriaHidden())) %}
+          {%s= string(form.CheckBox("role", NewAttrs().Data("action", "form#submit").Hidden().ID(DomID("user", user.ID, "role")).Disabled(ctx.IsCurrentUser(user.ID)), "administrator", "member", user.Role.String())) %}
+        </label>
+{% code capture1 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture1, form)) %}{% endif %}
+{% if !ctx.IsCurrentUser(user.ID) %}      {% code BeginCapture(qw422016) %}
+        {%s= string(ImageTag(ctx, "minus.svg", NewAttrs().Size(20).AriaHidden())) %}
+        <span class="for-screen-reader">Delete {%s user.Name %}</span>
+{% code capture2 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture2, RouteAccountUser(user.ID), NewAttrs().Method("delete").Class("btn txt-small flex-item-no-shrink btn--negative").Data("turbo_confirm", "Are you sure you want to permanently remove this person from the account? This can’t be undone."))) %}{% endif %}{% endif %}{% if ctx.IsCurrentUser(user.ID) %}    {% code BeginCapture(qw422016) %}
+      {%s= string(ImageTag(ctx, "pencil.svg", NewAttrs().Size(20).AriaHidden())) %}
+      <span class="for-screen-reader">My settings</span>
+{% code capture3 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture3, RouteUserProfile(), NewAttrs().Class("btn txt-small flex-item-no-shrink").Target("_top"))) %}{% endif %}</li>
+{% endfunc %}

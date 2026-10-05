@@ -1,4 +1,30 @@
-{% comment %}reference/crates/views/templates/accounts/custom_styles/edit.html; TODO: body{% endcomment %}
+{% comment %}reference/crates/views/templates/accounts/custom_styles/edit.html{% endcomment %}
 {% func (p *AccountsCustomStylesEdit) Head() %}{% endfunc %}
-{% func (p *AccountsCustomStylesEdit) Nav() %}{% endfunc %}
-{% func (p *AccountsCustomStylesEdit) Content() %}{% endfunc %}
+{% func (p *AccountsCustomStylesEdit) Nav() %}  <div class="flex-item-justify-start">
+    {%s= string(LinkBackTo(p.Ctx, RouteEditAccount())) %}
+  </div>
+{% endfunc %}
+{% func (p *AccountsCustomStylesEdit) Content() %}<section class="panel panel--wide txt-align-center flex flex-column position-relative" style="view-transition-name: custom-styles">
+{% code form := FormWith(p.Ctx.URL(RouteAccountCustomStyles())).Model("account").Method("patch").Class("flex flex-column gap").Data("controller", "form").Data("action", "keydown.ctrl+enter->form#submit keydown.meta+enter->form#submit") %}  {% code BeginCapture(qw422016) %}
+    <div class="panel__button">
+      {%s= string(TranslationButton(p.Ctx, "custom_styles")) %}
+    </div>
+
+    <div class="pad-inline-double margin-inline">
+      <h1 class="margin-none">Custom CSS</h1>
+      <p class="flex flex-wrap align-center justify-center gap margin-none-block-start" style="--column-gap: 0.5ch; --row-gap: 0">
+        <span>Add custom CSS styles.</span>
+        {%s= string(ImageTag(p.Ctx, "alert.svg", NewAttrs().Class("flex-inline colorize--black").Size(16).AriaHidden())) %}
+        <span>Use Caution: you could break things.</span>
+      </p>
+    </div>
+
+    <label class="flex align-start gap flex-item-grow">
+      {%s= string(form.TextArea("custom_styles", p.CustomStyles, NewAttrs().Class("input input--code txt--small").Placeholder("Add CSS styles…").Autocomplete("off").Attr("spellcheck", "false").Attr("autocorrect", "off").Attr("autocapitalize", "off").Rows(16).Required(false))) %}
+    </label>
+
+    {% code BeginCapture(qw422016) %}
+      {%s= string(ImageTag(p.Ctx, "check.svg", NewAttrs().AriaHidden().Size(20))) %}
+      <span class="for-screen-reader">Save changes</span>
+{% code capture2 := EndCapture(qw422016) %}{%s= string(Button(capture2, NewAttrs().Class("btn btn--reversed center txt-large").Type("submit"))) %}{% code capture1 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture1, form)) %}</section>
+{% endfunc %}

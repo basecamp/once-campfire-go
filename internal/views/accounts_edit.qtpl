@@ -1,5 +1,91 @@
-{% comment %}reference/crates/views/templates/accounts/edit.html; TODO: body{% endcomment %}
+{% comment %}reference/crates/views/templates/accounts/edit.html{% endcomment %}
+{% import "strconv" %}
 {% func (p *AccountsEdit) Head() %}{% endfunc %}
-{% func (p *AccountsEdit) Nav() %}{% endfunc %}
-{% func (p *AccountsEdit) Content() %}{% endfunc %}
-{% func (p *AccountsEdit) Footer() %}{% endfunc %}
+{% func (p *AccountsEdit) Nav() %}  <div class="flex-item-justify-start">
+    {%s= string(LinkBackToLastRoomVisited(p.Ctx)) %}
+  </div>
+
+{% if p.Ctx.CanAdminister() %}    <div class="flex align-center gap flex-item-justify-end">
+      {% code BeginCapture(qw422016) %}
+        {%s= string(ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))) %}
+        <span class="for-screen-reader">Set up chat bots</span>
+{% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture1, RouteAccountBots(), NewAttrs().Class("btn").Style("view-transition-name: chat-bots"))) %}
+      {% code BeginCapture(qw422016) %}
+        {%s= string(ImageTag(p.Ctx, "art.svg", NewAttrs().Size(20).AriaHidden())) %}
+        <span class="for-screen-reader">Custom styles</span>
+{% code capture2 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture2, RouteEditAccountCustomStyles(), NewAttrs().Class("btn").Style("view-transition-name: custom-styles"))) %}    </div>
+{% endif %}{% endfunc %}
+{% func (p *AccountsEdit) Content() %}{% code ctx := p.Ctx %}<section class="panel txt-align-center flex flex-column gap" style="view-transition-name: account-settings">
+{% if ctx.CanAdminister() %}    <div class="align-center center avatar__form gap" data-controller="upload-preview">
+{% code form1 := FormWith(p.AccountAction()).Model("account").Method("patch").Class("txt--medium").Data("controller", "form") %}      {% code BeginCapture(qw422016) %}
+        <label class="btn input--file">
+          {%s= string(ImageTag(ctx, "camera.svg", NewAttrs().AriaHidden().Size(20))) %}
+          {%s= string(form1.FileField("logo", NewAttrs().Class("input").Accept("image/*").Data("action", "upload-preview#previewImage change->form#submit"))) %}
+          <span class="for-screen-reader">Upload logo</span>
+        </label>
+{% code capture1 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture1, form1)) %}
+{% code form2 := FormWith(p.AccountAction()).Model("account").Method("patch").Data("controller", "form") %}      {% code BeginCapture(qw422016) %}
+        <label class="btn avatar input--file account-logo txt-xx-large">
+          {%s= string(ImageTag(ctx, ctx.Account.LogoURL, NewAttrs().Role("presentation").Size(48).Data("upload_preview_target", "image"))) %}
+          {%s= string(form2.FileField("logo", NewAttrs().Class("input").Accept("image/*").Data("action", "upload-preview#previewImage change->form#submit"))) %}
+          <span class="for-screen-reader">Upload logo</span>
+        </label>
+{% code capture2 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture2, form2)) %}
+{% if ctx.Account.HasLogo %}        {% code BeginCapture(qw422016) %}
+          {%s= string(ImageTag(ctx, "minus.svg", NewAttrs().AriaHidden().Size(20))) %}
+          <span class="for-screen-reader">Delete logo</span>
+{% code capture3 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture3, ctx.Account.LogoURL, NewAttrs().Method("delete").Class("btn btn--negative txt-small avatar__delete-btn"))) %}{% endif %}    </div>
+
+{% code form3 := FormWith(p.AccountAction()).Model("account").Method("patch").Data("controller", "form").Class("flex flex-column gap") %}    {% code BeginCapture(qw422016) %}
+      <div class="flex align-center gap">
+        {%s= string(TranslationButton(ctx, "account_name")) %}
+
+        <label class="flex align-center gap flex-item-grow">
+          {%s= string(form3.TextField("name", Ptr(ctx.Account.Name), NewAttrs().Class("input txt-large").Autocomplete("off").Placeholder("Name this account").Autofocus().Data("action", "keydown.enter->form#submit"))) %}
+        </label>
+
+        {% code BeginCapture(qw422016) %}
+          {%s= string(ImageTag(ctx, "check.svg", NewAttrs().AriaHidden().Size(20))) %}
+          <span class="for-screen-reader">Save changes</span>
+{% code capture5 := EndCapture(qw422016) %}{%s= string(Button(capture5, NewAttrs().Class("btn btn--reversed center").Type("submit"))) %}      </div>
+{% code capture4 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture4, form3)) %}
+    <div class="margin-block-start pad-block pad-inline-double fill-shade border-radius">
+{% code form4 := FormWith(p.AccountAction()).Model("account").Method("put").Data("controller", "form").Class("flex align-center gap center") %}      {% code BeginCapture(qw422016) %}
+        <div class="flex-item-grow flex align-center gap txt-align-start">
+          {%s= string(ImageTag(ctx, "crown.svg", NewAttrs().Class("colorize--black").AriaHidden().Size(18))) %} Must be admin to create new rooms
+        </div>
+{% code settingsForm := form4.FieldsFor("settings") %}          {%s= string(settingsForm.HiddenField("restrict_room_creation_to_administrators", nil, NewAttrs().Value(strconv.FormatBool(!p.RestrictRoomCreationToAdministrators)))) %}
+
+        <label class="switch">
+          <input type="checkbox"
+                class="switch__input"
+                {% if p.RestrictRoomCreationToAdministrators %}checked{% endif %}
+                data-action="change->form#submit">
+          <span class="switch__btn round"></span>
+          <span class="for-screen-reader">
+            Must be admin to create new rooms
+          </span>
+        </label>
+
+{% code capture6 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture6, form4)) %}    </div>
+{% else %}    {%s= string(AccountLogoTag(ctx, "txt-xx-large center")) %}
+    <h1 class="flex-item-grow txt-x-large">{%s ctx.Account.Name %}</h1>
+{% endif %}
+  <div class="margin-block pad-inline pad-block-start fill-shade border-radius">
+    {%= AccountsInvite(ctx, p.JoinCode) %}
+
+    <hr class="margin-block separator full-width" style="--border-style: solid">
+
+    <menu class="flex flex-column gap margin-none pad">
+      <turbo-frame id="account_users">
+        {% for i := range p.Administrators %}{%= AccountsUsersUser(ctx, &p.Administrators[i]) %}{% endfor %}
+{% if len(p.Administrators) > 0 && len(p.Members) > 0 %}          <hr class="separator full-width" style="--border-style: solid">
+{% endif %}
+        {% for i := range p.Members %}{%= AccountsUsersUser(ctx, &p.Members[i]) %}{% endfor %}        {% if p.NextPage != nil %}{%= AccountsUsersNextPageContainer(*p.NextPage) %}{% endif %}
+      </turbo-frame>
+    </menu>
+  </div>
+</section>
+{% endfunc %}
+{% func (p *AccountsEdit) Footer() %}  <div class="txt-align-center center margin-block-double txt-subtle">Campfire&trade; version {%s= string(VersionBadge(p.Ctx)) %}</div>
+{% endfunc %}

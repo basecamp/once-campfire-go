@@ -32,6 +32,12 @@ func (p *RoomsLayoutsNew) Head() string {
 }
 
 func (p *RoomsLayoutsNew) StreamNav(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`
+  <div class="flex-item-justify-start">
+    `)
+	qw422016.N().S(string(LinkBackToLastRoomVisited(p.Ctx)))
+	qw422016.N().S(`
+  </div>`)
 }
 
 func (p *RoomsLayoutsNew) WriteNav(qq422016 qtio422016.Writer) {
@@ -49,6 +55,12 @@ func (p *RoomsLayoutsNew) Nav() string {
 }
 
 func (p *RoomsLayoutsNew) StreamContent(qw422016 *qt422016.Writer) {
+	qw422016.N().S(`
+<section class="panel txt-align-center" style="view-transition-name: new-room">
+  `)
+	p.Page.StreamRoomForm(qw422016)
+	qw422016.N().S(`
+</section>`)
 }
 
 func (p *RoomsLayoutsNew) WriteContent(qq422016 qtio422016.Writer) {

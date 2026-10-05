@@ -15,6 +15,14 @@ var (
 )
 
 func StreamAccountsUsersNextPageContainer(qw422016 *qt422016.Writer, page string) {
+	BeginCapture(qw422016)
+
+	qw422016.N().S(`
+  <div class="spinner center"></div>
+`)
+	capture1 := EndCapture(qw422016)
+
+	qw422016.N().S(string(TurboFrameTag(capture1, "next_page_container", NewAttrs().Loading("lazy").Attr("src", "/account/users.turbo_stream?page="+CGIEscape(page)).Class("flex center"))))
 }
 
 func WriteAccountsUsersNextPageContainer(qq422016 qtio422016.Writer, page string) {
