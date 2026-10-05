@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/splice"
 	"html/template"
 	"strconv"
 	"strings"
@@ -16,7 +17,8 @@ type fragmentEntry struct {
 	html                        template.HTML
 	bytes                       int
 	digest                      [32]byte
-	payload                     []byte
+	piece                       splice.Piece
+	shell                       []shellPart
 	messageMarker, loadedMarker string
 }
 type fragmentCache struct {
@@ -49,24 +51,39 @@ func (c *fragmentCache) entry(key string) (fragmentEntry, bool) {
 func (c *fragmentCache) put(key string, html template.HTML) template.HTML {
 	return c.putEntry(fragmentEntry{key: key, html: html}).html
 }
+
+// What responses send whole (message lists, sidebars, room shells, page text) is deflated here, once,
+// and spliced into each gzipped response. Digests and deflate run outside the lock.
 func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
 	key, html := entry.key, entry.html
+	if existing, ok := c.entry(key); ok {
+		return existing
+	}
+	size := len(key) + len(html) + len(entry.messageMarker) + len(entry.loadedMarker) + 240
+	whole := strings.HasPrefix(key, "message-list/") || strings.HasPrefix(key, "sidebar/") || strings.HasPrefix(key, "text/")
+	if whole || entry.messageMarker != "" {
+		size += len(html)
+	}
+	if size > c.limit/4 {
+		return entry
+	}
+	entry.digest = sha256.Sum256([]byte(html))
+	if whole {
+		entry.piece = splice.Deflate([]byte(html))
+		size += len(entry.piece.Blocks)
+	} else if entry.messageMarker != "" {
+		entry.shell = splitShell(string(html), entry.messageMarker, entry.loadedMarker, true)
+		for _, part := range entry.shell {
+			size += len(part.Blocks)
+		}
+	}
+	entry.bytes = size
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e, ok := c.entries[key]; ok {
 		c.order.MoveToFront(e)
 		return e.Value.(fragmentEntry)
 	}
-	size := len(key) + len(html) + len(entry.messageMarker) + len(entry.loadedMarker) + 240
-	var payload []byte
-	if strings.HasPrefix(key, "message-list/") {
-		payload = []byte(html)
-		size += len(payload)
-	}
-	if size > c.limit/4 {
-		return entry
-	}
-	entry.bytes, entry.digest, entry.payload = size, sha256.Sum256([]byte(html)), payload
 	c.entries[key] = c.order.PushFront(entry)
 	c.bytes += size
 	if c.bytes > c.limit {

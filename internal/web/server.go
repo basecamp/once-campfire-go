@@ -413,22 +413,21 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 		p.ReturnRoom, _ = s.lastRoom(r, p.User.ID)
 	}
 	if name == "room" && recorded != nil {
-		shell, marker, err := s.roomShell(p)
+		parts, err := s.roomShell(p, *recorded)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		writeRecorded(w, status, shell, marker, *recorded)
+		writeParts(w, status, parts)
 		return
 	}
 	sidebarKey := ""
 	if name == "sidebar" {
 		sidebarKey = sidebarCacheKey(p)
-		if fragment, ok := s.fragments.get(sidebarKey); ok {
+		if fragment, ok := s.fragments.entry(sidebarKey); ok {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(status)
-			w.Write([]byte(fragment))
+			writeFragment(w, status, fragment)
 			return
 		}
 	}
@@ -443,7 +442,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if recorded != nil {
-		writeRecorded(w, status, b.String(), string(p.MessagesHTML), *recorded)
+		s.writeRecorded(w, status, b.String(), string(p.MessagesHTML), *recorded)
 		return
 	}
 	w.WriteHeader(status)

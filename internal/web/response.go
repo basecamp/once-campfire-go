@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+
+	"github.com/basecamp/once-campfire-go/internal/splice"
 )
 
 var responseBuffers = sync.Pool{New: func() any { return new(bytes.Buffer) }}
@@ -27,7 +29,7 @@ type responseBuffer struct {
 	body      *bytes.Buffer
 	status    int
 	exception bool
-	parts     [][]byte
+	parts     []splice.Piece
 }
 
 func (w *responseBuffer) WriteHeader(status int) {
@@ -78,15 +80,18 @@ func (w *responseBuffer) finish(r *http.Request) {
 	if len(w.parts) > 0 && w.status != 204 && w.status != 304 {
 		size := 0
 		for _, part := range w.parts {
-			size += len(part)
+			size += len(part.Plain)
 		}
 		h.Set("Content-Length", strconv.Itoa(size))
 	}
 	w.ResponseWriter.WriteHeader(w.status)
 	if r.Method != "HEAD" && w.status != 204 && w.status != 304 {
-		if len(w.parts) > 0 {
+		if spliced, ok := w.ResponseWriter.(interface{ WritePieces([]splice.Piece) error }); ok && len(w.parts) > 0 {
+			// front's Deflate copies the blocks of cached parts instead of compressing them again.
+			spliced.WritePieces(w.parts)
+		} else if len(w.parts) > 0 {
 			for _, part := range w.parts {
-				w.ResponseWriter.Write(part)
+				w.ResponseWriter.Write(part.Plain)
 			}
 		} else {
 			w.ResponseWriter.Write(w.body.Bytes())

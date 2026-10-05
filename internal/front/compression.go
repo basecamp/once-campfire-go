@@ -2,7 +2,6 @@ package front
 
 import (
 	"bufio"
-	"compress/gzip"
 	"fmt"
 	"io"
 	"net"
@@ -10,10 +9,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
-)
+	"time"
 
-var gzipPool = sync.Pool{New: func() any { writer, _ := gzip.NewWriterLevel(nil, 6); return writer }}
+	"github.com/basecamp/once-campfire-go/internal/splice"
+)
 
 func encoding(header string) string {
 	type item struct {
@@ -117,7 +116,7 @@ func addVary(h http.Header, name string) {
 type gzipResponse struct {
 	http.ResponseWriter
 	request  *http.Request
-	writer   *gzip.Writer
+	writer   *splice.Writer
 	selected string
 	status   int
 	drop     bool
@@ -150,12 +149,11 @@ func (w *gzipResponse) WriteHeader(status int) {
 	if w.selected == "gzip" {
 		h.Set("Content-Encoding", "gzip")
 		h.Del("Content-Length")
-		w.writer = gzipPool.Get().(*gzip.Writer)
-		w.writer.Reset(w.ResponseWriter)
-		w.writer.Header.OS = 3
-		if stamp, err := http.ParseTime(h.Get("Last-Modified")); err == nil {
-			w.writer.Header.ModTime = stamp
+		stamp, err := http.ParseTime(h.Get("Last-Modified"))
+		if err != nil {
+			stamp = time.Time{}
 		}
+		w.writer = splice.NewWriter(w.ResponseWriter, stamp)
 	}
 	w.ResponseWriter.WriteHeader(status)
 }
@@ -192,6 +190,29 @@ func (w *gzipResponse) WriteString(value string) (int, error) {
 	}
 	return io.WriteString(w.ResponseWriter, value)
 }
+
+// WritePieces writes a body in pieces. Those deflated ahead are copied into the gzip
+// member instead of being compressed again for every response.
+func (w *gzipResponse) WritePieces(pieces []splice.Piece) error {
+	if w.status == 0 {
+		w.WriteHeader(200)
+	}
+	if w.drop || w.request.Method == "HEAD" {
+		return nil
+	}
+	for _, piece := range pieces {
+		var err error
+		if w.writer != nil {
+			err = w.writer.WritePiece(piece)
+		} else {
+			_, err = w.ResponseWriter.Write(piece.Plain)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func (w *gzipResponse) Flush() {
 	if w.status == 0 {
 		w.WriteHeader(200)
@@ -212,12 +233,8 @@ func Deflate(next http.Handler) http.Handler {
 		if wrapped.status == 0 {
 			wrapped.WriteHeader(200)
 		}
-		if wrapped.writer != nil {
-			if r.Method != "HEAD" {
-				wrapped.writer.Close()
-			}
-			wrapped.writer.Reset(nil)
-			gzipPool.Put(wrapped.writer)
+		if wrapped.writer != nil && r.Method != "HEAD" {
+			wrapped.writer.Close()
 		}
 	})
 }
