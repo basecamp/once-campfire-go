@@ -41,7 +41,7 @@ def main():
         if line and not line.startswith('#') and '=' in line:
             k,v=line.split('=',1); env[k]=v
     env.update(TMPDIR=str(ROOT/'.cache/tmp'),DISABLE_SSL='true',TARGET_BIND='127.0.0.1',GOMAXPROCS='4',TOKIO_WORKER_THREADS='4',RAILS_MAX_THREADS='4')
-    metadata={'time':datetime.datetime.now(datetime.timezone.utc).isoformat(),'host':platform.platform(),'cpu':text('lscpu'),'process_priority':os.getpriority(os.PRIO_PROCESS,0),
+    metadata={'time':datetime.datetime.now(datetime.timezone.utc).isoformat(),'host':platform.platform(),'cpu':text('lscpu'),
         'rust_commit':text('git','-C',str(rust),'rev-parse','HEAD'),'settings':{k:str(v) if isinstance(v,Path) else v for k,v in vars(a).items()},
         'binaries':{k:{'sha256':digest(v),'bytes':v.stat().st_size} for k,v in binaries.items()},'seed_sha256':digest(seed/'db/production.sqlite3'),
         'go_version':text('mise','exec','go@1.27.1','--','go','version'),'rust_version':text('mise','exec','rust@1.98.1','--','rustc','--version'),'vips_version':text('pkg-config','--modversion','vips'),'go_mod_sha256':digest(ROOT/'go.mod'),'go_sum_sha256':digest(ROOT/'go.sum'),'rust_lock_sha256':digest(rust/'Cargo.lock'),'loadgen_sha256':digest(lg),'load_before':Path('/proc/loadavg').read_text(),
