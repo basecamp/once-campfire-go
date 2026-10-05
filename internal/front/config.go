@@ -14,6 +14,7 @@ type Config struct {
 	TargetPort, HTTPPort, HTTPSPort                           int
 	CacheSize, MaxCacheItemSize, MaxRequestBody               int64
 	Gzip, DisableGzipOnAuth, H2C, ForwardHeaders, LogRequests bool
+	SkipDeflate                                               bool
 	Domains                                                   []string
 	ACMEDirectory, StoragePath, EABKeyID, EABKey              string
 	IdleTimeout, ReadTimeout, WriteTimeout                    time.Duration
