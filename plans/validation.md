@@ -115,3 +115,38 @@ with zero HTTP errors. It did not repeat the full Cable workload or production-c
   will be satisfied by a full `verify-parity` run or bypassed by a local,
   explicitly documented change that touches only the Elixir-provenance
   assertion, never the load generator, preflight or report code.
+
+## Engine fork — M0 baseline reproduction (2026-10-05/06)
+
+Official-style container comparison (Rust repository harness, production images,
+same seed `64ecbb80…`, servers on CPUs 8-11, loadgen on 12-15, host network,
+HTTP suite, 2 rotating reps, `HTTP_SECS=4`). Medians [min–max], c=16 req/s:
+
+| Route | Rails | Rust (this machine) | Published Rust |
+|---|---:|---:|---:|
+| room_show | 209 [201–217] | 37,015 [36,796–37,235] | 36,260 |
+| messages_page | 400 [388–412] | 42,051 [41,553–42,550] | 40,872 |
+| sidebar | 517 [514–521] | 34,911 [34,582–35,240] | 34,672 |
+| search | 385 [380–391] | 34,450 [34,196–34,704] | 33,299 |
+| post_message | 259 [252–266] | 6,743 [6,736–6,750] | 6,896 |
+
+Rails and Rust reproduce the published table within a few percent on this
+machine. Raw: `../once-campfire-rust/bench/results/baseline-container-20261005/`.
+
+Native Go-vs-Rust baseline (Go repository `bench/application`, identities,
+3 alternating reps, 5 s samples, c=16):
+
+| Route | Go | Rust | Rust/Go |
+|---|---:|---:|---:|
+| room_show | 16,895 (15,729–17,113) | 30,455 (18,419–30,825) | 1.80× |
+| messages_page | 23,828 (21,658–23,842) | 34,637 (13,789–35,086) | 1.45× |
+| sidebar | 25,804 (24,407–28,912) | 39,420 (24,640–40,270) | 1.53× |
+| search | 16,001 (15,905–16,033) | 31,631 (29,378–32,537) | 1.98× |
+| post_message | 4,753 (2,044–5,100) | 6,760 (6,595–7,761) | 1.42× |
+
+Zero HTTP errors; 227,621 acknowledged writes verified in both messages and FTS;
+six identical-byte thumbnails. Response-size context: Go room_show body is
+374,036 B uncompressed — the target of the engine's compressed-piece design.
+Raw: `bench/results/baseline-native-20261005/` (report, raw JSON, metadata with
+load averages). Note: light development activity (nice'd, on non-pinned CPUs)
+overlapped part of the native run; every sample records its load average.
