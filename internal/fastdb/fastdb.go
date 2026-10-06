@@ -5,15 +5,34 @@
 //
 // The query methods mirror specific internal/database readers exactly — same
 // SQL, same column order, same decoding (including internal/database's stamp
-// layouts) — and the differential tests assert field equality against those
-// readers on the same database file.
+// layouts), same error-path shapes — and the differential tests assert field
+// equality against those readers on the same database file. A decode error
+// drops the partial slice and returns (nil, err), exactly like
+// internal/database's scanMessages; a step error returns the partial slice,
+// reversed wherever the database reverses it before rows.Err(); a missing
+// anchor returns (nil, err). Single-row lookups mirror database/sql's Scan:
+// on error dst holds whatever columns were decoded before the failure (zero
+// when the failure precedes scanning). Errors carry a "fastdb: " prefix
+// (deliberate, to separate decode failures from SQLite failures) except
+// ErrNoRows, which aliases database/sql's sentinel.
 //
-// # Concurrency
+// # Concurrency and lifetime
 //
-// A Conn is not safe for concurrent use: it owns one SQLite connection, one
-// statement cache and scratch buffers. Open one Conn per goroutine, as the
-// read pool does with database/sql connections. Close finalizes every cached
-// statement before closing the connection.
+// A Conn is not safe for concurrent use: it owns one SQLite connection opened
+// with SQLITE_OPEN_NOMUTEX, one statement cache and scratch buffers. A Conn
+// must be used by exactly one goroutine at a time and must not be used after
+// Close. Engine code (ENGINE-15/16) pools Conns — one per goroutine, reused
+// across requests: opening a Conn per request would discard the prepared
+// statements and pay a file/shm open on every request. Close finalizes every
+// cached statement before closing the connection.
+//
+// # Next optimization
+//
+// The measured cost of the 40-row reference scan is dominated by the per-row
+// cgo crossings: every Step and every column accessor is one Go/C call. The
+// next candidate (ENGINE-17) is a C-side batch scan that decodes N rows per
+// call and copies them into a caller buffer in one crossing; do not attempt it
+// before profiling the real workload.
 //
 // # Reader contract
 //
@@ -87,7 +106,8 @@ type SidebarRoom struct {
 }
 
 // Conn is one read-only SQLite connection with a statement cache. Not safe
-// for concurrent use; see the package comment.
+// for concurrent use; see the package comment for the lifetime and pooling
+// contract.
 type Conn struct {
 	db    *csqlite.Conn
 	limit int
@@ -98,6 +118,10 @@ type Conn struct {
 // OpenReadOnly opens path read-only and applies the internal/database reader
 // pragmas. maxStatements caps the prepared-statement cache; values below one
 // mean the default of 256, mirroring internal/database's read pool.
+//
+// The connection is opened with SQLITE_OPEN_NOMUTEX: it must be owned by one
+// goroutine and must not be used after Close. Engine code pools Conns (one per
+// goroutine, reused) rather than opening one per request.
 func OpenReadOnly(path string, maxStatements int) (*Conn, error) {
 	db, err := csqlite.OpenReadOnly(path)
 	if err != nil {
@@ -134,7 +158,7 @@ func OpenReadOnly(path string, maxStatements int) (*Conn, error) {
 }
 
 // Close finalizes the cached statements and closes the connection. It is
-// idempotent.
+// idempotent; using the Conn afterwards is not allowed.
 func (c *Conn) Close() error {
 	if c.db == nil {
 		return nil
@@ -186,8 +210,9 @@ func (c *Conn) acquire(query string) (stmtRef, error) {
 	return stmtRef{st: st}, nil
 }
 
-// The SQL below is copied from internal/database; the differential tests hold
-// the two implementations to the same rows.
+// The SQL below is copied from internal/database (and, for the invitation
+// probe, from internal/web's room handler); the differential tests hold the
+// implementations to the same rows.
 
 const userColumns = "u.id,u.name,coalesce(u.email_address,''),coalesce(u.password_digest,''),u.role,u.status,coalesce(u.bio,''),u.updated_at,coalesce(u.bot_token,'')"
 
@@ -195,6 +220,12 @@ const (
 	queryRoom = "SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=? AND r.id=?"
 
 	queryInvolvement = "SELECT involvement FROM memberships WHERE user_id=? AND room_id=?"
+
+	// queryInvitation is the room-page probe in internal/web/server.go: true
+	// when the room is the account's first and has no more than 40 messages.
+	queryInvitation = "SELECT ?=(SELECT id FROM rooms ORDER BY created_at LIMIT 1) AND NOT EXISTS(SELECT 1 FROM messages WHERE room_id=? LIMIT 1 OFFSET 40)"
+
+	queryRoomMembers = "SELECT " + userColumns + " FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.room_id=?"
 
 	querySessionUser = "SELECT " + userColumns + " FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND u.status=0"
 
@@ -213,43 +244,53 @@ const (
 )
 
 // Room mirrors database.DB.Room: the room joined to the caller's membership.
-// dst is written only on success.
+// On error dst holds the same partially decoded value database/sql's Scan
+// leaves behind (zero when the failure precedes scanning).
 func (c *Conn) Room(dst *Room, user, id int64) error {
+	room, err := c.room(user, id)
+	*dst = room
+	return err
+}
+
+func (c *Conn) room(user, id int64) (Room, error) {
+	var room Room
 	h, err := c.acquire(queryRoom)
 	if err != nil {
-		return err
+		return room, err
 	}
 	defer h.release()
 	if err := h.st.ClearBindings(); err != nil {
-		return err
+		return room, err
 	}
 	if err := h.st.BindInt64(1, user); err != nil {
-		return err
+		return room, err
 	}
 	if err := h.st.BindInt64(2, id); err != nil {
-		return err
+		return room, err
 	}
 	rows := Rows{stmt: h.st}
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return err
+			return room, err
 		}
-		return ErrNoRows
+		return room, ErrNoRows
 	}
-	var room Room
-	room.ID = rows.Int64(0)
-	room.CreatorID = rows.Int64(1)
+	if room.ID, err = rows.Int64(0); err != nil {
+		return room, err
+	}
+	if room.CreatorID, err = rows.Int64(1); err != nil {
+		return room, err
+	}
 	if room.Name, err = rows.Text(2); err != nil {
-		return err
+		return room, err
 	}
 	if room.Type, err = rows.Text(3); err != nil {
-		return err
+		return room, err
 	}
 	if room.UpdatedAt, err = rows.Stamp(4); err != nil {
-		return err
+		return room, err
 	}
-	*dst = room
-	return nil
+	return room, nil
 }
 
 // Involvement mirrors database.DB.Involvement: the caller's membership
@@ -279,84 +320,141 @@ func (c *Conn) Involvement(user, room int64) (string, error) {
 	return rows.Text(0)
 }
 
-// SessionUser mirrors database.DB.SessionUser: the active user for a session
-// token. dst is written only on success.
-func (c *Conn) SessionUser(dst *User, token string) error {
-	h, err := c.acquire(querySessionUser)
+// Invitation mirrors the room-page invitation probe in internal/web/server.go:
+// true when the room is the account's first room and holds no more than 40
+// messages. It always yields one row, so ErrNoRows is unreachable in practice.
+func (c *Conn) Invitation(room int64) (bool, error) {
+	h, err := c.acquire(queryInvitation)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer h.release()
 	if err := h.st.ClearBindings(); err != nil {
-		return err
+		return false, err
 	}
-	if err := h.st.BindText(1, token); err != nil {
-		return err
+	if err := h.st.BindInt64(1, room); err != nil {
+		return false, err
+	}
+	if err := h.st.BindInt64(2, room); err != nil {
+		return false, err
 	}
 	rows := Rows{stmt: h.st}
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return err
+			return false, err
 		}
-		return ErrNoRows
+		return false, ErrNoRows
 	}
-	var user User
-	user.ID = rows.Int64(0)
-	if user.Name, err = rows.Text(1); err != nil {
-		return err
+	value, err := rows.Int64(0)
+	if err != nil {
+		return false, err
 	}
-	if user.Email, err = rows.Text(2); err != nil {
-		return err
-	}
-	if user.Password, err = rows.Text(3); err != nil {
-		return err
-	}
-	user.Role = int(rows.Int64(4))
-	user.Status = int(rows.Int64(5))
-	if user.Bio, err = rows.Text(6); err != nil {
-		return err
-	}
-	if user.UpdatedAt, err = rows.Stamp(7); err != nil {
-		return err
-	}
-	if user.BotToken, err = rows.Text(8); err != nil {
-		return err
-	}
-	*dst = user
-	return nil
+	return value != 0, nil
 }
 
-// SidebarRooms mirrors database.DB.SidebarRooms, appending to dst (pass
-// dst[:0] to reuse a buffer; dst may be nil).
-func (c *Conn) SidebarRooms(dst []SidebarRoom, user int64) ([]SidebarRoom, error) {
-	h, err := c.acquire(querySidebarRooms)
+// RoomMembers mirrors database.DB.RoomMembers: every user with a membership in
+// the room, appended to dst (pass dst[:0] to reuse a buffer). The database
+// reader returns a non-nil empty slice for a room with no members; so does
+// this one.
+func (c *Conn) RoomMembers(dst []User, room int64) ([]User, error) {
+	h, err := c.acquire(queryRoomMembers)
 	if err != nil {
-		return dst, err
+		return nil, err
 	}
 	defer h.release()
 	if err := h.st.ClearBindings(); err != nil {
-		return dst, err
+		return nil, err
+	}
+	if err := h.st.BindInt64(1, room); err != nil {
+		return nil, err
+	}
+	rows := Rows{stmt: h.st}
+	out := dst
+	if out == nil {
+		out = []User{}
+	}
+	for rows.Next() {
+		user, err := scanUser(&rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, user)
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// SessionUser mirrors database.DB.SessionUser: the active user for a session
+// token. On error dst holds the same partially decoded value database/sql's
+// Scan leaves behind (zero when the failure precedes scanning).
+func (c *Conn) SessionUser(dst *User, token string) error {
+	user, err := c.sessionUser(token)
+	*dst = user
+	return err
+}
+
+func (c *Conn) sessionUser(token string) (User, error) {
+	var user User
+	h, err := c.acquire(querySessionUser)
+	if err != nil {
+		return user, err
+	}
+	defer h.release()
+	if err := h.st.ClearBindings(); err != nil {
+		return user, err
+	}
+	if err := h.st.BindText(1, token); err != nil {
+		return user, err
+	}
+	rows := Rows{stmt: h.st}
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return user, err
+		}
+		return user, ErrNoRows
+	}
+	return scanUser(&rows)
+}
+
+// SidebarRooms mirrors database.DB.SidebarRooms, appending to dst (pass
+// dst[:0] to reuse a buffer; dst may be nil). Like the database reader it uses
+// a nil accumulator, so an empty result stays nil.
+func (c *Conn) SidebarRooms(dst []SidebarRoom, user int64) ([]SidebarRoom, error) {
+	h, err := c.acquire(querySidebarRooms)
+	if err != nil {
+		return nil, err
+	}
+	defer h.release()
+	if err := h.st.ClearBindings(); err != nil {
+		return nil, err
 	}
 	if err := h.st.BindInt64(1, user); err != nil {
-		return dst, err
+		return nil, err
 	}
 	rows := Rows{stmt: h.st}
 	out := dst
 	for rows.Next() {
 		var room SidebarRoom
-		room.ID = rows.Int64(0)
-		room.CreatorID = rows.Int64(1)
+		var err error
+		if room.ID, err = rows.Int64(0); err != nil {
+			return nil, err
+		}
+		if room.CreatorID, err = rows.Int64(1); err != nil {
+			return nil, err
+		}
 		if room.Name, err = rows.Text(2); err != nil {
-			return out, err
+			return nil, err
 		}
 		if room.Type, err = rows.Text(3); err != nil {
-			return out, err
+			return nil, err
 		}
 		if room.UpdatedAt, err = rows.Stamp(4); err != nil {
-			return out, err
+			return nil, err
 		}
 		if room.Involvement, err = rows.Text(5); err != nil {
-			return out, err
+			return nil, err
 		}
 		room.Unread = rows.Bool(6)
 		out = append(out, room)
@@ -380,41 +478,44 @@ func (c *Conn) MessageRefs(dst []MessageRef, room, anchor int64) ([]MessageRef, 
 	}
 	h, err := c.acquire(query)
 	if err != nil {
-		return dst, err
+		return nil, err
 	}
 	defer h.release()
 	if err := h.st.ClearBindings(); err != nil {
-		return dst, err
+		return nil, err
 	}
 	if err := h.st.BindInt64(1, room); err != nil {
-		return dst, err
+		return nil, err
 	}
 	if anchor != 0 {
 		if err := h.st.BindInt64(2, anchor); err != nil {
-			return dst, err
+			return nil, err
 		}
 		if err := h.st.BindInt64(3, room); err != nil {
-			return dst, err
+			return nil, err
 		}
 	}
 	rows := Rows{stmt: h.st}
 	out := dst
 	for rows.Next() {
 		var ref MessageRef
-		ref.ID = rows.Int64(0)
+		if ref.ID, err = rows.Int64(0); err != nil {
+			return nil, err
+		}
 		ref.RoomID = room
 		if ref.UpdatedAt, err = rows.Stamp(1); err != nil {
-			return out, err
+			return nil, err
 		}
 		out = append(out, ref)
 	}
-	if err := rows.Err(); err != nil {
-		return out, err
-	}
-	// The SQL scans newest-first; internal/database reverses to chronological
-	// order before returning. Only the appended segment is reversed.
+	// The SQL scans newest-first; internal/database reverses the partial slice
+	// before returning rows.Err(), and only the appended segment is reversed
+	// here.
 	for i, j := len(dst), len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
 	}
 	return out, nil
 }
@@ -432,69 +533,74 @@ func (c *Conn) MessagePageReferences(dst []Message, room, anchor int64, directio
 	}
 	h, err := c.acquire(query)
 	if err != nil {
-		return dst, err
+		return nil, err
 	}
 	defer h.release()
 	if err := h.st.ClearBindings(); err != nil {
-		return dst, err
+		return nil, err
 	}
 	if err := h.st.BindInt64(1, room); err != nil {
-		return dst, err
+		return nil, err
 	}
 	if anchor != 0 {
 		if err := h.st.BindInt64(2, anchor); err != nil {
-			return dst, err
+			return nil, err
 		}
 		if err := h.st.BindInt64(3, room); err != nil {
-			return dst, err
+			return nil, err
 		}
 	}
 	rows := Rows{stmt: h.st}
 	out := dst
 	for rows.Next() {
 		message := Message{RoomID: room}
-		message.ID = rows.Int64(0)
+		if message.ID, err = rows.Int64(0); err != nil {
+			return nil, err
+		}
 		if message.UpdatedAt, err = rows.Stamp(1); err != nil {
-			return out, err
+			return nil, err
 		}
 		out = append(out, message)
 	}
-	if err := rows.Err(); err != nil {
-		return out, err
-	}
 	for i, j := len(dst), len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
 	}
 	return out, nil
 }
 
 // MessagePage mirrors database.DB.MessagePage: the full records for the
 // before/anchor-zero window, the after window, or the around window (before,
-// anchor, after). Appends to dst (pass dst[:0] to reuse a buffer).
+// anchor, after). Appends to dst (pass dst[:0] to reuse a buffer). A missing
+// anchor returns (nil, err), matching the database reader.
 func (c *Conn) MessagePage(dst []Message, room, anchor int64, direction string) ([]Message, error) {
 	if direction == "before" || anchor == 0 {
 		return c.messages(dst, room, anchor)
 	}
 	stamp, err := c.anchorStamp(room, anchor)
 	if err != nil {
-		return dst, err
+		return nil, err
 	}
 	if direction == "after" {
 		return c.messagesAfter(dst, room, stamp)
 	}
 	out, err := c.messages(dst, room, anchor)
 	if err != nil {
-		return out, err
+		return nil, err
 	}
 	if out, err = c.messageByID(out, room, anchor); err != nil {
-		return out, err
+		return nil, err
 	}
 	return c.messagesAfter(out, room, stamp)
 }
 
 // messages mirrors database.DB.Messages: up to 40 full records ordered
-// chronologically (the SQL scans newest-first and the result is reversed), for
-// the room or the window before anchor when it is nonzero. Appends to dst.
+// chronologically (the SQL scans newest-first and the partial slice is
+// reversed before rows.Err() is reported, like the database reader), for the
+// room or the window before anchor when it is nonzero. Appends to dst; like
+// scanMessages it returns a non-nil empty slice when nothing matches.
 func (c *Conn) messages(dst []Message, room, anchor int64) ([]Message, error) {
 	query := queryMessagesLatest
 	if anchor != 0 {
@@ -502,63 +608,70 @@ func (c *Conn) messages(dst []Message, room, anchor int64) ([]Message, error) {
 	}
 	h, err := c.acquire(query)
 	if err != nil {
-		return dst, err
+		return nil, err
 	}
 	defer h.release()
 	if err := h.st.ClearBindings(); err != nil {
-		return dst, err
+		return nil, err
 	}
 	if err := h.st.BindInt64(1, room); err != nil {
-		return dst, err
+		return nil, err
 	}
 	if anchor != 0 {
 		if err := h.st.BindInt64(2, anchor); err != nil {
-			return dst, err
+			return nil, err
 		}
 		if err := h.st.BindInt64(3, room); err != nil {
-			return dst, err
+			return nil, err
 		}
 	}
 	rows := Rows{stmt: h.st}
 	out := dst
+	if out == nil {
+		out = []Message{}
+	}
 	for rows.Next() {
 		message, err := scanMessage(&rows)
 		if err != nil {
-			return out, err
+			return nil, err
 		}
 		out = append(out, message)
 	}
-	if err := rows.Err(); err != nil {
-		return out, err
-	}
 	for i, j := len(dst), len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
 	}
 	return out, nil
 }
 
 // messagesAfter appends the first 40 messages newer than the anchor stamp.
+// Like scanMessages it returns a non-nil empty slice when nothing matches.
 func (c *Conn) messagesAfter(dst []Message, room int64, stamp []byte) ([]Message, error) {
 	h, err := c.acquire(queryMessagesAfter)
 	if err != nil {
-		return dst, err
+		return nil, err
 	}
 	defer h.release()
 	if err := h.st.ClearBindings(); err != nil {
-		return dst, err
+		return nil, err
 	}
 	if err := h.st.BindInt64(1, room); err != nil {
-		return dst, err
+		return nil, err
 	}
 	if err := h.st.BindTextBytes(2, stamp); err != nil {
-		return dst, err
+		return nil, err
 	}
 	rows := Rows{stmt: h.st}
 	out := dst
+	if out == nil {
+		out = []Message{}
+	}
 	for rows.Next() {
 		message, err := scanMessage(&rows)
 		if err != nil {
-			return out, err
+			return nil, err
 		}
 		out = append(out, message)
 	}
@@ -569,34 +682,39 @@ func (c *Conn) messagesAfter(dst []Message, room int64, stamp []byte) ([]Message
 }
 
 // messageByID appends the anchor's full record, mirroring MessagePage's
-// centre lookup (a miss appends nothing).
+// centre lookup. Any error drops the appended row: MessagePage returns
+// (nil, err) for a centre failure exactly like the database reader.
 func (c *Conn) messageByID(dst []Message, room, anchor int64) ([]Message, error) {
 	h, err := c.acquire(queryMessageByID)
 	if err != nil {
-		return dst, err
+		return nil, err
 	}
 	defer h.release()
 	if err := h.st.ClearBindings(); err != nil {
-		return dst, err
+		return nil, err
 	}
 	if err := h.st.BindInt64(1, room); err != nil {
-		return dst, err
+		return nil, err
 	}
 	if err := h.st.BindInt64(2, anchor); err != nil {
-		return dst, err
+		return nil, err
 	}
 	rows := Rows{stmt: h.st}
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return dst, err
+			return nil, err
 		}
 		return dst, nil
 	}
 	message, err := scanMessage(&rows)
 	if err != nil {
-		return dst, err
+		return nil, err
 	}
-	return append(dst, message), rows.Err()
+	out := append(dst, message)
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // anchorStamp copies the anchor message's created_at text into the
@@ -630,13 +748,56 @@ func (c *Conn) anchorStamp(room, anchor int64) ([]byte, error) {
 	return c.stamp, nil
 }
 
+// scanUser decodes the nine userColumns columns of the current row.
+func scanUser(rows *Rows) (User, error) {
+	var user User
+	var err error
+	if user.ID, err = rows.Int64(0); err != nil {
+		return user, err
+	}
+	if user.Name, err = rows.Text(1); err != nil {
+		return user, err
+	}
+	if user.Email, err = rows.Text(2); err != nil {
+		return user, err
+	}
+	if user.Password, err = rows.Text(3); err != nil {
+		return user, err
+	}
+	role, err := rows.Int64(4)
+	if err != nil {
+		return user, err
+	}
+	status, err := rows.Int64(5)
+	if err != nil {
+		return user, err
+	}
+	user.Role, user.Status = int(role), int(status)
+	if user.Bio, err = rows.Text(6); err != nil {
+		return user, err
+	}
+	if user.UpdatedAt, err = rows.Stamp(7); err != nil {
+		return user, err
+	}
+	if user.BotToken, err = rows.Text(8); err != nil {
+		return user, err
+	}
+	return user, nil
+}
+
 // scanMessage decodes the eight messageSelect columns of the current row.
 func scanMessage(rows *Rows) (Message, error) {
 	var message Message
-	message.ID = rows.Int64(0)
-	message.RoomID = rows.Int64(1)
-	message.CreatorID = rows.Int64(2)
 	var err error
+	if message.ID, err = rows.Int64(0); err != nil {
+		return message, err
+	}
+	if message.RoomID, err = rows.Int64(1); err != nil {
+		return message, err
+	}
+	if message.CreatorID, err = rows.Int64(2); err != nil {
+		return message, err
+	}
 	if message.ClientID, err = rows.Text(3); err != nil {
 		return message, err
 	}

@@ -46,15 +46,40 @@ func (r *Rows) Err() error { return r.err }
 // Kind returns column i's value class.
 func (r *Rows) Kind(i int) Kind { return Kind(r.stmt.ColumnType(i)) }
 
+// String names the value class for error messages.
+func (k Kind) String() string {
+	switch k {
+	case KindInteger:
+		return "INTEGER"
+	case KindFloat:
+		return "FLOAT"
+	case KindText:
+		return "TEXT"
+	case KindBlob:
+		return "BLOB"
+	case KindNull:
+		return "NULL"
+	default:
+		return "UNKNOWN"
+	}
+}
+
 // IsNull reports whether column i is SQL NULL.
 func (r *Rows) IsNull(i int) bool { return r.stmt.ColumnType(i) == csqlite.TypeNull }
 
-// Int64 returns column i as an integer. NULL reads as 0; use IsNull when the
-// column is nullable.
-func (r *Rows) Int64(i int) int64 { return r.stmt.ColumnInt64(i) }
+// Int64 returns column i as an integer and refuses the conversions
+// database/sql also refuses: a TEXT, FLOAT or NULL column is an error, not a
+// coerced value.
+func (r *Rows) Int64(i int) (int64, error) {
+	if kind := r.Kind(i); kind != KindInteger {
+		return 0, fmt.Errorf("fastdb: column %d is %s, want INTEGER", i, kind)
+	}
+	return r.stmt.ColumnInt64(i), nil
+}
 
-// Bool returns column i as SQLite's boolean convention (0/1; NULL reads as
-// false).
+// Bool returns column i as SQLite's boolean convention. It is for expressions
+// SQLite guarantees to yield 0/1 (IS NOT NULL, comparisons), not for general
+// integer columns; NULL reads as false.
 func (r *Rows) Bool(i int) bool { return r.stmt.ColumnInt64(i) != 0 }
 
 // Bytes returns a view of column i's bytes owned by SQLite. The view is valid

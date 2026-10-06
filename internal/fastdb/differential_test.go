@@ -555,6 +555,324 @@ func TestDifferentialMessagePages(t *testing.T) {
 	}
 }
 
+// TestDifferentialInvitation pins the room-page invitation probe (the raw SQL
+// internal/web/server.go runs) and forces its true branch by trimming the
+// account's first room to 40 messages on a private copy.
+func TestDifferentialInvitation(t *testing.T) {
+	path := fixtureDB(t)
+	d, c := openBoth(t, path)
+	ctx := context.Background()
+
+	invitation := func(room int64) (bool, error) {
+		var want bool
+		err := d.Read.QueryRowContext(ctx, "SELECT ?=(SELECT id FROM rooms ORDER BY created_at LIMIT 1) AND NOT EXISTS(SELECT 1 FROM messages WHERE room_id=? LIMIT 1 OFFSET 40)", room, room).Scan(&want)
+		return want, err
+	}
+
+	roomIDs, err := queryIDs(t, d, "SELECT id FROM rooms ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roomIDs) == 0 {
+		t.Fatal("fixture has no rooms")
+	}
+	for _, room := range roomIDs {
+		want, err := invitation(room)
+		if err != nil {
+			t.Fatalf("database invitation(%d): %v", room, err)
+		}
+		got, err := c.Invitation(room)
+		if err != nil {
+			t.Fatalf("fastdb invitation(%d): %v", room, err)
+		}
+		if got != want {
+			t.Errorf("Invitation(%d) = %v, want %v", room, got, want)
+		}
+	}
+
+	var first int64
+	if err := d.Read.QueryRowContext(ctx, "SELECT id FROM rooms ORDER BY created_at LIMIT 1").Scan(&first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Write.Exec("DELETE FROM messages WHERE room_id=? AND id NOT IN (SELECT id FROM messages WHERE room_id=? ORDER BY created_at DESC LIMIT 40)", first, first); err != nil {
+		t.Fatal(err)
+	}
+	want, err := invitation(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.Invitation(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want != got {
+		t.Errorf("trimmed first room: fastdb %v != database %v", got, want)
+	}
+	if !want {
+		t.Errorf("trimmed first room: invitation = false, want true")
+	}
+
+	const missing = int64(1) << 62
+	want, err = invitation(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err = c.Invitation(missing); err != nil {
+		t.Fatal(err)
+	}
+	if want != got {
+		t.Errorf("missing room: fastdb %v != database %v", got, want)
+	}
+}
+
+// TestDifferentialRoomMembers pins database.DB.RoomMembers, including its
+// non-nil empty slice for a room with no members.
+func TestDifferentialRoomMembers(t *testing.T) {
+	path := fixtureDB(t)
+	d, c := openBoth(t, path)
+	ctx := context.Background()
+
+	rooms, err := queryIDs(t, d, "SELECT id FROM rooms ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rooms) == 0 {
+		t.Fatal("fixture has no rooms")
+	}
+	members := make([]User, 0, 8)
+	for _, room := range rooms {
+		want, err := d.RoomMembers(ctx, room)
+		if err != nil {
+			t.Fatalf("database.RoomMembers(%d): %v", room, err)
+		}
+		got, err := c.RoomMembers(members[:0], room)
+		if err != nil {
+			t.Fatalf("fastdb.RoomMembers(%d): %v", room, err)
+		}
+		if (want == nil) != (got == nil) {
+			t.Errorf("RoomMembers(%d) nil-ness: database %v, fastdb %v", room, want == nil, got == nil)
+		}
+		if len(got) != len(want) {
+			t.Errorf("RoomMembers(%d): fastdb %d rows != database %d", room, len(got), len(want))
+			continue
+		}
+		for i := range want {
+			if !reflect.DeepEqual(got[i].record(), recordOfUser(want[i])) {
+				t.Errorf("RoomMembers(%d)[%d]: fastdb %+v != database %+v", room, i, got[i].record(), recordOfUser(want[i]))
+			}
+		}
+		members = got
+	}
+
+	const missing = int64(1) << 62
+	want, err := d.RoomMembers(ctx, missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.RoomMembers(nil, missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want == nil || got == nil {
+		t.Errorf("empty RoomMembers must be non-nil: database %v, fastdb %v", want == nil, got == nil)
+	}
+	if len(want) != 0 || len(got) != 0 {
+		t.Errorf("empty RoomMembers has rows: database %d, fastdb %d", len(want), len(got))
+	}
+}
+
+// TestDifferentialDecodeErrors pins the decode-error shapes. A row whose
+// column cannot be decoded drops the partial slice on both readers
+// (scanMessages-style nil). A clean mid-scan step error cannot be injected —
+// csqlite exposes no SQLite interrupt hook and no mirrored query has a
+// row-dependent failure — so the rows.Err() partial-slice path is not tested
+// here rather than faked.
+func TestDifferentialDecodeErrors(t *testing.T) {
+	path := fixtureDB(t)
+	d, c := openBoth(t, path)
+	ctx := context.Background()
+
+	var room int64
+	if err := d.Read.QueryRowContext(ctx, "SELECT room_id FROM messages ORDER BY id LIMIT 1").Scan(&room); err != nil {
+		t.Fatal(err)
+	}
+	var user int64
+	if err := d.Read.QueryRowContext(ctx, "SELECT id FROM users ORDER BY id LIMIT 1").Scan(&user); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Invalid timestamp: updated_at is decoded by both readers.
+	res, err := d.Write.Exec("INSERT INTO messages(client_message_id,creator_id,room_id,created_at,updated_at) VALUES('bad-stamp',?,?,'9999-01-01 00:00:00','not a timestamp')", user, room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRefs, wantRefsErr := d.MessagePageReferences(ctx, room, 0, "before")
+	gotRefs, gotRefsErr := c.MessageRefs(nil, room, 0)
+	if wantRefsErr == nil || gotRefsErr == nil {
+		t.Fatalf("bad timestamp refs: want errors, got database=%v fastdb=%v", wantRefsErr, gotRefsErr)
+	}
+	if wantRefs != nil || gotRefs != nil {
+		t.Errorf("bad timestamp refs: want nil slices, got database nil=%v fastdb nil=%v", wantRefs == nil, gotRefs == nil)
+	}
+	wantPage, wantPageErr := d.MessagePage(ctx, room, 0, "before")
+	gotPage, gotPageErr := c.MessagePage(nil, room, 0, "before")
+	if wantPageErr == nil || gotPageErr == nil {
+		t.Fatalf("bad timestamp page: want errors, got database=%v fastdb=%v", wantPageErr, gotPageErr)
+	}
+	if wantPage != nil || gotPage != nil {
+		t.Errorf("bad timestamp page: want nil slices, got database nil=%v fastdb nil=%v", wantPage == nil, gotPage == nil)
+	}
+	if _, err := d.Write.Exec("DELETE FROM messages WHERE id=?", badID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. TEXT stored in the INTEGER-affinity creator_id column. The writer
+	// pool is a single connection, so the pragma applies to the insert; both
+	// readers must refuse the coercion rather than return digits.
+	if _, err := d.Write.Exec("PRAGMA foreign_keys=off"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = d.Write.Exec("INSERT INTO messages(client_message_id,creator_id,room_id,created_at,updated_at) VALUES('bad-int','not-an-int',?,'9999-01-02 00:00:00','9999-01-02 00:00:00')", room)
+	if _, ferr := d.Write.Exec("PRAGMA foreign_keys=on"); ferr != nil {
+		t.Fatal(ferr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInt, wantIntErr := d.MessagePage(ctx, room, 0, "before")
+	gotInt, gotIntErr := c.MessagePage(nil, room, 0, "before")
+	if wantIntErr == nil || gotIntErr == nil {
+		t.Fatalf("text in integer: want errors, got database=%v fastdb=%v", wantIntErr, gotIntErr)
+	}
+	if wantInt != nil || gotInt != nil {
+		t.Errorf("text in integer: want nil slices, got database nil=%v fastdb nil=%v", wantInt == nil, gotInt == nil)
+	}
+
+	// 3. A room whose updated_at cannot be decoded: both readers return the
+	// zero Room, and fastdb must zero a pre-filled destination.
+	res, err = d.Write.Exec("INSERT INTO rooms(name,type,creator_id,created_at,updated_at) VALUES('Bad Room','Rooms::Open',?,'2026-01-01 00:00:00','not a timestamp')", user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badRoom, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Write.Exec("INSERT INTO memberships(room_id,user_id,created_at,updated_at) VALUES(?,?,'2026-01-01 00:00:00','2026-01-01 00:00:00')", badRoom, user); err != nil {
+		t.Fatal(err)
+	}
+	wantRoom, wantRoomErr := d.Room(ctx, user, badRoom)
+	if wantRoomErr == nil {
+		t.Fatal("database.Room decoded an invalid timestamp")
+	}
+	// database/sql's Scan fills columns left to right until the failing one,
+	// so both readers return the same partially populated Room.
+	if wantRoom.ID != badRoom || wantRoom.Name != "Bad Room" || !wantRoom.UpdatedAt.IsZero() {
+		t.Fatalf("database.Room partial shape changed: %+v", wantRoom)
+	}
+	gotRoom := Room{ID: 12345, CreatorID: 999, Name: "sentinel", Type: "sentinel"}
+	if err := c.Room(&gotRoom, user, badRoom); err == nil {
+		t.Fatal("fastdb.Room decoded an invalid timestamp")
+	}
+	if !reflect.DeepEqual(gotRoom.record(), recordOfRoom(wantRoom)) {
+		t.Errorf("Room error shape: fastdb %+v != database %+v", gotRoom.record(), recordOfRoom(wantRoom))
+	}
+
+	// The same zeroing holds for the other single-row lookup.
+	wantUser, err := d.SessionUser(ctx, "no-such-token")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal(err)
+	}
+	if wantUser != (database.User{}) {
+		t.Errorf("database.SessionUser returned %+v on error, want zero", wantUser)
+	}
+	gotUser := User{ID: 7, Name: "sentinel"}
+	if err := c.SessionUser(&gotUser, "no-such-token"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal(err)
+	}
+	if gotUser != (User{}) {
+		t.Errorf("fastdb.SessionUser left dst %+v on error, want zero", gotUser)
+	}
+}
+
+// TestDifferentialEmptyShapes pins nil-ness: the reduced reference path uses a
+// nil accumulator in internal/database and stays nil; the full message paths
+// and RoomMembers use non-nil accumulators and must return a non-nil empty
+// slice.
+func TestDifferentialEmptyShapes(t *testing.T) {
+	path := fixtureDB(t)
+	d, c := openBoth(t, path)
+	ctx := context.Background()
+	const missing = int64(1) << 62
+
+	wantRefs, err := d.MessagePageReferences(ctx, missing, 0, "before")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotRefs, err := c.MessageRefs(nil, missing, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantRefs != nil || gotRefs != nil {
+		t.Errorf("empty reduced refs: want nil/nil, got database nil=%v fastdb nil=%v", wantRefs == nil, gotRefs == nil)
+	}
+	if len(wantRefs) != 0 || len(gotRefs) != 0 {
+		t.Errorf("empty reduced refs have rows: database %d fastdb %d", len(wantRefs), len(gotRefs))
+	}
+
+	wantPage, err := d.MessagePage(ctx, missing, 0, "before")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotPage, err := c.MessagePage(nil, missing, 0, "before")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantPage == nil || gotPage == nil {
+		t.Errorf("empty full page must be non-nil: database nil=%v fastdb nil=%v", wantPage == nil, gotPage == nil)
+	}
+
+	// An after window that matches nothing, relative to a real anchor.
+	var room, anchor int64
+	if err := d.Read.QueryRowContext(ctx, "SELECT room_id FROM messages ORDER BY id LIMIT 1").Scan(&room); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Read.QueryRowContext(ctx, "SELECT id FROM messages WHERE room_id=? ORDER BY created_at DESC LIMIT 1", room).Scan(&anchor); err != nil {
+		t.Fatal(err)
+	}
+	wantAfter, err := d.MessagePage(ctx, room, anchor, "after")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotAfter, err := c.MessagePage(nil, room, anchor, "after")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wantAfter) != 0 || len(gotAfter) != 0 {
+		t.Fatalf("after window has rows: database %d fastdb %d", len(wantAfter), len(gotAfter))
+	}
+	if wantAfter == nil || gotAfter == nil {
+		t.Errorf("empty after window must be non-nil: database nil=%v fastdb nil=%v", wantAfter == nil, gotAfter == nil)
+	}
+
+	// A user with no memberships: the sidebar accumulator is nil.
+	wantSidebar, err := d.SidebarRooms(ctx, missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotSidebar, err := c.SidebarRooms(nil, missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantSidebar != nil || gotSidebar != nil {
+		t.Errorf("empty sidebar: want nil/nil, got database nil=%v fastdb nil=%v", wantSidebar == nil, gotSidebar == nil)
+	}
+}
+
 func queryIDs(t *testing.T, d *database.DB, query string, args ...any) ([]int64, error) {
 	t.Helper()
 	rows, err := d.Read.QueryContext(context.Background(), query, args...)

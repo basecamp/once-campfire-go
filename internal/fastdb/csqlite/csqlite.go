@@ -45,11 +45,10 @@ import (
 	"unsafe"
 )
 
-// Primary SQLite result codes the layer names. SQLITE_BUSY, SQLITE_NOTADB and
-// friends arrive through *Error and the sentinels below.
+// Primary SQLite result codes this package maps to error sentinels. The
+// constants exist so Unwrap can name them and tests can assert them without
+// parsing messages.
 const (
-	ResultOK         = int(C.SQLITE_OK)
-	ResultError      = int(C.SQLITE_ERROR)
 	ResultBusy       = int(C.SQLITE_BUSY)
 	ResultLocked     = int(C.SQLITE_LOCKED)
 	ResultReadOnly   = int(C.SQLITE_READONLY)
@@ -70,12 +69,13 @@ const (
 
 // Sentinels matched by errors.Is through *Error.Unwrap.
 var (
-	ErrBusy     = errors.New("sqlite: database is locked")
-	ErrLocked   = errors.New("sqlite: database table is locked")
-	ErrReadOnly = errors.New("sqlite: attempt to write a readonly database")
-	ErrCorrupt  = errors.New("sqlite: database disk image is malformed")
-	ErrCantOpen = errors.New("sqlite: unable to open database file")
-	ErrNotADB   = errors.New("sqlite: file is not a database")
+	ErrBusy       = errors.New("sqlite: database is locked")
+	ErrLocked     = errors.New("sqlite: database table is locked")
+	ErrReadOnly   = errors.New("sqlite: attempt to write a readonly database")
+	ErrCorrupt    = errors.New("sqlite: database disk image is malformed")
+	ErrCantOpen   = errors.New("sqlite: unable to open database file")
+	ErrNotADB     = errors.New("sqlite: file is not a database")
+	ErrConstraint = errors.New("sqlite: constraint failed")
 	// ErrNull reports a NULL where a typed read expected a value.
 	ErrNull = errors.New("sqlite: unexpected NULL")
 )
@@ -109,6 +109,8 @@ func (e *Error) Unwrap() error {
 		return ErrCantOpen
 	case ResultNotADB:
 		return ErrNotADB
+	case ResultConstraint:
+		return ErrConstraint
 	default:
 		return nil
 	}
@@ -160,18 +162,6 @@ func (c *Conn) Close() error {
 // SQLITE_BUSY.
 func (c *Conn) BusyTimeout(ms int) error {
 	return c.err(C.sqlite3_busy_timeout(c.db, C.int(ms)))
-}
-
-// Errmsg returns the connection's current error text.
-func (c *Conn) Errmsg() string {
-	return C.GoString(C.sqlite3_errmsg(c.db))
-}
-
-// Changes returns the rows changed by the most recent statement. A read-only
-// connection always reports 0; the call exists for callers that reuse the
-// binding for writes later.
-func (c *Conn) Changes() int {
-	return int(C.sqlite3_changes(c.db))
 }
 
 // Prepare compiles one statement. The SQL text is copied to C memory for the
@@ -304,11 +294,6 @@ func (s *Stmt) Finalize() error {
 		return &Error{Code: int(rc), Msg: C.GoString(C.sqlite3_errstr(rc))}
 	}
 	return nil
-}
-
-// ColumnCount returns the number of result columns.
-func (s *Stmt) ColumnCount() int {
-	return int(C.sqlite3_column_count(s.stmt))
 }
 
 // ColumnType returns the value class of column i (0-based).

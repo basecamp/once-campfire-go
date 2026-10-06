@@ -2,8 +2,7 @@
 
 Minimal direct-SQLite binding used by `internal/fastdb`. It provides only the
 C API calls the read layer needs: `sqlite3_open_v2`, `prepare_v2`, `bind_*`,
-`step`, `column_*`, `reset`, `clear_bindings`, `finalize`, `busy_timeout`,
-`errmsg` and `changes`.
+`step`, `column_*`, `reset`, `clear_bindings`, `finalize` and `busy_timeout`.
 
 ## Where SQLite comes from
 

@@ -2,7 +2,7 @@
 ** VENDORED COPY — do not edit.
 **
 ** This is the generated SQLite amalgamation header bundled with
-** github.com/mattn/go-sqlite3 version 1.14.52 (the pin in go.mod). SQLite
+** github.com/mattn/go-sqlite3 version v1.14.52 (the pin in go.mod). SQLite
 ** itself is in the public domain: https://sqlite.org/copyright.html.
 **
 ** internal/fastdb/csqlite calls the C API these declarations describe; the

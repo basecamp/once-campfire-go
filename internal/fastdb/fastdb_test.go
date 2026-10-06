@@ -1,13 +1,18 @@
 package fastdb
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/fastdb/csqlite"
 )
 
@@ -187,8 +192,17 @@ func TestRowsKindsAndNull(t *testing.T) {
 	if got := rows.Kind(0); got != KindInteger {
 		t.Errorf("kind 0 = %d, want integer", got)
 	}
-	if got := rows.Int64(0); got != 1 {
-		t.Errorf("int64 0 = %d", got)
+	if got, err := rows.Int64(0); err != nil || got != 1 {
+		t.Errorf("int64 0 = %d, %v", got, err)
+	}
+	if _, err := rows.Int64(1); err == nil {
+		t.Error("Int64 coerced a FLOAT column")
+	}
+	if _, err := rows.Int64(2); err == nil {
+		t.Error("Int64 coerced a TEXT column")
+	}
+	if _, err := rows.Int64(3); err == nil {
+		t.Error("Int64 coerced a NULL column")
 	}
 	if got := rows.Kind(1); got != KindFloat {
 		t.Errorf("kind 1 = %d, want float", got)
@@ -417,6 +431,155 @@ func TestBusyTimeoutWaitsAndSurfaces(t *testing.T) {
 	if got, err := st.ColumnText(0); err != nil || got != "held" {
 		t.Fatalf("after rollback: %q, %v", got, err)
 	}
+}
+
+// TestConnConcurrentReaders runs N goroutines with one Conn each over the same
+// database file: every Conn is owned by exactly one goroutine (the documented
+// contract), the per-Conn statement caches are private, and every result is
+// checked against the database/sql reader's values. Run under -race.
+func TestConnConcurrentReaders(t *testing.T) {
+	path := fixtureDB(t)
+	d, err := database.Open(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	ctx := context.Background()
+
+	var user, room int64
+	if err := d.Read.QueryRowContext(ctx, "SELECT user_id,room_id FROM memberships ORDER BY room_id,user_id LIMIT 1").Scan(&user, &room); err != nil {
+		t.Fatal(err)
+	}
+	wantRoom, err := d.Room(ctx, user, room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRefs, err := d.MessagePageReferences(ctx, room, 0, "before")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSidebar, err := d.SidebarRooms(ctx, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var token string
+	if err := d.Read.QueryRowContext(ctx, "SELECT token FROM sessions LIMIT 1").Scan(&token); err != nil {
+		t.Fatal(err)
+	}
+	wantUser, err := d.SessionUser(ctx, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const goroutines = 8
+	const iterations = 25
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c, err := OpenReadOnly(path, 16)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer c.Close()
+			refs := make([]MessageRef, 0, 40)
+			sidebar := make([]SidebarRoom, 0, len(wantSidebar)+1)
+			for i := 0; i < iterations; i++ {
+				var gotRoom Room
+				if err := c.Room(&gotRoom, user, room); err != nil {
+					t.Errorf("Room: %v", err)
+					return
+				}
+				if !reflect.DeepEqual(gotRoom.record(), recordOfRoom(wantRoom)) {
+					t.Errorf("Room: fastdb %+v != database %+v", gotRoom.record(), recordOfRoom(wantRoom))
+					return
+				}
+				var gotUser User
+				if err := c.SessionUser(&gotUser, token); err != nil {
+					t.Errorf("SessionUser: %v", err)
+					return
+				}
+				if !reflect.DeepEqual(gotUser.record(), recordOfUser(wantUser)) {
+					t.Errorf("SessionUser: fastdb %+v != database %+v", gotUser.record(), recordOfUser(wantUser))
+					return
+				}
+				if refs, err = c.MessageRefs(refs[:0], room, 0); err != nil {
+					t.Errorf("MessageRefs: %v", err)
+					return
+				}
+				if len(refs) != len(wantRefs) {
+					t.Errorf("MessageRefs: %d rows != database %d", len(refs), len(wantRefs))
+					return
+				}
+				for j := range refs {
+					if refs[j].ID != wantRefs[j].ID || refs[j].RoomID != room || !refs[j].UpdatedAt.Equal(wantRefs[j].UpdatedAt) {
+						t.Errorf("MessageRefs[%d]: %+v != database %+v", j, refs[j], wantRefs[j])
+						return
+					}
+				}
+				if sidebar, err = c.SidebarRooms(sidebar[:0], user); err != nil {
+					t.Errorf("SidebarRooms: %v", err)
+					return
+				}
+				if len(sidebar) != len(wantSidebar) {
+					t.Errorf("SidebarRooms: %d rows != database %d", len(sidebar), len(wantSidebar))
+					return
+				}
+				for j := range sidebar {
+					if !reflect.DeepEqual(sidebar[j].record(), recordOfSidebar(wantSidebar[j])) {
+						t.Errorf("SidebarRooms[%d]: fastdb %+v != database %+v", j, sidebar[j].record(), recordOfSidebar(wantSidebar[j]))
+						return
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// TestOpenCloseFDStable checks that repeated Open/Close cycles return every
+// file descriptor, including the WAL shared-memory handle.
+func TestOpenCloseFDStable(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("fd counting reads /proc")
+	}
+	path := fixtureDB(t)
+	// Warm up so a first-time runtime poller fd is not counted as a leak.
+	c, err := OpenReadOnly(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := openFDs(t)
+	for i := 0; i < 50; i++ {
+		c, err := OpenReadOnly(path, 4)
+		if err != nil {
+			t.Fatalf("cycle %d: %v", i, err)
+		}
+		var room Room
+		if err := c.Room(&room, 1<<62, 1<<62); !errors.Is(err, ErrNoRows) {
+			t.Fatalf("cycle %d: %v", i, err)
+		}
+		if err := c.Close(); err != nil {
+			t.Fatalf("cycle %d: %v", i, err)
+		}
+	}
+	if after := openFDs(t); after > before {
+		t.Fatalf("fd count grew from %d to %d over 50 Open/Close cycles", before, after)
+	}
+}
+
+func openFDs(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(entries)
 }
 
 func queryInt(t *testing.T, c *Conn, query string) int64 {
