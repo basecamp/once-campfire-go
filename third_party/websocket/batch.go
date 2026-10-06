@@ -38,12 +38,12 @@ func (c *Conn) WritePreparedBatch(deadline time.Time, frames []*PreparedMessage)
 	}
 
 	// The same locks as a message write and a frame write, so control frames and other messages
-	// never land inside the batch.
-	if err := c.msgWriter.mu.lock(context.Background()); err != nil {
+	// never land inside the batch. Waiting for them counts against the deadline too.
+	if err := lockBy(c.msgWriter.mu, deadline); err != nil {
 		return err
 	}
 	defer c.msgWriter.mu.unlock()
-	if err := c.writeFrameMu.lock(context.Background()); err != nil {
+	if err := lockBy(c.writeFrameMu, deadline); err != nil {
 		return err
 	}
 	defer c.writeFrameMu.unlock()
@@ -89,6 +89,16 @@ func (c *Conn) WritePreparedBatch(deadline time.Time, frames []*PreparedMessage)
 		return fmt.Errorf("failed to write frames: %w", err)
 	}
 	return nil
+}
+
+// lockBy takes m, giving up at deadline; an uncontended lock is taken without arming a timer.
+func lockBy(m *mu, deadline time.Time) error {
+	if m.tryLock() {
+		return nil
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	return m.lock(ctx)
 }
 
 // maxServerHeader is the longest header of an unmasked frame.

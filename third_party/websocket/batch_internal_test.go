@@ -113,6 +113,25 @@ func TestWritePreparedBatchIsOneWriteUnderOneDeadline(t *testing.T) {
 	}
 }
 
+// A batch waiting for a lock another write holds gives up at its deadline, writing nothing.
+func TestWritePreparedBatchDeadlineCoversTheLocks(t *testing.T) {
+	rec := &recordingConn{}
+	c := serverConn(rec, nil)
+	c.writeFrameMu.forceLock()
+	start := time.Now()
+	err := c.WritePreparedBatch(start.Add(50*time.Millisecond), []*PreparedMessage{NewPreparedMessage(MessageText, []byte("hello"))})
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
+		t.Fatalf("after %v: %v", time.Since(start), err)
+	}
+	if len(rec.writes) != 0 {
+		t.Fatalf("%d writes while another write held the lock", len(rec.writes))
+	}
+	c.writeFrameMu.unlock()
+	if err := c.WritePreparedBatch(time.Now().Add(time.Minute), []*PreparedMessage{NewPreparedMessage(MessageText, []byte("hello"))}); err != nil {
+		t.Fatalf("once the lock was free: %v", err)
+	}
+}
+
 func TestWritePreparedBatchDeadline(t *testing.T) {
 	server, client := net.Pipe()
 	defer client.Close()
