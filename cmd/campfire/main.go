@@ -31,6 +31,11 @@ func main() {
 	}
 }
 func run() error {
+	// GC policy from the environment (gc.go) must be in effect before any
+	// serving work starts: apply now, and the effective settings land in the
+	// startup log either way.
+	applyGCPolicy(os.LookupEnv)
+
 	if path := os.Getenv("GO_CPU_PROFILE"); path != "" {
 		file, err := os.Create(path)
 		if err != nil {

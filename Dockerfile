@@ -187,6 +187,12 @@ ENV HTTP_IDLE_TIMEOUT=60
 ENV HTTP_READ_TIMEOUT=300
 ENV HTTP_WRITE_TIMEOUT=300
 
+# GC policy knobs: CAMPFIRE_GOGC (GOGC target percentage, or `off`) and
+# CAMPFIRE_GOMEMLIMIT (bytes, or a MiB/GiB suffix) are read by the binary at
+# startup and are intentionally not defaulted here — the runtime's own
+# GOGC/GOMEMLIMIT environment handling and Go defaults apply. The shipped
+# values land with the ENGINE-47 measurement, not before it.
+
 # Set version and revision
 ARG APP_VERSION
 ENV APP_VERSION=$APP_VERSION

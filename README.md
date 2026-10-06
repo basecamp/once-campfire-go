@@ -84,6 +84,16 @@ page's ETag covers the cache-stable pieces only, so it no longer moves with the 
 re-hash the shell on every request. `campfire db:prepare` initializes an empty database and checks
 migration versions; existing databases missing migrations are rejected.
 
+The Go runtime's garbage collector is exposed through `CAMPFIRE_GOGC` (the GOGC target percentage,
+e.g. `200`, or `off` to disable the collector) and `CAMPFIRE_GOMEMLIMIT` (a soft memory limit in
+bytes, e.g. `536870912`, or with a binary `MiB`/`GiB` suffix, e.g. `512MiB`), both applied at
+startup and logged with the effective values. An absent knob leaves the runtime's own behavior
+alone — Go already reads `GOGC` and `GOMEMLIMIT` from the environment itself — and an invalid
+value logs a warning and keeps the runtime setting. Read profiles show GC at roughly 9–12% of
+samples on read routes; the task is to drive that share down without raising peak memory, and the
+defaults the shipped image lands on are recorded with the ENGINE-47 measurement (this text stays
+knob documentation until that evidence exists).
+
 The public listener uses `HTTP_PORT=80`. Set `TLS_DOMAIN` for automatic ACME certificates and HTTPS
 on `HTTPS_PORT=443`. The internal application listener defaults to `TARGET_BIND=127.0.0.1` and
 `TARGET_PORT=3000`. The front server provides HTTP/2, optional H2C, gzip/zstd with compression jitter,
