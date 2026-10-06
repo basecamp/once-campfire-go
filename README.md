@@ -75,6 +75,20 @@ UPDATE) always use `database/sql`. If the pool cannot open (unreadable database,
 server logs a warning and falls back to `database/sql` reads for that process instead of failing
 startup. The fast path also does not observe request cancellation mid-query; a cancelled request
 completes its read and renders rather than producing a context error.
+`CAMPFIRE_COMPILED_ROUTES` (default `on`; also accepts `true`/`1` and `off`/`false`/`0`, warning on
+anything else) matches every request against a segment-wise compiled form of the 177-entry Rails
+route contract (routes grouped by method and first literal segment; byte compares and scans, no
+regex execution per request) instead of the per-route regex scan. The compiled recognizer must
+produce byte-identical recognitions — same contract, same path values, same errors — and a
+deterministic differential corpus (reference vectors, generated per-route paths, hostile edge
+paths, seeded fuzz) pins that in `route_compiled_test.go`. Setting it `off` restores the regex
+recognizer for A/B and rollback; `routeHTTP` and every handler are untouched. Patterns whose shape
+the compiler cannot prove identical to the regex semantics (no such pattern exists in the current
+table: any `( )` group other than the trailing `(.:format)`, a param followed by literal text in
+the same segment, a non-final star, a dot in the first segment) disable the compiled table for the
+whole process — always the regex answer, never a wrong compiled one. Paths containing a raw
+newline also take the regex recognizer, because `.` and `[^...]` exclude `\n` but the compiled
+scans would not.
 `CAMPFIRE_RECORDED_CACHE_MB` sizes that recorded-response piece cache independently (default 32;
 `0` disables storage while still serving from freshly rendered pieces). Each cached piece charges
 its raw bytes, its gzip member and the key, so one piece costs up to about twice its HTML size;
