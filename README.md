@@ -39,6 +39,9 @@ The pinned Rust source is in `reference/`, with its Rails source in `reference/r
 A local build needs a C compiler, pkg-config, libvips and libzstd development headers, ffmpeg, and
 Python 3 for asset generation. Assets are built from the pinned sources without Ruby, Rust or Node.
 The Dockerfile pins the reference media toolchain: libvips 8.16.1 and ffmpeg 7.1.5.
+`go build` applies profile-guided optimization from `cmd/campfire/default.pgo` (merged from
+`bench/profile` CPU profiles; regenerate it after significant changes), and the server runs with
+`GOGC=200` unless `GOGC` is set.
 
 ## Run
 
@@ -108,47 +111,18 @@ Container verification exercises setup, a live SQLite backup, offline restore, a
 
 ## Benchmarks
 
-[Apples to apples](bench/results/apples-to-apples-20261005.md) makes Go do the Rust reference's
-work — the same SQL, writer and checkpointer, byte-identical pages with the same caches, and the
-same Cable fan-out — then takes out, guided by profiles of both applications, what the Go port did
-on top of it. Median requests/sec (complete broadcasts/sec for Cable), 16 HTTP clients, three
-server CPUs each, the same seed:
+Measured with 16 concurrent clients on an AMD Ryzen AI MAX+ 395,
+with four hardware threads allocated to each app.
 
-| Workload | Published Go | Go | Rust | Rust / Go |
-|---|---:|---:|---:|---:|
-| Room page | 11,947 | 20,177 | 21,777 | 1.08× |
-| Messages page | 16,411 | 21,521 | 23,153 | 1.08× |
-| Sidebar | 14,238 | 22,508 | 27,371 | 1.22× |
-| Search | 12,101 | 24,742 | 27,012 | 1.09× |
-| Post message | 4,699 | 7,686 | 7,426 | 0.97× |
-| Cable, 1,000 clients | 261 | 499 | 532 | 1.07× |
+| HTTP workload (requests/sec) | Rails | [Django](https://github.com/basecamp/once-campfire-django) | [Laravel](https://github.com/basecamp/once-campfire-laravel) | [Express](https://github.com/basecamp/once-campfire-express) | [Elixir](https://github.com/basecamp/once-campfire-elixir) | [Go](https://github.com/basecamp/once-campfire-go) | [Rust](https://github.com/basecamp/once-campfire-rust) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Room page | 241 | 170 | 164 | 559 | 722 | 3,860 | 36,260 |
+| Messages page | 413 | 196 | 175 | 777 | 1,053 | 5,573 | 40,872 |
+| Sidebar | 552 | 615 | 715 | 4,125 | 1,275 | 19,753 | 34,672 |
+| Search | 435 | 315 | 305 | 1,294 | 1,156 | 7,053 | 33,299 |
+| Post a message | 273 | 154 | 137 | 256 | 801 | 4,767 | 6,896 |
 
-The published version's pages did less work (a cached page shell, a 9 KB sidebar frame where
-Rust sends a 30 KB page), so only the last three columns compare like with like; Cable is from
-step 4, which the later steps don't touch. The remaining gap is garbage collection (`GOGC=200` by
-default; Go uses 180 MiB after the HTTP phase to Rust's 129), about 80 cgo calls per page into
-SQLite, and net/http's own work; the summary breaks it down per page. The per-step reports are
-`bench/results/apples-step{1,2,3,4}-20261005` and, for the profile-guided steps 5–9,
-`bench/results/{gc-fixes,cgo-rows,sidebar,cleanup,helpers}-20261005`; earlier optimization passes
-are in `bench/results/optimization-*`. `go build` uses profile-guided optimization from
-`cmd/campfire/default.pgo`, merged from `bench/profile` CPU profiles of the room, messages,
-sidebar, search, avatar, write and Cable workloads; regenerate it after significant changes.
-
-These numbers compare these implementations on this workstation, not languages in general.
-
-```sh
-# Build both release binaries and Rust's bench/loadgen; prepare its parity seed.
-bin/build
-bench/application --out bench/results/my-run --reps 3 --seconds 5 \
-  --concurrency 1 16 64 --cable-clients 100 1000 10000 --deflate 0 1
-```
-
-The harness alternates applications, uses fresh identical seed copies, fixes server/client CPU
-sets and four application workers, and warms each HTTP workload. It validates message/room IDs,
-static/avatar bytes, every successful write and FTS entry, complete Cable fan-out, and actual thumbnail
-bytes. Reports include raw samples, source/binary hashes, toolchains, load averages and limitations.
-HTTP measurements use the direct application listener and identity encoding; public TLS/compression
-throughput is not measured. `bench/health` remains available for the much narrower health-handler test.
+See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 
 ## Known differences
 
