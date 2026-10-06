@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"fmt"
+	"html/template"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/front"
 	"github.com/basecamp/once-campfire-go/internal/rails"
+	"github.com/basecamp/once-campfire-go/internal/useragent"
 )
 
 // testRecordedPair serves two web.Server instances over one database: the
@@ -355,28 +357,19 @@ func TestRecordedPiecesConditionalSkipsAssembly(t *testing.T) {
 
 func TestRecordedShellKeySeparatesMessageCount(t *testing.T) {
 	base := page{Room: database.Room{ID: 7, Name: "Room & <name>", Type: "Rooms::Open"}, Screen: "search", Query: "q"}
-	none, err := recordedShellKey("search", base)
-	if err != nil {
-		t.Fatal(err)
-	}
+	none := recordedShellIdentity("search", base)
 	one := base
 	one.Messages = make([]messageView, 1)
-	oneKey, err := recordedShellKey("search", one)
-	if err != nil {
-		t.Fatal(err)
-	}
+	oneKey := recordedShellIdentity("search", one)
 	two := base
 	two.Messages = make([]messageView, 2)
-	twoKey, err := recordedShellKey("search", two)
-	if err != nil {
-		t.Fatal(err)
-	}
+	twoKey := recordedShellIdentity("search", two)
 	if none == oneKey || none == twoKey || oneKey == twoKey {
-		t.Fatalf("message count does not separate shell keys: %q %q %q", none, oneKey, twoKey)
+		t.Fatalf("message count does not separate shell identities: %x %x %x", none, oneKey, twoKey)
 	}
 	// The route name separates shells too.
-	if other, err := recordedShellKey("room", base); err != nil || other == none {
-		t.Fatalf("route name does not separate shell keys: %q %v", other, err)
+	if other := recordedShellIdentity("room", base); other == none {
+		t.Fatalf("route name does not separate shell identities: %x", other)
 	}
 }
 
@@ -495,8 +488,8 @@ func TestRecordedPiecesPayloadReplacement(t *testing.T) {
 		}
 	}
 	// The published entry is the same immutable payload.
-	key := messageListKey(messages)
-	stored := app.pieces.Get(key)
+	identity := messageListIdentity(messages)
+	stored := app.pieces.GetDigest(identity)
 	if stored == nil || !bytes.Equal(stored.Raw, first) {
 		t.Fatal("cache entry does not match the returned payload")
 	}
@@ -915,6 +908,189 @@ func TestClientAcceptsGzip(t *testing.T) {
 		}
 		if got := clientAcceptsGzip(request); got != c.want {
 			t.Errorf("Accept-Encoding %q: got %v, want %v", c.header, got, c.want)
+		}
+	}
+}
+
+// TestRecordedShellIdentityAudit mutates every page input the recorded
+// templates read and asserts each one changes the shell identity. The list
+// mirrors appendShellIdentity: if a template starts reading a new page field
+// without that field being added there, two different pages could share a
+// shell, so this test is the audit for that list.
+func TestRecordedShellIdentityAudit(t *testing.T) {
+	stamp := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	later := stamp.Add(time.Second)
+	base := page{
+		Title: "Room", Frame: false, Reload: false, Chat: true, Screen: "room",
+		BodyClass: "sidebar", Notice: "notice", Error: "error", BackPath: "/",
+		Version: "v1", VAPIDPublicKey: "key", CustomStyles: template.HTML("<style>x</style>"),
+		User:    database.User{ID: 3, Name: "Ada", Bio: "bio", UpdatedAt: stamp, Role: 1, Status: 0},
+		Account: database.Account{HasLogo: true, UpdatedAt: stamp},
+		Room:    database.Room{ID: 9, Name: "R", Type: "Rooms::Open", UpdatedAt: stamp},
+		Origin:  "https://x.test", Stream: "stream",
+		Platform: useragent.Platform{Desktop: true, Browser: "Chrome", OperatingSystem: "macOS"},
+		Query:    "q", ReturnRoom: 4, RecentSearches: []string{"a", "b"},
+	}
+	baseline := recordedShellIdentity("room", base)
+	mutations := []struct {
+		name   string
+		mutate func(*page)
+	}{
+		{"title", func(p *page) { p.Title = "Other" }},
+		{"frame", func(p *page) { p.Frame = true }},
+		{"reload", func(p *page) { p.Reload = true }},
+		{"chat", func(p *page) { p.Chat = false }},
+		{"screen", func(p *page) { p.Screen = "search" }},
+		{"body class", func(p *page) { p.BodyClass = "signup" }},
+		{"notice", func(p *page) { p.Notice = "saved" }},
+		{"error", func(p *page) { p.Error = "failed" }},
+		{"back path", func(p *page) { p.BackPath = "/rooms/9" }},
+		{"version", func(p *page) { p.Version = "v2" }},
+		{"vapid key", func(p *page) { p.VAPIDPublicKey = "other" }},
+		{"custom styles", func(p *page) { p.CustomStyles = "<style>y</style>" }},
+		{"user id", func(p *page) { p.User.ID = 4 }},
+		{"user name", func(p *page) { p.User.Name = "Grace" }},
+		{"user bio", func(p *page) { p.User.Bio = "other" }},
+		{"user role", func(p *page) { p.User.Role = 0 }},
+		{"user status", func(p *page) { p.User.Status = 1 }},
+		{"user updated", func(p *page) { p.User.UpdatedAt = later }},
+		{"account logo", func(p *page) { p.Account.HasLogo = false }},
+		{"account updated", func(p *page) { p.Account.UpdatedAt = later }},
+		{"room id", func(p *page) { p.Room.ID = 10 }},
+		{"room name", func(p *page) { p.Room.Name = "Renamed" }},
+		{"room type", func(p *page) { p.Room.Type = "Rooms::Direct" }},
+		{"room updated", func(p *page) { p.Room.UpdatedAt = later }},
+		{"invitation", func(p *page) { p.Invitation = true }},
+		{"origin", func(p *page) { p.Origin = "https://y.test" }},
+		{"stream", func(p *page) { p.Stream = "other" }},
+		{"platform ios", func(p *page) { p.Platform.IOS = true }},
+		{"platform android", func(p *page) { p.Platform.Android = true }},
+		{"platform mac", func(p *page) { p.Platform.Mac = true }},
+		{"platform windows", func(p *page) { p.Platform.Windows = true }},
+		{"platform chrome", func(p *page) { p.Platform.Chrome = true }},
+		{"platform firefox", func(p *page) { p.Platform.Firefox = true }},
+		{"platform safari", func(p *page) { p.Platform.Safari = true }},
+		{"platform edge", func(p *page) { p.Platform.Edge = true }},
+		{"platform mobile", func(p *page) { p.Platform.Mobile = true }},
+		{"platform desktop", func(p *page) { p.Platform.Desktop = false }},
+		{"platform apple messages", func(p *page) { p.Platform.AppleMessages = true }},
+		{"platform browser", func(p *page) { p.Platform.Browser = "Firefox" }},
+		{"platform os", func(p *page) { p.Platform.OperatingSystem = "Windows" }},
+		{"query", func(p *page) { p.Query = "other" }},
+		{"return room", func(p *page) { p.ReturnRoom = 5 }},
+		{"recent search", func(p *page) { p.RecentSearches = []string{"a", "c"} }},
+		{"message count", func(p *page) { p.Messages = make([]messageView, 1) }},
+	}
+	for _, m := range mutations {
+		p := base
+		m.mutate(&p)
+		if got := recordedShellIdentity("room", p); got == baseline {
+			t.Errorf("%s does not change the shell identity", m.name)
+		}
+	}
+	// These inputs are inserted per request or replaced by the message-list
+	// piece, so they must not participate in the shell identity.
+	for _, m := range []struct {
+		name   string
+		mutate func(*page)
+	}{
+		{"messages html marker", func(p *page) { p.MessagesHTML = "<x>" }},
+		{"loaded at", func(p *page) { p.LoadedAt = "1" }},
+	} {
+		p := base
+		m.mutate(&p)
+		if got := recordedShellIdentity("room", p); got != baseline {
+			t.Errorf("%s changed the shell identity", m.name)
+		}
+	}
+	// The message list's bytes are keyed separately, so two same-length lists
+	// share the shell identity.
+	first := base
+	first.Messages = []messageView{{Message: database.Message{ID: 1, UpdatedAt: stamp}}}
+	second := base
+	second.Messages = []messageView{{Message: database.Message{ID: 2, UpdatedAt: later}}}
+	if recordedShellIdentity("room", first) != recordedShellIdentity("room", second) {
+		t.Fatal("shell identity depends on message contents, not just the count")
+	}
+}
+
+// TestRecordedAssemblyBufferPoisoning is the ownership proof for the pooled
+// assembly buffer: every buffer the pool hands out is filled with 0xAA before
+// two different pages are served concurrently, and each response must decode
+// to its own content. A buffer not fully overwritten, or a response reporting
+// capacity instead of length, would surface as poison bytes or as the other
+// page's content.
+func TestRecordedAssemblyBufferPoisoning(t *testing.T) {
+	t.Setenv("CAMPFIRE_FROZEN_TIME", "2026-01-02T03:04:05Z")
+	app, server, cookie, user := testApp(t)
+	ctx := context.Background()
+	rooms, err := app.DB.Rooms(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := rooms[0]
+	second, err := app.DB.CreateRoom(ctx, user.ID, "Rooms::Closed", "Poison second", []int64{user.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.DB.CreateMessage(ctx, user.ID, open.ID, "poison-a", "<p>poison alpha marker</p>", "poison alpha marker"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.DB.CreateMessage(ctx, user.ID, second.ID, "poison-b", "<p>poison beta marker</p>", "poison beta marker"); err != nil {
+		t.Fatal(err)
+	}
+	// Poison the pool directly: any request that borrows one of these buffers
+	// must overwrite it completely.
+	for i := 0; i < 4; i++ {
+		assembly := borrowAssemblyBuffer()
+		buf := assembly.buf
+		if cap(buf) == 0 {
+			buf = make([]byte, 0, 64<<10)
+		}
+		buf = buf[:cap(buf)]
+		for j := range buf {
+			buf[j] = 0xAA
+		}
+		assembly.buf = buf
+		assembly.release()
+	}
+	client := recordedClient()
+	defer client.CloseIdleConnections()
+	type pageCase struct {
+		id           int64
+		want, reject string
+	}
+	results := make(chan error, 2)
+	for _, room := range []pageCase{
+		{open.ID, "poison alpha marker", "poison beta marker"},
+		{second.ID, "poison beta marker", "poison alpha marker"},
+	} {
+		room := room
+		go func() {
+			response, err := recordedFetch(client, server, fmt.Sprintf("/rooms/%d", room.id), "gzip", "", cookie)
+			if err != nil {
+				results <- err
+				return
+			}
+			decoded, err := decodeRecordedErr(response)
+			if err != nil {
+				results <- err
+				return
+			}
+			if response.status != 200 {
+				results <- fmt.Errorf("status %d", response.status)
+				return
+			}
+			if !bytes.Contains(decoded, []byte(room.want)) || bytes.Contains(decoded, []byte(room.reject)) {
+				results <- fmt.Errorf("room %d body mixed page content", room.id)
+				return
+			}
+			results <- nil
+		}()
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-results; err != nil {
+			t.Fatal(err)
 		}
 	}
 }

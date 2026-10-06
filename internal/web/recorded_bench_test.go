@@ -57,19 +57,20 @@ func newRecordedBenchmarkFixture(b *testing.B) *recordedBenchFixture {
 
 	server := &Server{pieces: piececache.New(64 << 20), recordedPieces: true}
 	fixture := &recordedBenchFixture{server: server, page: page{LoadedAt: "1767225845000"}}
-	key, err := recordedShellKey("room", fixture.page)
-	if err != nil {
-		b.Fatal(err)
-	}
-	if _, ok := server.pieces.Put(recordedShellLayoutKey(key), []byte{3, 1}, nil); !ok {
-		b.Fatal("layout rejected")
-	}
+	identity := recordedShellIdentity("room", fixture.page)
+	manifest := make([]byte, 2+32*3)
+	manifest[0], manifest[1] = 3, 1
 	for i, segment := range [][]byte{prefix, middle, suffix} {
-		if _, ok := server.pieces.Put(recordedShellSegmentKey(key, i), segment, compressGzip(segment)); !ok {
+		key := shellSegmentKey(identity, i)
+		copy(manifest[2+32*i:], key[:])
+		if _, ok := server.pieces.PutDigest(key, segment, compressGzip(segment)); !ok {
 			b.Fatalf("segment %d rejected", i)
 		}
 	}
-	payload, ok := server.pieces.Put("message-list/benchmark/", payloadRaw, compressGzip(payloadRaw))
+	if _, ok := server.pieces.PutDigest(identity, manifest, nil); !ok {
+		b.Fatal("manifest rejected")
+	}
+	payload, ok := server.pieces.PutDigest([32]byte{0x42}, payloadRaw, compressGzip(payloadRaw))
 	if !ok {
 		b.Fatal("payload rejected")
 	}

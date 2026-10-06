@@ -459,3 +459,80 @@ func TestLimitFromEnvDefault(t *testing.T) {
 		t.Fatalf("DefaultLimit = %d, want 32 MiB", DefaultLimit)
 	}
 }
+
+// TestDigestKeysAreAFirstClassKeySpace pins the fixed-size key API used by the
+// recorded-response path: digest keys hit and replace their own entries, never
+// collide with string keys, and participate in the same byte budget and LRU as
+// string entries.
+func TestDigestKeysAreAFirstClassKeySpace(t *testing.T) {
+	cache := New(1 << 20)
+	key := sha256.Sum256([]byte("recorded-shell/room"))
+	raw := []byte("segment bytes")
+	entry, ok := cache.PutDigest(key, raw, mustMember(t, raw))
+	if !ok {
+		t.Fatal("digest Put rejected")
+	}
+	if got := cache.GetDigest(key); got != entry {
+		t.Fatal("digest Get did not return the stored entry")
+	}
+	if got := cache.Get(string(key[:])); got != nil {
+		t.Fatal("digest key visible in the string key space")
+	}
+	// A different digest with identical bytes is a different key.
+	other := sha256.Sum256([]byte("recorded-shell/search"))
+	if got := cache.GetDigest(other); got != nil {
+		t.Fatal("unrelated digest hit")
+	}
+	// Replacement under the same digest swaps the entry, not the key space.
+	replacement := []byte("replacement bytes")
+	second, ok := cache.PutDigest(key, replacement, mustMember(t, replacement))
+	if !ok || second == entry {
+		t.Fatal("digest replacement failed")
+	}
+	if got := cache.GetDigest(key); got != second {
+		t.Fatal("digest Get did not return the replacement")
+	}
+	if got := cache.GetDigest(other); got != nil {
+		t.Fatal("replacement created an unrelated digest entry")
+	}
+}
+
+// TestDigestKeysEvictWithStringKeys exercises one LRU over both key spaces: the
+// evicted element must be removed from the map that owns it.
+func TestDigestKeysEvictWithStringKeys(t *testing.T) {
+	raw := bytes.Repeat([]byte("x"), 160)
+	member := mustMember(t, raw)
+	entryBytes := 32 + len(raw) + len(member) + 240
+	cache := New(entryBytes * 4)
+	if _, ok := cache.Put("string-a", raw, member); !ok {
+		t.Fatal("string-a rejected")
+	}
+	digestA := sha256.Sum256([]byte("digest-a"))
+	if _, ok := cache.PutDigest(digestA, raw, member); !ok {
+		t.Fatal("digest-a rejected")
+	}
+	if _, ok := cache.Put("string-b", raw, member); !ok {
+		t.Fatal("string-b rejected")
+	}
+	digestB := sha256.Sum256([]byte("digest-b"))
+	if _, ok := cache.PutDigest(digestB, raw, member); !ok {
+		t.Fatal("digest-b rejected")
+	}
+	// Touching string-a makes the digest-a entry the oldest; the next insert
+	// triggers the prune-to-75% pass and must evict it from the digest map.
+	if got := cache.Get("string-a"); got == nil {
+		t.Fatal("string-a missing")
+	}
+	if _, ok := cache.Put("string-c", raw, member); !ok {
+		t.Fatal("string-c rejected")
+	}
+	if got := cache.GetDigest(digestA); got != nil {
+		t.Fatal("evicted digest entry still resolvable")
+	}
+	if got := cache.Get("string-a"); got == nil {
+		t.Fatal("recent string entry evicted")
+	}
+	if got := cache.GetDigest(digestB); got == nil {
+		t.Fatal("live digest entry evicted")
+	}
+}

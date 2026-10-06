@@ -6,14 +6,18 @@
 // per-piece record scratch, and a caller buffer too small for the encoded
 // pieces grows once.
 //
-// Keys are content versions (a room's message version, a user's session
-// version), not URLs: an entry is never updated, so a version bump simply
-// misses and the next request stores a fresh piece. Entries returned by
-// NewEntry and Put are immutable; Get hands out the same pointer with no copy,
-// and a replacement under one key publishes a new entry instead of editing the
-// old one. Readers may keep and use an entry after it has been evicted or
-// replaced. Immutability holds by convention: every reader shares one entry,
-// so a caller must never write through Entry.Raw or Entry.Member.
+// Keys are content versions. Two key spaces share one budget and one recency
+// order: string keys for version strings (a room's message version, a user's
+// session version) and fixed-size [32]byte digest keys for callers that build
+// a content identity in place (the recorded-response path in internal/web, so
+// key construction allocates nothing per request). An entry is never updated,
+// so a version bump simply misses and the next request stores a fresh piece.
+// Entries returned by NewEntry and Put are immutable; Get hands out the same
+// pointer with no copy, and a replacement under one key publishes a new entry
+// instead of editing the old one. Readers may keep and use an entry after it
+// has been evicted or replaced. Immutability holds by convention: every reader
+// shares one entry, so a caller must never write through Entry.Raw or
+// Entry.Member.
 //
 // No HTTP or template types cross this boundary: callers bring version strings
 // and complete gzip members, and take away bytes and a digest.
@@ -69,21 +73,32 @@ func NewEntry(raw, member []byte) *Entry {
 }
 
 // Cache is a byte-bounded LRU of immutable pieces, safe for concurrent use.
+// It holds two key spaces over one budget and one recency order: string keys
+// for content-version strings, and fixed-size digest keys for callers that
+// build a content identity in place (internal/web's recorded responses).
 // The zero value is not usable; call New.
 type Cache struct {
 	mu      sync.Mutex
 	entries map[string]*list.Element
+	digests map[[32]byte]*list.Element
 	order   list.List
 	bytes   int
 	limit   int
 }
 
+// digestKeyBytes is the charged key length of a digest key, matching the
+// len(key) term string keys use.
+const digestKeyBytes = 32
+
 // item is the list element payload. key and bytes live here, not on Entry, so
-// an entry handed to a reader carries no cache bookkeeping.
+// an entry handed to a reader carries no cache bookkeeping. byDigest selects
+// which map owns the element.
 type item struct {
-	key   string
-	bytes int
-	entry *Entry
+	key      string
+	digest   [32]byte
+	byDigest bool
+	bytes    int
+	entry    *Entry
 }
 
 // New returns a cache bounded to limit bytes. A non-positive limit disables
@@ -91,7 +106,7 @@ type item struct {
 // without a nil check (CAMPFIRE_FRAGMENT_CACHE_MB=0 does the same to the
 // legacy fragment cache).
 func New(limit int) *Cache {
-	return &Cache{entries: make(map[string]*list.Element), limit: limit}
+	return &Cache{entries: make(map[string]*list.Element), digests: make(map[[32]byte]*list.Element), limit: limit}
 }
 
 // Enabled reports whether the cache can store anything at all. Put still
@@ -114,6 +129,20 @@ func (c *Cache) Get(key string) *Entry {
 	return element.Value.(*item).entry
 }
 
+// GetDigest is Get for a fixed-size content digest. Digest keys never need
+// formatting or allocation, so a caller can hash its inputs in place on every
+// request.
+func (c *Cache) GetDigest(key [32]byte) *Entry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	element, ok := c.digests[key]
+	if !ok {
+		return nil
+	}
+	c.order.MoveToFront(element)
+	return element.Value.(*item).entry
+}
+
 // Put copies raw and member into a new immutable entry, computes the SHA-256
 // digest of raw, and — when it fits — publishes it under key, replacing any
 // previous entry in one lock acquisition. It reports false when the charged
@@ -127,7 +156,17 @@ func (c *Cache) Get(key string) *Entry {
 // swap is critical. A concurrent reader therefore observes either the old
 // entry or the new one, both complete — never a half-updated mix.
 func (c *Cache) Put(key string, raw, member []byte) (*Entry, bool) {
-	size := len(key) + len(raw) + len(member) + entryOverhead
+	return c.put(item{key: key}, len(key), raw, member)
+}
+
+// PutDigest is Put for a fixed-size content digest key, charged as
+// digestKeyBytes rather than len(key).
+func (c *Cache) PutDigest(key [32]byte, raw, member []byte) (*Entry, bool) {
+	return c.put(item{digest: key, byDigest: true}, digestKeyBytes, raw, member)
+}
+
+func (c *Cache) put(element item, keyBytes int, raw, member []byte) (*Entry, bool) {
+	size := keyBytes + len(raw) + len(member) + entryOverhead
 	entry := NewEntry(raw, member)
 	if size > c.limit/4 {
 		// Not cacheable, but the caller still needs the immutable piece for
@@ -137,12 +176,23 @@ func (c *Cache) Put(key string, raw, member []byte) (*Entry, bool) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if previous, ok := c.entries[key]; ok {
+	if element.byDigest {
+		if previous, ok := c.digests[element.digest]; ok {
+			c.bytes -= previous.Value.(*item).bytes
+			c.order.Remove(previous)
+		}
+	} else if previous, ok := c.entries[element.key]; ok {
 		c.bytes -= previous.Value.(*item).bytes
 		c.order.Remove(previous)
 	}
+	element.bytes = size
+	element.entry = entry
+	if element.byDigest {
+		c.digests[element.digest] = c.order.PushFront(&element)
+	} else {
+		c.entries[element.key] = c.order.PushFront(&element)
+	}
 	c.bytes += size
-	c.entries[key] = c.order.PushFront(&item{key: key, bytes: size, entry: entry})
 	if c.bytes > c.limit {
 		// Same policy as internal/web/fragments.go: prune oldest-first to 75%
 		// of the budget, not merely back under it.
@@ -153,7 +203,11 @@ func (c *Cache) Put(key string, raw, member []byte) (*Entry, bool) {
 			}
 			evicted := oldest.Value.(*item)
 			c.bytes -= evicted.bytes
-			delete(c.entries, evicted.key)
+			if evicted.byDigest {
+				delete(c.digests, evicted.digest)
+			} else {
+				delete(c.entries, evicted.key)
+			}
 			c.order.Remove(oldest)
 		}
 	}

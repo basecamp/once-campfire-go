@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"html/template"
+	"strconv"
 
 	"net/http"
 	"strings"
@@ -35,6 +36,22 @@ func messageListKey(messages []database.Message) string {
 	return key.String()
 }
 
+// messageListIdentity hashes the message identities that decide the list's
+// bytes: every message's id and updated-at stamp. It appends into a stack
+// scratch and hashes in place, so a 40-message page costs no per-message
+// Stamp string, FormatInt or growing builder on the hit path.
+func messageListIdentity(messages []database.Message) [32]byte {
+	var scratch [2048]byte
+	buf := scratch[:0]
+	for i := range messages {
+		buf = strconv.AppendInt(buf, messages[i].ID, 10)
+		buf = append(buf, ';')
+		buf = messages[i].UpdatedAt.UTC().AppendFormat(buf, "2006-01-02T15:04:05.000000")
+		buf = append(buf, '|')
+	}
+	return sha256.Sum256(buf)
+}
+
 // recordedMessageList returns the message-list payload for a recorded page,
 // caching it as a compressed piece on the piece path. The key is content
 // derived (message ids and updated-at stamps), so writes invalidate by key
@@ -47,8 +64,8 @@ func (s *Server) recordedMessageList(ctx context.Context, messages []database.Me
 		entry, err := s.messageList(ctx, messages)
 		return recordedPayload{fragment: entry}, err
 	}
-	key := messageListKey(messages)
-	if entry := s.pieces.Get(key); entry != nil {
+	identity := messageListIdentity(messages)
+	if entry := s.pieces.GetDigest(identity); entry != nil {
 		return recordedPayload{piece: entry}, nil
 	}
 	views, err := s.messageItems(ctx, messages)
@@ -64,7 +81,7 @@ func (s *Server) recordedMessageList(ctx context.Context, messages []database.Me
 	if needMember || s.pieces.Enabled() {
 		member = compressGzip(raw)
 	}
-	entry, _ := s.pieces.Put(key, raw, member)
+	entry, _ := s.pieces.PutDigest(identity, raw, member)
 	return recordedPayload{piece: entry}, nil
 }
 

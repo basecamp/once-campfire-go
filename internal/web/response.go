@@ -31,8 +31,10 @@ type responseBuffer struct {
 	parts     [][]byte
 	// encoded is the single assembled recorded-response body (piece path). It
 	// is sized once from the pieces' total and written in one call; parts
-	// remains the legacy multi-part path.
-	encoded []byte
+	// remains the legacy multi-part path. assembly owns the pooled buffer
+	// behind encoded and is released by finish.
+	encoded  []byte
+	assembly *recordedAssemblyBuffer
 	// encodedLength carries the body length when there are no bytes to write
 	// (a HEAD request on the piece path): assembly is skipped and only the
 	// Content-Length the GET response would have is reported.
@@ -58,6 +60,11 @@ func (w *responseBuffer) finish(r *http.Request) {
 		w.body = borrowBuffer()
 	}
 	defer releaseBuffer(w.body)
+	if w.assembly != nil {
+		assembly := w.assembly
+		w.assembly = nil
+		defer assembly.release()
+	}
 	if w.status == 0 {
 		w.status = 200
 	}

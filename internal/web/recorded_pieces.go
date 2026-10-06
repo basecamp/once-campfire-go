@@ -6,9 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -19,6 +17,7 @@ import (
 
 	"github.com/basecamp/once-campfire-go/internal/httpcompat"
 	"github.com/basecamp/once-campfire-go/internal/piececache"
+	"github.com/basecamp/once-campfire-go/internal/useragent"
 )
 
 // This file is the recorded-response piece path. A recorded page is stored as
@@ -78,23 +77,113 @@ func recordedMessageMarker() template.HTML {
 	return template.HTML("\x00campfire-" + rand.Text() + "\x00")
 }
 
-// recordedShellKey identifies a shell by every page input the template reads,
-// minus the message list (the payload piece), its marker and the loadedAt value
-// (inserted per request). The message count is part of the key because
-// layout-start renders len(.Messages) on the search page.
-func recordedShellKey(name string, p page) (string, error) {
-	messageCount := len(p.Messages)
-	p.Messages, p.MessagesHTML, p.LoadedAt = nil, "", ""
-	raw, err := json.Marshal(p)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("recorded-shell/%s/%x/%d", name, sha256.Sum256(raw), messageCount), nil
+// recordedShellIdentity hashes exactly the page inputs the three recorded
+// templates read. It replaces json.Marshal of the whole page: the append below
+// is allocation-free for ordinary pages (one stack scratch) and the digest is
+// the cache key itself.
+//
+// The field list is an audit of layout-start, room, search, messages,
+// composer, optimistic and the notification help templates. Anything that
+// changes rendered bytes for these routes must be appended here; a missing
+// field would let two different pages share a shell. The fields that
+// deliberately do not participate are the message list (its own piece), its
+// marker, and the loadedAt value (inserted per request).
+func recordedShellIdentity(name string, p page) [32]byte {
+	var scratch [2048]byte
+	buf := appendShellIdentity(scratch[:0], name, p)
+	return sha256.Sum256(buf)
 }
 
-func recordedShellLayoutKey(key string) string { return key + "/layout" }
-func recordedShellSegmentKey(key string, i int) string {
-	return key + "/" + strconv.Itoa(i)
+func appendShellIdentity(buf []byte, name string, p page) []byte {
+	buf = appendFieldString(buf, name)
+
+	// layout-start
+	buf = appendFieldString(buf, p.Title)
+	buf = appendFieldBool(buf, p.Frame)
+	buf = appendFieldBool(buf, p.Reload)
+	buf = appendFieldBool(buf, p.Chat)
+	buf = appendFieldString(buf, p.Screen)
+	buf = appendFieldString(buf, p.BodyClass)
+	buf = appendFieldString(buf, p.Notice)
+	buf = appendFieldString(buf, p.Error)
+	buf = appendFieldString(buf, p.BackPath)
+	buf = appendFieldString(buf, p.Version)
+	buf = appendFieldString(buf, p.VAPIDPublicKey)
+	buf = appendFieldString(buf, string(p.CustomStyles))
+	buf = appendFieldInt(buf, p.User.ID)
+	buf = appendFieldString(buf, p.User.Name)
+	buf = appendFieldString(buf, p.User.Bio)
+	buf = appendFieldInt(buf, int64(p.User.Role))
+	buf = appendFieldInt(buf, int64(p.User.Status))
+	buf = appendFieldTime(buf, p.User.UpdatedAt)
+	buf = appendFieldBool(buf, p.Account.HasLogo)
+	buf = appendFieldTime(buf, p.Account.UpdatedAt)
+	buf = appendFieldInt(buf, p.Room.ID)
+	buf = appendFieldString(buf, p.Room.Name)
+	buf = appendFieldString(buf, p.Room.Type)
+	buf = appendFieldTime(buf, p.Room.UpdatedAt)
+
+	// room
+	buf = appendFieldBool(buf, p.Invitation)
+	buf = appendFieldString(buf, p.Origin)
+	buf = appendFieldString(buf, p.Stream)
+
+	// Notification help renders on the room page through layout-start.
+	buf = appendPlatformIdentity(buf, p.Platform)
+
+	// search
+	buf = appendFieldString(buf, p.Query)
+	buf = appendFieldInt(buf, p.ReturnRoom)
+	for _, recent := range p.RecentSearches {
+		buf = appendFieldString(buf, recent)
+	}
+
+	// layout-start renders len(.Messages) on the search page.
+	return appendFieldInt(buf, int64(len(p.Messages)))
+}
+
+// Each field is self-delimiting: strings carry their length, numbers and times
+// end with ';', booleans are one byte. With a fixed field order the
+// concatenation is injective, so a changed input always changes the digest.
+func appendFieldString(buf []byte, value string) []byte {
+	buf = strconv.AppendInt(buf, int64(len(value)), 10)
+	buf = append(buf, ':')
+	return append(buf, value...)
+}
+
+func appendFieldInt(buf []byte, value int64) []byte {
+	buf = strconv.AppendInt(buf, value, 10)
+	return append(buf, ';')
+}
+
+func appendFieldBool(buf []byte, value bool) []byte {
+	if value {
+		return append(buf, '1')
+	}
+	return append(buf, '0')
+}
+
+func appendFieldTime(buf []byte, value time.Time) []byte {
+	buf = strconv.AppendInt(buf, value.UnixNano(), 10)
+	return append(buf, ';')
+}
+
+func appendPlatformIdentity(buf []byte, platform useragent.Platform) []byte {
+	for _, flag := range []bool{platform.IOS, platform.Android, platform.Mac, platform.Windows, platform.Chrome, platform.Firefox, platform.Safari, platform.Edge, platform.Mobile, platform.Desktop, platform.AppleMessages} {
+		buf = appendFieldBool(buf, flag)
+	}
+	buf = appendFieldString(buf, platform.Browser)
+	return appendFieldString(buf, platform.OperatingSystem)
+}
+
+// shellSegmentKey derives one segment key from the shell identity. Only the
+// miss path computes these; a hit reads them from the layout entry, so no
+// hashing happens per request.
+func shellSegmentKey(identity [32]byte, segment int) [32]byte {
+	var buf [33]byte
+	copy(buf[:], identity[:])
+	buf[32] = byte(segment)
+	return sha256.Sum256(buf[:])
 }
 
 // splitRecordedShell cuts a rendered page at its insertion markers. The
@@ -154,11 +243,8 @@ func splitRecordedShell(rendered []byte, loadedMarker, messageMarker string) (sh
 // is being assembled, the members would be discarded immediately, so segment
 // compression is skipped.
 func (s *Server) shellPieces(p page, name string, needMember bool) (recordedShell, error) {
-	key, err := recordedShellKey(name, p)
-	if err != nil {
-		return recordedShell{}, err
-	}
-	switch shell, status := s.loadShell(key); status {
+	identity := recordedShellIdentity(name, p)
+	switch shell, status := s.loadShell(identity); status {
 	case shellHit:
 		return shell, nil
 	case shellUnavailable:
@@ -177,7 +263,7 @@ func (s *Server) shellPieces(p page, name string, needMember bool) (recordedShel
 	if err != nil {
 		// A tombstone prevents the next request from rendering the shell only
 		// to fail the same split; the caller serves the legacy render instead.
-		s.pieces.Put(recordedShellLayoutKey(key), []byte{0}, nil)
+		s.pieces.PutDigest(identity, []byte{0}, nil)
 		return recordedShell{}, err
 	}
 	var shell recordedShell
@@ -187,15 +273,20 @@ func (s *Server) shellPieces(p page, name string, needMember bool) (recordedShel
 			shell.loadedMask |= 1 << i
 		}
 	}
-	s.pieces.Put(recordedShellLayoutKey(key), []byte{byte(layout.count), shell.loadedMask}, nil)
+	// The layout entry names its segments so a hit never re-hashes.
+	manifest := make([]byte, 2+32*layout.count)
+	manifest[0], manifest[1] = byte(layout.count), shell.loadedMask
 	for i := 0; i < layout.count; i++ {
+		key := shellSegmentKey(identity, i)
+		copy(manifest[2+32*i:], key[:])
 		var member []byte
 		if needMember || s.pieces.Enabled() {
 			member = compressGzip(layout.segments[i])
 		}
-		entry, _ := s.pieces.Put(recordedShellSegmentKey(key, i), layout.segments[i], member)
+		entry, _ := s.pieces.PutDigest(key, layout.segments[i], member)
 		shell.segments[i] = entry
 	}
+	s.pieces.PutDigest(identity, manifest, nil)
 	return shell, nil
 }
 
@@ -210,25 +301,27 @@ const (
 
 // loadShell rebuilds a shell from the cache. A missing layout or segment is a
 // miss: the caller renders and re-stores. A one-byte layout is the tombstone
-// left by a failed split.
-func (s *Server) loadShell(key string) (recordedShell, shellStatus) {
-	layout := s.pieces.Get(recordedShellLayoutKey(key))
-	if layout == nil {
+// left by a failed split; a layout whose manifest is malformed is a miss too.
+func (s *Server) loadShell(identity [32]byte) (recordedShell, shellStatus) {
+	manifest := s.pieces.GetDigest(identity)
+	if manifest == nil {
 		return recordedShell{}, shellMiss
 	}
-	if len(layout.Raw) == 1 {
+	if len(manifest.Raw) == 1 {
 		return recordedShell{}, shellUnavailable
 	}
-	if len(layout.Raw) != 2 {
+	if len(manifest.Raw) < 2 {
 		return recordedShell{}, shellMiss
 	}
-	count, mask := int(layout.Raw[0]), layout.Raw[1]
-	if count < 2 || count > 3 || mask>>(count-1) != 0 {
+	count, mask := int(manifest.Raw[0]), manifest.Raw[1]
+	if count < 2 || count > 3 || mask>>(count-1) != 0 || len(manifest.Raw) != 2+32*count {
 		return recordedShell{}, shellMiss
 	}
 	shell := recordedShell{count: count, loadedMask: mask}
 	for i := 0; i < count; i++ {
-		entry := s.pieces.Get(recordedShellSegmentKey(key, i))
+		var key [32]byte
+		copy(key[:], manifest.Raw[2+32*i:])
+		entry := s.pieces.GetDigest(key)
 		if entry == nil {
 			return recordedShell{}, shellMiss
 		}
@@ -293,8 +386,9 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 	if gzipped {
 		var loaded *piececache.Entry
 		if shell.loadedMask != 0 {
-			raw := []byte(p.LoadedAt)
-			loaded = piececache.NewEntry(raw, compressGzip(raw))
+			var release func()
+			loaded, release = borrowLoadedAt(p.LoadedAt)
+			defer release()
 		}
 		var partsBuf [5]*piececache.Entry
 		parts := partsBuf[:0]
@@ -325,26 +419,35 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 			}
 			return true, nil
 		}
+		var assembly *recordedAssemblyBuffer
 		var dst []byte
 		if buffered != nil {
-			dst = buffered.encoded[:0]
+			assembly = borrowAssemblyBuffer()
+			dst = assembly.buf[:0]
 		}
 		encoded, _, err := piececache.Assemble(dst, piececache.Gzip, parts...)
 		if err != nil {
+			assembly.release()
 			return true, err
+		}
+		if assembly != nil {
+			assembly.buf = encoded
 		}
 		s.recordedAssemblies.Add(1)
 		h.Set("Content-Encoding", "gzip")
 		addVaryAcceptEncoding(h)
 		w.WriteHeader(status)
 		if sw, ok := w.(*sessionWriter); ok && sw.failed {
+			assembly.release()
 			return true, nil
 		}
 		if buffered == nil {
 			_, err = w.Write(encoded)
+			assembly.release()
 			return true, err
 		}
 		buffered.encoded = encoded
+		buffered.assembly = assembly
 		return true, nil
 	}
 
@@ -453,10 +556,15 @@ var recordedCompressors = sync.Pool{New: func() any {
 }}
 
 // compressGzip returns a complete gzip member of raw. It is used when a piece
-// is stored and for the per-request loadedAt piece; the writer and buffer are
-// reset before use and the returned bytes are an independent copy, so a pooled
-// buffer can never leak one caller's bytes into another's response.
-func compressGzip(raw []byte) []byte {
+// is stored; the writer and buffer are reset before use and the returned bytes
+// are an independent copy, so a pooled buffer can never leak one caller's
+// bytes into another's response.
+func compressGzip(raw []byte) []byte { return compressGzipInto(nil, raw) }
+
+// compressGzipInto appends a gzip member of raw to dst, reusing the pooled
+// writer. dst may alias the caller's own buffer; the member is fully rewritten
+// from index len(dst) onwards.
+func compressGzipInto(dst, raw []byte) []byte {
 	c := recordedCompressors.Get().(*recordedCompressor)
 	c.buf.Reset()
 	c.writer.Reset(&c.buf)
@@ -464,9 +572,74 @@ func compressGzip(raw []byte) []byte {
 	_, _ = c.writer.Write(raw)
 	_ = c.writer.Close()
 	c.writer.Reset(nil)
-	out := append([]byte(nil), c.buf.Bytes()...)
+	dst = append(dst, c.buf.Bytes()...)
 	if c.buf.Cap() <= 1<<20 {
 		recordedCompressors.Put(c)
 	}
-	return out
+	return dst
+}
+
+// recordedAssemblyLimit caps the buffers the assembly pool retains. A page
+// whose gzip members exceed it is still served from a fresh allocation, it is
+// simply not pooled.
+const recordedAssemblyLimit = 1 << 20
+
+// recordedAssemblyBuffer is one pooled buffer for the assembled gzip body.
+// Ownership belongs to a single responseBuffer from borrow to finish, and
+// Assemble writes the served bytes from index zero, so a reused buffer is
+// always fully overwritten for its length — the poisoning test in
+// recorded_pieces_test.go is the proof. Pooling a pointer keeps Put free of
+// the boxing allocation a bare slice would cost.
+type recordedAssemblyBuffer struct {
+	buf []byte
+}
+
+var recordedAssemblyBuffers = sync.Pool{New: func() any {
+	return &recordedAssemblyBuffer{buf: make([]byte, 0, 64<<10)}
+}}
+
+func borrowAssemblyBuffer() *recordedAssemblyBuffer {
+	return recordedAssemblyBuffers.Get().(*recordedAssemblyBuffer)
+}
+
+// release returns the buffer to the pool. Oversized buffers are dropped so a
+// single huge page cannot pin memory per P.
+func (a *recordedAssemblyBuffer) release() {
+	if a == nil {
+		return
+	}
+	if cap(a.buf) > recordedAssemblyLimit {
+		a.buf = nil
+		return
+	}
+	a.buf = a.buf[:0]
+	recordedAssemblyBuffers.Put(a)
+}
+
+// loadedAtScratch caches one (timestamp value -> gzip member) conversion per
+// pooled scratch: the room page's loadedAt changes at most once per
+// millisecond, so a burst of requests reuses one member. Comparing the value
+// makes a stale pooled member impossible. Digest is deliberately zero: the
+// loadedAt slot is excluded from the response ETag, and only the assembled
+// bytes ever read the piece.
+type loadedAtScratch struct {
+	value  string
+	raw    []byte
+	member []byte
+	entry  piececache.Entry
+}
+
+var loadedAtScratches = sync.Pool{New: func() any { return &loadedAtScratch{} }}
+
+// borrowLoadedAt returns a dynamic gzip piece for value and the release that
+// returns the scratch to the pool. The piece is valid until release.
+func borrowLoadedAt(value string) (*piececache.Entry, func()) {
+	scratch := loadedAtScratches.Get().(*loadedAtScratch)
+	if scratch.member == nil || scratch.value != value {
+		scratch.raw = append(scratch.raw[:0], value...)
+		scratch.member = compressGzipInto(scratch.member[:0], scratch.raw)
+		scratch.value = value
+	}
+	scratch.entry = piececache.Entry{Raw: scratch.raw, Member: scratch.member}
+	return &scratch.entry, func() { loadedAtScratches.Put(scratch) }
 }
