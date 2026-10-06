@@ -29,6 +29,9 @@ type responseBuffer struct {
 	status    int
 	exception bool
 	parts     [][]byte
+	// partsBuf backs parts for the recorded identity path (at most three shell
+	// segments plus two slots), so the piece raws need no per-request slice.
+	partsBuf [5][]byte
 	// encoded is the single assembled recorded-response body (piece path). It
 	// is sized once from the pieces' total and written in one call; parts
 	// remains the legacy multi-part path. assembly owns the pooled buffer

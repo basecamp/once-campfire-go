@@ -39,14 +39,16 @@ func messageListKey(messages []database.Message) string {
 // messageListIdentity hashes the message identities that decide the list's
 // bytes: every message's id and updated-at stamp. It appends into a stack
 // scratch and hashes in place, so a 40-message page costs no per-message
-// Stamp string, FormatInt or growing builder on the hit path.
+// Stamp string or FormatInt allocation. The stamp is the Unix microsecond
+// value, the precision the database stores (database.Stamp writes exactly
+// microseconds), so an edit still changes the identity.
 func messageListIdentity(messages []database.Message) [32]byte {
 	var scratch [2048]byte
 	buf := scratch[:0]
 	for i := range messages {
 		buf = strconv.AppendInt(buf, messages[i].ID, 10)
 		buf = append(buf, ';')
-		buf = messages[i].UpdatedAt.UTC().AppendFormat(buf, "2006-01-02T15:04:05.000000")
+		buf = strconv.AppendInt(buf, messages[i].UpdatedAt.UnixMicro(), 10)
 		buf = append(buf, '|')
 	}
 	return sha256.Sum256(buf)

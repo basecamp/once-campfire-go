@@ -33,6 +33,20 @@ import (
 const HealthBody = `<!DOCTYPE html><html><body style="background-color: green"></body></html>`
 const MaxBody = 16 << 20
 
+// parseRecordedPieces maps a CAMPFIRE_RECORDED_PIECES value to its setting. It
+// reports valid=false for an unrecognised value so the caller can warn while
+// keeping the default on rather than silently changing behaviour.
+func parseRecordedPieces(raw string) (enabled, valid bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "on", "true", "1":
+		return true, true
+	case "off", "false", "0":
+		return false, true
+	default:
+		return true, false
+	}
+}
+
 type Server struct {
 	fragments *fragmentCache
 	// pieces stores recorded-response pieces (raw + gzip member + digest)
@@ -165,11 +179,9 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 	// change serving.
 	recordedPieces := true
 	if raw, ok := os.LookupEnv("CAMPFIRE_RECORDED_PIECES"); ok {
-		switch strings.ToLower(strings.TrimSpace(raw)) {
-		case "", "on", "true", "1":
-		case "off", "false", "0":
-			recordedPieces = false
-		default:
+		var valid bool
+		recordedPieces, valid = parseRecordedPieces(raw)
+		if !valid {
 			slog.Warn("invalid CAMPFIRE_RECORDED_PIECES; keeping pieces on", "value", raw)
 		}
 	}
@@ -421,14 +433,17 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	}
 	var recorded *recordedPayload
 	var raw []database.Message
+	gzipped := false
 	if len(p.Messages) > 0 {
 		raw = make([]database.Message, len(p.Messages))
 		for i, m := range p.Messages {
 			raw[i] = m.Message
 		}
 		if name == "room" || name == "messages" || name == "search" {
-			needMember := s.recordedPieces && clientAcceptsGzip(r)
-			payload, listErr := s.recordedMessageList(r.Context(), raw, needMember)
+			// One negotiation per request: recordedMessageList needs it for
+			// storage, writeRecordedPieces for the response form.
+			gzipped = clientAcceptsGzip(r)
+			payload, listErr := s.recordedMessageList(r.Context(), raw, s.recordedPieces && gzipped)
 			if listErr != nil {
 				s.fail(w, listErr)
 				return
@@ -455,7 +470,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	}
 	if s.recordedPieces && recorded != nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		handled, renderErr := s.writeRecordedPieces(w, r, status, name, p, *recorded)
+		handled, renderErr := s.writeRecordedPieces(w, r, status, name, p, *recorded, gzipped)
 		if renderErr != nil {
 			s.fail(w, renderErr)
 			return

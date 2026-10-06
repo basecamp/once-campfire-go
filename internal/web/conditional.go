@@ -22,8 +22,12 @@ func notModified(w http.ResponseWriter, r *http.Request, etag string, modified t
 				}
 			}
 		}
-	} else if since, err := http.ParseTime(r.Header.Get("If-Modified-Since")); err == nil && !modified.IsZero() {
-		fresh = !since.Before(modified.Truncate(time.Second))
+	} else if value := r.Header.Get("If-Modified-Since"); value != "" && !modified.IsZero() {
+		// Parse only when the date could matter: on the recorded piece path
+		// modified is always zero, and http.ParseTime allocates even for "".
+		if since, err := http.ParseTime(value); err == nil {
+			fresh = !since.Before(modified.Truncate(time.Second))
+		}
 	}
 	if fresh {
 		w.Header().Del("Content-Type")

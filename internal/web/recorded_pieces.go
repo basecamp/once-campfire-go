@@ -332,7 +332,9 @@ func (s *Server) loadShell(identity [32]byte) (recordedShell, shellStatus) {
 
 // writeRecordedPieces serves a recorded response from cached pieces. It returns
 // handled=false, before writing anything, when the page shell cannot be split
-// into pieces; the caller then renders the legacy way.
+// into pieces; the caller then renders the legacy way. gzipped is the request's
+// encoding decision, computed once by the caller so this path and
+// recordedMessageList agree without a second negotiation.
 //
 // Order of operations is the 304 contract: the ETag covers the cache-stable
 // pieces only, and a matching If-None-Match returns before any assembly. A
@@ -341,13 +343,12 @@ func (s *Server) loadShell(identity [32]byte) (recordedShell, shellStatus) {
 // the pieces' raw bytes through the parts channel, which is already the wire
 // form and copies nothing. HEAD requests skip assembly and report the length
 // the GET body would have.
-func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, status int, name string, p page, recorded recordedPayload) (bool, error) {
+func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, status int, name string, p page, recorded recordedPayload, gzipped bool) (bool, error) {
 	payload := recorded.piece
 	if payload == nil {
 		s.recordedShellFallbacks.Add(1)
 		return false, nil
 	}
-	gzipped := clientAcceptsGzip(r)
 	shell, err := s.shellPieces(p, name, gzipped)
 	if err != nil {
 		s.recordedShellFallbacks.Add(1)
@@ -386,9 +387,9 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 	if gzipped {
 		var loaded *piececache.Entry
 		if shell.loadedMask != 0 {
-			var release func()
-			loaded, release = borrowLoadedAt(p.LoadedAt)
-			defer release()
+			scratch := borrowLoadedAt(p.LoadedAt)
+			defer scratch.release()
+			loaded = &scratch.entry
 		}
 		var partsBuf [5]*piececache.Entry
 		parts := partsBuf[:0]
@@ -454,8 +455,13 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 	// Identity: the pieces' raw bytes are already the wire form. Serving them
 	// through the parts channel keeps the response zero-copy, exactly as the
 	// legacy recorded path did; only the gzip form needs an assembly buffer.
-	var rawBuf [5][]byte
-	raws := rawBuf[:0]
+	var raws [][]byte
+	if buffered != nil {
+		raws = buffered.partsBuf[:0]
+	} else {
+		var stack [5][]byte
+		raws = stack[:0]
+	}
 	for i := 0; i < shell.count; i++ {
 		raws = append(raws, shell.segments[i].Raw)
 		if i >= shell.count-1 {
@@ -510,8 +516,14 @@ func findResponseBuffer(w http.ResponseWriter) *responseBuffer {
 }
 
 // weakETag spells the validator the way Rack::ETag does: W/"<low 16 bytes>".
+// The hex digits go into a stack buffer; the returned string is the one the
+// header map needs anyway.
 func weakETag(digest [32]byte) string {
-	return `W/"` + hex.EncodeToString(digest[:16]) + `"`
+	var buf [3 + 32 + 1]byte
+	copy(buf[:3], `W/"`)
+	hex.Encode(buf[3:35], digest[:16])
+	buf[35] = '"'
+	return string(buf[:])
 }
 
 // addVaryAcceptEncoding mirrors front.addVary: append the token unless it (or a
@@ -631,9 +643,10 @@ type loadedAtScratch struct {
 
 var loadedAtScratches = sync.Pool{New: func() any { return &loadedAtScratch{} }}
 
-// borrowLoadedAt returns a dynamic gzip piece for value and the release that
-// returns the scratch to the pool. The piece is valid until release.
-func borrowLoadedAt(value string) (*piececache.Entry, func()) {
+// borrowLoadedAt returns a dynamic gzip piece scratch for value. The caller
+// must release it once the assembled response no longer reads the entry; the
+// method call avoids a per-request closure allocation.
+func borrowLoadedAt(value string) *loadedAtScratch {
 	scratch := loadedAtScratches.Get().(*loadedAtScratch)
 	if scratch.member == nil || scratch.value != value {
 		scratch.raw = append(scratch.raw[:0], value...)
@@ -641,5 +654,7 @@ func borrowLoadedAt(value string) (*piececache.Entry, func()) {
 		scratch.value = value
 	}
 	scratch.entry = piececache.Entry{Raw: scratch.raw, Member: scratch.member}
-	return &scratch.entry, func() { loadedAtScratches.Put(scratch) }
+	return scratch
 }
+
+func (c *loadedAtScratch) release() { loadedAtScratches.Put(c) }

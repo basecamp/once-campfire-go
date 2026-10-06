@@ -1,7 +1,6 @@
 package httpcompat
 
 import (
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -16,88 +15,141 @@ import (
 // The rules mirror the middleware's historical behaviour, including its
 // treatment of duplicates: a q=0 occurrence rejects the token outright, a
 // wildcard expands to the unmentioned names, and gzip wins ties against
-// identity.
+// identity. The scan is allocation-free: tokens are parsed in place into a
+// stack array and the winner is the highest-ranked non-rejected gzip or
+// identity token (quality first, then preference), which is the ordering the
+// middleware used to obtain by sorting the token list.
 func Encoding(header string) string {
-	type item struct {
-		name       string
-		q          float64
-		preference int
-	}
-	var accepts []item
-	for _, part := range strings.Split(header, ",") {
+	var accepts [16]encodingItem
+	count := 0
+	for count < len(accepts) {
+		var part string
+		if comma := strings.IndexByte(header, ','); comma >= 0 {
+			part, header = header[:comma], header[comma+1:]
+		} else {
+			part, header = header, ""
+		}
 		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		name, param, _ := strings.Cut(part, ";")
-		name = strings.TrimSpace(name)
-		q := 1.0
-		param = strings.TrimSpace(param)
-		if strings.HasPrefix(param, "q=") {
-			value := strings.TrimPrefix(param, "q=")
-			end := 0
-			for end < len(value) && (value[end] >= '0' && value[end] <= '9' || value[end] == '.') {
-				end++
+		if part != "" {
+			name, params, _ := strings.Cut(part, ";")
+			name = strings.TrimSpace(name)
+			q := 1.0
+			params = strings.TrimSpace(params)
+			if strings.HasPrefix(params, "q=") {
+				q = quality(params[2:])
 			}
-			if end > 0 {
-				q, _ = strconv.ParseFloat(value[:end], 64)
+			pref := 2
+			if name == "gzip" {
+				pref = 0
+			} else if name == "identity" {
+				pref = 1
 			}
+			accepts[count] = encodingItem{name: name, q: q, pref: pref}
+			count++
 		}
-		p := 2
-		if name == "gzip" {
-			p = 0
-		} else if name == "identity" {
-			p = 1
-		}
-		accepts = append(accepts, item{name, q, p})
-		if len(accepts) == 16 {
+		if header == "" {
 			break
 		}
 	}
-	var expanded []item
+
+	explicitGzip, explicitIdentity := false, false
+	for i := 0; i < count; i++ {
+		switch accepts[i].name {
+		case "gzip":
+			explicitGzip = true
+		case "identity":
+			explicitIdentity = true
+		}
+	}
+
+	var (
+		gzipRejected, identityRejected bool
+		gzipQ, identityQ               = -1.0, -1.0
+		gzipPref, identityPref         = 3, 3
+		expandedIdentity               bool
+	)
+	add := func(name string, q float64, pref int) {
+		if q == 0 {
+			switch name {
+			case "gzip":
+				gzipRejected = true
+			case "identity":
+				identityRejected = true
+			}
+		}
+		switch name {
+		case "gzip":
+			if q > gzipQ || (q == gzipQ && pref < gzipPref) {
+				gzipQ, gzipPref = q, pref
+			}
+		case "identity":
+			expandedIdentity = true
+			if q > identityQ || (q == identityQ && pref < identityPref) {
+				identityQ, identityPref = q, pref
+			}
+		}
+	}
 	wildcard := false
-	for _, item := range accepts {
+	for i := 0; i < count; i++ {
+		item := accepts[i]
 		if item.name != "*" {
-			expanded = append(expanded, item)
+			add(item.name, item.q, item.pref)
 			continue
 		}
 		if wildcard {
 			continue
 		}
 		wildcard = true
-		for _, name := range []string{"gzip", "identity"} {
-			found := false
-			for _, v := range accepts {
-				found = found || v.name == name
-			}
-			if !found {
-				copy := item
-				copy.name = name
-				expanded = append(expanded, copy)
-			}
+		if !explicitGzip {
+			add("gzip", item.q, item.pref)
+		}
+		if !explicitIdentity {
+			add("identity", item.q, item.pref)
 		}
 	}
-	rejected := map[string]bool{}
-	hasIdentity := false
-	for _, item := range expanded {
-		if item.q == 0 {
-			rejected[item.name] = true
+
+	bestName := ""
+	bestQ := -1.0
+	bestPref := 3
+	consider := func(name string, q float64, pref int, rejected bool) {
+		if rejected || q < 0 {
+			return
 		}
-		hasIdentity = hasIdentity || item.name == "identity"
+		if q > bestQ || (q == bestQ && pref < bestPref) {
+			bestName, bestQ, bestPref = name, q, pref
+		}
 	}
-	sort.SliceStable(expanded, func(i, j int) bool {
-		if expanded[i].q == expanded[j].q {
-			return expanded[i].preference < expanded[j].preference
-		}
-		return expanded[i].q > expanded[j].q
-	})
-	if !hasIdentity {
-		expanded = append(expanded, item{name: "identity"})
+	consider("gzip", gzipQ, gzipPref, gzipRejected)
+	consider("identity", identityQ, identityPref, identityRejected)
+	if bestName != "" {
+		return bestName
 	}
-	for _, item := range expanded {
-		if !rejected[item.name] && (item.name == "gzip" || item.name == "identity") {
-			return item.name
-		}
+	// The middleware appended an identity fallback whenever the header never
+	// mentioned identity at all; that fallback is never rejected.
+	if !expandedIdentity {
+		return "identity"
 	}
 	return ""
+}
+
+// encodingItem is one parsed Accept-Encoding token.
+type encodingItem struct {
+	name string
+	q    float64
+	pref int
+}
+
+// quality parses the numeric prefix of a q= parameter. A malformed value
+// yields 0, exactly as the original inline parse did: the failed ParseFloat
+// result was assigned unconditionally.
+func quality(value string) float64 {
+	end := 0
+	for end < len(value) && (value[end] >= '0' && value[end] <= '9' || value[end] == '.') {
+		end++
+	}
+	if end == 0 {
+		return 1.0
+	}
+	q, _ := strconv.ParseFloat(value[:end], 64)
+	return q
 }

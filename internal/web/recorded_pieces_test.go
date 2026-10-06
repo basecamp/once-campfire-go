@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1092,5 +1093,113 @@ func TestRecordedAssemblyBufferPoisoning(t *testing.T) {
 		if err := <-results; err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestRecordedPiecesFlagParsing pins the CAMPFIRE_RECORDED_PIECES contract:
+// false/0/off disable the piece path, on/true/1 (and unset) keep it on, and an
+// unknown value keeps the default on while warning once at startup.
+func TestRecordedPiecesFlagParsing(t *testing.T) {
+	for _, c := range []struct {
+		value   string
+		enabled bool
+		valid   bool
+	}{
+		{"", true, true},
+		{"on", true, true},
+		{"true", true, true},
+		{"1", true, true},
+		{"ON", true, true},
+		{" off ", false, true},
+		{"false", false, true},
+		{"0", false, true},
+		{"sometimes", true, false},
+		{"no", true, false},
+	} {
+		enabled, valid := parseRecordedPieces(c.value)
+		if enabled != c.enabled || valid != c.valid {
+			t.Errorf("parseRecordedPieces(%q) = (%v, %v), want (%v, %v)", c.value, enabled, valid, c.enabled, c.valid)
+		}
+	}
+	for _, value := range []string{"false", "0", "off"} {
+		t.Setenv("CAMPFIRE_RECORDED_PIECES", value)
+		app, _, _, _ := testApp(t)
+		if app.recordedPieces {
+			t.Fatalf("CAMPFIRE_RECORDED_PIECES=%q kept pieces on", value)
+		}
+	}
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(previous)
+	t.Setenv("CAMPFIRE_RECORDED_PIECES", "sometimes")
+	app, _, _, _ := testApp(t)
+	if !app.recordedPieces {
+		t.Fatal("unknown value disabled pieces")
+	}
+	if !strings.Contains(logs.String(), "invalid CAMPFIRE_RECORDED_PIECES") {
+		t.Fatalf("unknown value did not warn: %q", logs.String())
+	}
+}
+
+// TestRecordedPiecesShellSplitFallback covers the defensive path for a shell
+// shape the splitter cannot use. The first request renders the shell, fails to
+// split it, tombstones the identity and falls back to the legacy render; later
+// requests read the tombstone and serve the legacy render without rendering
+// the shell again (proved by removing the templates for the second request),
+// incrementing the fallback counter each time but warning only once.
+func TestRecordedPiecesShellSplitFallback(t *testing.T) {
+	t.Setenv("CAMPFIRE_FROZEN_TIME", "2026-01-02T03:04:05Z")
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(previous)
+
+	app, _, cookie, user := testApp(t)
+	ctx := context.Background()
+	rooms, err := app.DB.Rooms(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "split", "<p>split fallback marker</p>", "split fallback marker"); err != nil {
+		t.Fatal(err)
+	}
+	// A room template that prints the message marker twice: the splitter
+	// rejects repeated markers, the legacy writeRecorded still cuts at the
+	// first one.
+	broken := template.Must(app.templates.Clone())
+	broken = template.Must(broken.New("room").Parse(`{{define "room"}}{{template "messages" .}}{{template "messages" .}}{{end}}`))
+	app.templates = broken
+
+	request := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", fmt.Sprintf("/rooms/%d", rooms[0].ID), nil)
+		r.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		app.ServeHTTP(w, r)
+		return w
+	}
+	first := request()
+	if first.Code != 200 || !strings.Contains(first.Body.String(), "split fallback marker") {
+		t.Fatalf("first request: %d", first.Code)
+	}
+	if got := app.recordedShellFallbacks.Load(); got != 1 {
+		t.Fatalf("fallbacks after the first request = %d, want 1", got)
+	}
+	if got := app.recordedAssemblies.Load(); got != 0 {
+		t.Fatalf("split failure assembled %d body/bodies", got)
+	}
+	// No template may be executed any more: the message list and the legacy
+	// shell are cached and the identity is tombstoned, so a render attempt
+	// would fail with 500.
+	app.templates = template.New("empty")
+	second := request()
+	if second.Code != 200 {
+		t.Fatalf("second request re-rendered: %d", second.Code)
+	}
+	if got := app.recordedShellFallbacks.Load(); got != 2 {
+		t.Fatalf("fallbacks after the second request = %d, want 2", got)
+	}
+	if got := strings.Count(logs.String(), "recorded response served by the legacy renderer"); got != 1 {
+		t.Fatalf("fallback warnings = %d, want 1", got)
 	}
 }

@@ -120,8 +120,9 @@ func BenchmarkRecordedResponse(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			clear(writer.header)
+			gzipped := clientAcceptsGzip(request)
 			buffered := &responseBuffer{ResponseWriter: writer}
-			if _, err := fixture.server.writeRecordedPieces(buffered, request, 200, "room", fixture.page, recordedPayload{piece: fixture.payload}); err != nil {
+			if _, err := fixture.server.writeRecordedPieces(buffered, request, 200, "room", fixture.page, recordedPayload{piece: fixture.payload}, gzipped); err != nil {
 				b.Fatal(err)
 			}
 			buffered.finish(request)
@@ -132,8 +133,9 @@ func BenchmarkRecordedResponse(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			clear(writer.header)
+			gzipped := clientAcceptsGzip(gzipRequest)
 			buffered := &responseBuffer{ResponseWriter: writer}
-			if _, err := fixture.server.writeRecordedPieces(buffered, gzipRequest, 200, "room", fixture.page, recordedPayload{piece: fixture.payload}); err != nil {
+			if _, err := fixture.server.writeRecordedPieces(buffered, gzipRequest, 200, "room", fixture.page, recordedPayload{piece: fixture.payload}, gzipped); err != nil {
 				b.Fatal(err)
 			}
 			buffered.finish(gzipRequest)
@@ -212,12 +214,13 @@ func BenchmarkRecordedHitPath(b *testing.B) {
 		b.ReportMetric(float64(pageBytes), "body_B")
 		for i := 0; i < b.N; i++ {
 			clear(writer.header)
+			gzipped := clientAcceptsGzip(req)
 			payload, err := app.recordedMessageList(ctx, raw, needMember)
 			if err != nil {
 				b.Fatal(err)
 			}
 			buffered := &responseBuffer{ResponseWriter: writer}
-			if _, err := app.writeRecordedPieces(buffered, req, 200, "room", p, payload); err != nil {
+			if _, err := app.writeRecordedPieces(buffered, req, 200, "room", p, payload, gzipped); err != nil {
 				b.Fatal(err)
 			}
 			buffered.finish(req)
