@@ -2,8 +2,9 @@
 
 The published Go port was 1.5–2.6× slower than the Rust reference, and doing different work:
 other SQL, other caches, `html/template` pages with other bytes, and a different WebSocket
-fan-out. These four steps make Go do the same work as Rust, so that what remains between them is
-the languages, runtimes and libraries rather than the designs.
+fan-out. Steps 1–4 make Go do the same work as Rust; steps 5–9, guided by profiles of both
+applications, take out what the Go port did on top of that work. What remains between them is the
+languages, runtimes and libraries rather than the designs or the port.
 
 1. **Database** (e4c6145): SQLite's C API through a vendored `crawshaw.io/sqlite` with the
    reference's SQLite 3.53.2 and build options, instead of `database/sql` and mattn; the
@@ -17,9 +18,28 @@ the languages, runtimes and libraries rather than the designs.
 3. **Action Cable** (6b7c9f5): the reference's fan-out — subscribers indexed by stream,
    authorization at subscribe time with the reference's revocations, one shared heartbeat, and
    up to 64 frames per vectored write.
-4. **Build and runtime** (this commit): a profile-guided build (`cmd/campfire/default.pgo`, from
+4. **Build and runtime** (8c953b5): a profile-guided build (`cmd/campfire/default.pgo`, from
    the benchmark workloads) and `GOGC=200` by default — Go's counterparts of the reference's fat
    LTO and jemalloc.
+5. **Page buffers** (`gc-fixes-20261005`): a rendered page's text buffer goes back to a pool once
+   its response is written, and the stylesheets' `Link` header is built once instead of by string
+   concatenation on every request. Room pages allocated 116 → 63 KiB per request.
+6. **Rows in one cgo call** (`cgo-rows-20261005`): the vendored binding steps and reads the whole
+   row in one C call (`third_party/sqlite/row.c`), and the column accessors answer from it unless
+   SQLite would convert the value. C calls per request (counted with uprobes): room 875 → 86,
+   messages 882 → 90, sidebar 677 → 80, search 389 → 63.
+7. **Blocks in place** (`sidebar-20261005`): filter blocks are written into the page where they
+   go, and the sidebar's block helpers wrap them there instead of copying them out and back; link
+   attributes are built in one hash; signed ids skip the JSON round trip and reuse their HMACs.
+   Sidebar pages allocated 100 → 61 KiB per request.
+8. **Rows, ETags and cookies** (`cleanup-20261005`): message and membership rows are scanned in
+   place into slices sized for the page; the ETag's records are hashed from one reused buffer; the
+   signed cookie's HMAC and Base64 alphabet replacer are reused.
+9. **Tags in place** (`helpers-20261005`): `ImageTag`, `BuilderTag` and `TurboStreamFrom` build their
+   tags in the page (`{%= ImageTag(...) %}`), and the block helpers their opening tags; message
+   fragments are looked up by a key built on the stack.
+
+Every step keeps all 221 parity URLs byte-identical to Rust's responses.
 
 ## Results
 
@@ -53,23 +73,71 @@ Rust 128 MiB. Posting and Cable are writer- or client-bound and now match Rust; 
 (7.1 ms) and Cable p99 at 1,000 clients (38 ms) are lower than Rust's (8.6 ms, 47 ms). Compressed
 broadcasts are limited by the load generator inflating every frame on 3 CPUs for both applications.
 
+Steps 5–9 were measured the same way, HTTP only (they don't touch Cable), each step's Go against
+the step before it and Rust in one run. Each column is that step's Go; Step 4 is the step 5 run's
+baseline (runs on different days differ by a few percent for both applications), and Rust is from
+the step 9 run.
+
+| Workload | Step 4 | Step 5 | Step 6 | Step 7 | Step 8 | Step 9 | Rust | Rust / Go |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Room page | 15,046 | 16,233 | 18,254 | 16,475* | 19,293 | 20,177 | 21,777 | 1.08× |
+| Messages page | 17,796 | 17,681 | 20,155 | 19,619* | 20,407 | 21,521 | 23,153 | 1.08× |
+| Sidebar | 15,238 | 17,840 | 19,577 | 21,156 | 21,967 | 22,508 | 27,371 | 1.22× |
+| Search | 20,738 | 22,866 | 24,270 | 22,561* | 24,025 | 24,742 | 27,012 | 1.09× |
+| Avatar | 33,549 | 34,015 | 34,969 | 33,300* | 35,215 | 36,106 | 36,919 | 1.02× |
+| Static CSS | 208,518 | 204,066 | 205,620 | 141,297* | 199,689 | 206,872 | 256,552 | 1.24× |
+| Post message | 7,420 | 7,379 | 7,574 | 7,237 | 7,528 | 7,686 | 7,426 | 0.97× |
+
+\* The step 7 run had host interference in some repetitions (Rust's own static CSS dipped to
+119,815); its sidebar row was consistent across two runs. An interleaved A/B of server CPU per
+request (four alternating runs of each build) put step 7 at −10% on the sidebar, −1.7% on the room
+page and +1.1% on search, within noise. Steps 8 and 9 were checked the same way.
+
+Memory after the HTTP phase is unchanged by steps 5–9: Go 180 MiB, Rust 129 MiB.
+
 ## What the remaining gap is
 
-Profiles of step 2 and later (room page and sidebar) show where Go spends the time Rust doesn't:
+Both binaries, as benchmarked and under the same harness, were sampled with Linux `perf`
+(`cpu-clock` at 1,999 Hz with frame-pointer call stacks, which both arm64 builds keep), and server
+CPU per request was read from every thread's `schedstat` in an unprofiled window. Each sample is
+charged to GC, the allocator, the kernel, SQLite's C code or cgo when any of its frames is theirs,
+and otherwise to the innermost frame's owner (database layer, hashing, templates, HTTP stack, app).
+Uprobes on `sqlite3_step` and the column accessors counted the same statements per request in
+both applications, and the same column reads on every page but search (where Rust reads a few more). Go minus Rust, µs of server CPU per request, at step 9:
 
-- **Calls into C.** Each SQLite call crosses cgo (tens of nanoseconds each); a room page reads 40
-  rows with several column calls per value, and the sidebar more. rusqlite's calls are ordinary
-  function calls.
-- **Allocation and garbage collection.** 15–20% of page CPU at `GOGC=100`; `GOGC=200` buys most of
-  the step 4 gain with memory.
-- **net/http.** No vectored writes, so a page's recorded parts are copied into one buffer before the
-  write (about 6% of the room page); a trivial static file is 1.26× slower than hyper's.
-- **Templates and helpers.** quicktemplate writes through `io.Writer` interfaces and the helpers
-  build strings; askama's generated code writes into a `String` with monomorphized helpers.
+| | Room | Messages | Sidebar | Search |
+|---|---:|---:|---:|---:|
+| CPU per request, Go / Rust | 142 / 131 | 129 / 121 | 125 / 100 | 109 / 94 |
+| Garbage collection + allocator | +8.0 | +7.0 | +13.7 | +4.9 |
+| cgo transitions | +3.4 | +3.5 | +3.5 | +2.7 |
+| SQLite's C code (same build, same calls) | +1.5 | +1.1 | +2.2 | +4.7 |
+| Database layer + hashing | +1.5 | +1.3 | +1.7 | +1.7 |
+| Templates and helpers | −0.7 | −4.2 | +1.2 | +0.8 |
+| HTTP stack + socket writes | +0.3 | +1.7 | +4.8 | +3.0 |
+| Kernel (other) + scheduler | −0.1 | −0.9 | +1.8 | +1.0 |
+| App code | −2.9 | −0.9 | −3.7 | −3.5 |
+| **Total** | **+11.0** | **+8.6** | **+25.1** | **+15.4** |
 
-The micro-tuning left out by design (regular-expression routing, timestamp parsing from borrowed
-text, key formatting) accounts for a few percent more. Everything else — queries, caches, bytes,
-fan-out — is now the same in both programs.
+- **Garbage collection.** Go collects its 4–5 MB live heap 75–175 times a second at `GOGC=200`
+  (measured with `GODEBUG=gctrace=1` after step 7); Rust frees as it goes and reuses memory while
+  it is still in cache. What Go still allocates is
+  mostly needed (rows' text columns, fragment keys, net/http's headers) and spread over sites of
+  1–4 KiB each. A larger heap would buy CPU with memory Go already uses more of.
+- **cgo.** About 80 C calls per page at roughly 26 ns each (step 5's profile: 23 µs for 875 calls
+  on the room page); rusqlite's are ordinary calls.
+- **net/http.** Its user-space work (request parsing, header canonicalization and sanitizing, and
+  on the large pages copying the recorded page into one buffer, as it has no vectored writes) costs
+  3–7 µs more than hyper's. On the room and messages pages the kernel gives most of it back: one
+  write of the assembled page costs it 5–6 µs less than Rust's vectored write of the page's parts.
+  A static file is 1.24×.
+- **SQLite's own code** runs 1–5 µs slower under Go with identical calls and settings, most on
+  search. The profiles show more time in glibc's `malloc` slow path and in locking inside SQLite
+  under Go; beyond that it is unexplained.
+- Go's app code (routing, controllers, presenters) and the messages page's templates cost less than
+  Rust's.
+
+The sidebar's larger gap is the same items over more, smaller pieces of work: a link or button per
+room and person, each with its own attribute hash, and a signed avatar id per person.
 
 ## Reproduce
 

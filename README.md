@@ -110,24 +110,27 @@ Container verification exercises setup, a live SQLite backup, offline restore, a
 
 [Apples to apples](bench/results/apples-to-apples-20261005.md) makes Go do the Rust reference's
 work — the same SQL, writer and checkpointer, byte-identical pages with the same caches, and the
-same Cable fan-out — then measures both. Median requests/sec (complete broadcasts/sec for Cable),
-16 HTTP clients, three server CPUs each, the same seed:
+same Cable fan-out — then takes out, guided by profiles of both applications, what the Go port did
+on top of it. Median requests/sec (complete broadcasts/sec for Cable), 16 HTTP clients, three
+server CPUs each, the same seed:
 
 | Workload | Published Go | Go | Rust | Rust / Go |
 |---|---:|---:|---:|---:|
-| Room page | 11,947 | 14,888 | 21,675 | 1.46× |
-| Messages page | 16,411 | 17,885 | 23,290 | 1.30× |
-| Sidebar | 14,238 | 14,794 | 27,518 | 1.86× |
-| Search | 12,101 | 20,934 | 27,449 | 1.31× |
-| Post message | 4,699 | 7,374 | 7,458 | 1.01× |
+| Room page | 11,947 | 20,177 | 21,777 | 1.08× |
+| Messages page | 16,411 | 21,521 | 23,153 | 1.08× |
+| Sidebar | 14,238 | 22,508 | 27,371 | 1.22× |
+| Search | 12,101 | 24,742 | 27,012 | 1.09× |
+| Post message | 4,699 | 7,686 | 7,426 | 0.97× |
 | Cable, 1,000 clients | 261 | 499 | 532 | 1.07× |
 
 The published version's pages did less work (a cached page shell, a 9 KB sidebar frame where
-Rust sends a 30 KB page), so only the last three columns compare like with like. The remaining gap
-is cgo calls into SQLite, garbage collection (`GOGC=200` by default trades about 40 MiB for most
-of it), net/http's lack of vectored writes, and template/helper allocation. The per-step reports
-are `bench/results/apples-step{1,2,3,4}-20261005`; earlier optimization passes are in
-`bench/results/optimization-*`. `go build` uses profile-guided optimization from
+Rust sends a 30 KB page), so only the last three columns compare like with like; Cable is from
+step 4, which the later steps don't touch. The remaining gap is garbage collection (`GOGC=200` by
+default; Go uses 180 MiB after the HTTP phase to Rust's 129), about 80 cgo calls per page into
+SQLite, and net/http's own work; the summary breaks it down per page. The per-step reports are
+`bench/results/apples-step{1,2,3,4}-20261005` and, for the profile-guided steps 5–9,
+`bench/results/{gc-fixes,cgo-rows,sidebar,cleanup,helpers}-20261005`; earlier optimization passes
+are in `bench/results/optimization-*`. `go build` uses profile-guided optimization from
 `cmd/campfire/default.pgo`, merged from `bench/profile` CPU profiles of the room, messages,
 sidebar, search, avatar, write and Cable workloads; regenerate it after significant changes.
 

@@ -1,0 +1,3 @@
+2026/10/05 17:04:28 INFO listening address=127.0.0.1:58167 tls=false
+2026/10/05 17:04:28 INFO listening address=[::]:35835 tls=false
+2026/10/05 17:05:15 WAL checkpoint (PASSIVE) couldn't finish
