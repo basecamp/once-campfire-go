@@ -19,7 +19,7 @@ func StreamAccountsBotsForm(qw422016 *qt422016.Writer, ctx *ViewContext, form *F
 <label class="align-center center avatar__form gap" data-controller="upload-preview">
   <div class="btn input--file">
     `)
-	qw422016.N().S(string(ImageTag(ctx, "camera.svg", NewAttrs().AriaHidden().Size(20))))
+	StreamImageTag(qw422016, ctx, "camera.svg", NewAttrs().AriaHidden().Size(20))
 	qw422016.N().S(`
     `)
 	qw422016.N().S(string(form.FileField("avatar", NewAttrs().Class("input").Accept("image/*").Data("upload_preview_target", "input").Data("action", "upload-preview#previewImage"))))
@@ -35,7 +35,7 @@ func StreamAccountsBotsForm(qw422016 *qt422016.Writer, ctx *ViewContext, form *F
 		avatar = *bot.AvatarAttachmentURL
 
 	}
-	qw422016.N().S(string(ImageTag(ctx, avatar, NewAttrs().Alt("Bot avatar").Size(48).Data("upload_preview_target", "image"))))
+	StreamImageTag(qw422016, ctx, avatar, NewAttrs().Alt("Bot avatar").Size(48).Data("upload_preview_target", "image"))
 	qw422016.N().S(`
   </div>
 </label>
@@ -49,7 +49,7 @@ func StreamAccountsBotsForm(qw422016 *qt422016.Writer, ctx *ViewContext, form *F
 	qw422016.N().S(string(form.TextField("name", bot.Name, NewAttrs().Class("input").Autocomplete("name").Placeholder("Name the bot").Autofocus().Required(true).Data("1p-ignore", true))))
 	qw422016.N().S(`
     `)
-	qw422016.N().S(string(ImageTag(ctx, "bot.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	StreamImageTag(qw422016, ctx, "bot.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))
 	qw422016.N().S(`
   </label>
 </div>
@@ -63,7 +63,7 @@ func StreamAccountsBotsForm(qw422016 *qt422016.Writer, ctx *ViewContext, form *F
 	qw422016.N().S(string(form.URLField("webhook_url", bot.WebhookURL, NewAttrs().Class("input").Placeholder("Webhook URL"))))
 	qw422016.N().S(`
     `)
-	qw422016.N().S(string(ImageTag(ctx, "web.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	StreamImageTag(qw422016, ctx, "web.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))
 	qw422016.N().S(`
   </label>
 </div>

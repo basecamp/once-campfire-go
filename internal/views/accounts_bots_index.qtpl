@@ -14,8 +14,8 @@
       <p class="margin-none-block-start">With Chat bots, other sites and services can post updates directly to Campfire.</p>
 
       {% code BeginCapture(qw422016) %}
-        {%s= string(ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))) %}
-        {%s= string(ImageTag(p.Ctx, "add.svg", NewAttrs().AriaHidden().Size(20))) %}
+        {%= ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20)) %}
+        {%= ImageTag(p.Ctx, "add.svg", NewAttrs().AriaHidden().Size(20)) %}
 {% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture1, RouteNewAccountBot(), NewAttrs().Class("btn btn--reversed txt-large").Aria("label", "Add a chat bot"))) %}    </div>
   </div>
 

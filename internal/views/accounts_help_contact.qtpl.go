@@ -24,7 +24,7 @@ func StreamAccountsHelpContact(qw422016 *qt422016.Writer, ctx *ViewContext, help
 
 		qw422016.N().S(`
       `)
-		qw422016.N().S(string(ImageTag(ctx, "lifebuoy.svg", NewAttrs().AriaHidden())))
+		StreamImageTag(qw422016, ctx, "lifebuoy.svg", NewAttrs().AriaHidden())
 		qw422016.N().S(`
       <span>`)
 		qw422016.E().S(owner.EmailAddress)

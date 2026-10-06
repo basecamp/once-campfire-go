@@ -71,10 +71,10 @@ func (p *AccountsBotsIndex) StreamContent(qw422016 *qt422016.Writer) {
 
 	qw422016.N().S(`
         `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))))
+	StreamImageTag(qw422016, p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))
 	qw422016.N().S(`
         `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "add.svg", NewAttrs().AriaHidden().Size(20))))
+	StreamImageTag(qw422016, p.Ctx, "add.svg", NewAttrs().AriaHidden().Size(20))
 	qw422016.N().S(`
 `)
 	capture1 := EndCapture(qw422016)

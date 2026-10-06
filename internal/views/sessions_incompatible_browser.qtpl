@@ -13,7 +13,7 @@
 
   <div class="browser-list flex align-center flex-wrap gap justify-center margin-block">
 {% for _, v := range AllowBrowserVersions %}      <div class="browser flex flex-column">
-        {%s= string(ImageTag(p.Ctx, "browsers/"+v.Browser+".svg", NewAttrs().AriaHidden().Class("center"))) %}
+        {%= ImageTag(p.Ctx, "browsers/"+v.Browser+".svg", NewAttrs().AriaHidden().Class("center")) %}
         <div class="flex flex-column align-center margin-block-start-half">
           <strong>{%s Capitalize(v.Browser) %}</strong>
           <span> {%s v.Version %}+</span>

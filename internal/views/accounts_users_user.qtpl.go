@@ -54,7 +54,7 @@ func StreamAccountsUsersUser(qw422016 *qt422016.Writer, ctx *ViewContext, user *
 			}
 			qw422016.N().S(`</span>
           `)
-			qw422016.N().S(string(ImageTag(ctx, "crown.svg", NewAttrs().Size(20).AriaHidden())))
+			StreamImageTag(qw422016, ctx, "crown.svg", NewAttrs().Size(20).AriaHidden())
 			qw422016.N().S(`
           `)
 			qw422016.N().S(string(form.CheckBox("role", NewAttrs().Data("action", "form#submit").Hidden().ID(DomID("user", user.ID, "role")).Disabled(ctx.IsCurrentUser(user.ID)), "administrator", "member", user.Role.String())))
@@ -73,7 +73,7 @@ func StreamAccountsUsersUser(qw422016 *qt422016.Writer, ctx *ViewContext, user *
 
 			qw422016.N().S(`
         `)
-			qw422016.N().S(string(ImageTag(ctx, "minus.svg", NewAttrs().Size(20).AriaHidden())))
+			StreamImageTag(qw422016, ctx, "minus.svg", NewAttrs().Size(20).AriaHidden())
 			qw422016.N().S(`
         <span class="for-screen-reader">Delete `)
 			qw422016.E().S(user.Name)
@@ -90,7 +90,7 @@ func StreamAccountsUsersUser(qw422016 *qt422016.Writer, ctx *ViewContext, user *
 
 		qw422016.N().S(`
       `)
-		qw422016.N().S(string(ImageTag(ctx, "pencil.svg", NewAttrs().Size(20).AriaHidden())))
+		StreamImageTag(qw422016, ctx, "pencil.svg", NewAttrs().Size(20).AriaHidden())
 		qw422016.N().S(`
       <span class="for-screen-reader">My settings</span>
 `)

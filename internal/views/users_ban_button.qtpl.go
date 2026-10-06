@@ -21,7 +21,7 @@ func StreamUsersBanButton(qw422016 *qt422016.Writer, ctx *ViewContext, user *Use
 
 		qw422016.N().S(`
     `)
-		qw422016.N().S(string(ImageTag(ctx, "cancel.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Ban "+user.Name))))
+		StreamImageTag(qw422016, ctx, "cancel.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Ban "+user.Name))
 		qw422016.N().S(`
     <span>Ban `)
 		qw422016.E().S(user.Name)
@@ -36,7 +36,7 @@ func StreamUsersBanButton(qw422016 *qt422016.Writer, ctx *ViewContext, user *Use
 
 		qw422016.N().S(`
     `)
-		qw422016.N().S(string(ImageTag(ctx, "cancel.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Remove Ban "+user.Name))))
+		StreamImageTag(qw422016, ctx, "cancel.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Remove Ban "+user.Name))
 		qw422016.N().S(`
     <span>Remove ban</span>
 `)

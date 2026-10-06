@@ -36,20 +36,20 @@ func StreamLayoutsApplication(qw422016 *qt422016.Writer, ctx *ViewContext, p Pag
 	qw422016.N().S(`
 
     `)
-	qw422016.N().S(string(BuilderTag("meta", NewAttrs().Name("vapid-public-key").AttrOpt("content", ctx.VAPIDPublicKey))))
+	StreamBuilderTag(qw422016, "meta", NewAttrs().Name("vapid-public-key").AttrOpt("content", ctx.VAPIDPublicKey))
 	qw422016.N().S(`
     `)
-	qw422016.N().S(string(BuilderTag("meta", NewAttrs().Name("turbo-prefetch").Attr("content", "true"))))
+	StreamBuilderTag(qw422016, "meta", NewAttrs().Name("turbo-prefetch").Attr("content", "true"))
 	qw422016.N().S(`
 
     `)
-	qw422016.N().S(string(BuilderTag("link", NewAttrs().Attr("rel", "manifest").Attr("href", "/webmanifest.json"))))
+	StreamBuilderTag(qw422016, "link", NewAttrs().Attr("rel", "manifest").Attr("href", "/webmanifest.json"))
 	qw422016.N().S(`
     `)
-	qw422016.N().S(string(BuilderTag("link", NewAttrs().Attr("rel", "icon").Attr("href", ctx.Account.LogoURL).Type("image/png"))))
+	StreamBuilderTag(qw422016, "link", NewAttrs().Attr("rel", "icon").Attr("href", ctx.Account.LogoURL).Type("image/png"))
 	qw422016.N().S(`
     `)
-	qw422016.N().S(string(BuilderTag("link", NewAttrs().Attr("rel", "apple-touch-icon").Attr("href", ctx.Account.LogoURL))))
+	StreamBuilderTag(qw422016, "link", NewAttrs().Attr("rel", "apple-touch-icon").Attr("href", ctx.Account.LogoURL))
 	qw422016.N().S(`
 
     `)
@@ -94,12 +94,12 @@ func StreamLayoutsApplication(qw422016 *qt422016.Writer, ctx *ViewContext, p Pag
 `)
 		if ctx.FlashAlert != nil {
 			qw422016.N().S(`            `)
-			qw422016.N().S(string(ImageTag(ctx, "alert.svg", NewAttrs().Aria("hidden", true).Size(24).Class("colorize--white"))))
+			StreamImageTag(qw422016, ctx, "alert.svg", NewAttrs().Aria("hidden", true).Size(24).Class("colorize--white"))
 			qw422016.N().S(`</span>
 `)
 		} else {
 			qw422016.N().S(`            `)
-			qw422016.N().S(string(ImageTag(ctx, "check.svg", NewAttrs().Aria("hidden", true).Size(24).Class("colorize--white"))))
+			StreamImageTag(qw422016, ctx, "check.svg", NewAttrs().Aria("hidden", true).Size(24).Class("colorize--white"))
 			qw422016.N().S(`</span>
 `)
 		}
@@ -132,7 +132,7 @@ func StreamLayoutsApplication(qw422016 *qt422016.Writer, ctx *ViewContext, p Pag
 
     <a href="https://once.com" id="app-logo" target="_blank" aria-label="Once software from 37signals home page">
       `)
-	qw422016.N().S(string(ImageTag(ctx, "campfire-icon.png", NewAttrs().Alt("Campfire logo").Attr("width", 256).Attr("height", 216))))
+	StreamImageTag(qw422016, ctx, "campfire-icon.png", NewAttrs().Alt("Campfire logo").Attr("width", 256).Attr("height", 216))
 	qw422016.N().S(`
     </a>
   </body>

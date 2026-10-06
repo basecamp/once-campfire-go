@@ -37,7 +37,7 @@ func StreamUsersPushSubscriptionsPushSubscription(qw422016 *qt422016.Writer, ctx
 
 	qw422016.N().S(`
         `)
-	qw422016.N().S(string(ImageTag(ctx, "notification-bell-everything.svg", NewAttrs().AriaHidden().Size(20))))
+	StreamImageTag(qw422016, ctx, "notification-bell-everything.svg", NewAttrs().AriaHidden().Size(20))
 	qw422016.N().S(`
         <span class="for-screen-reader">Send test notification</span>
 `)
@@ -50,7 +50,7 @@ func StreamUsersPushSubscriptionsPushSubscription(qw422016 *qt422016.Writer, ctx
 
 	qw422016.N().S(`
         `)
-	qw422016.N().S(string(ImageTag(ctx, "minus.svg", NewAttrs().AriaHidden().Size(20))))
+	StreamImageTag(qw422016, ctx, "minus.svg", NewAttrs().AriaHidden().Size(20))
 	qw422016.N().S(`
         <span class="for-screen-reader">Delete subscription</span>
 `)

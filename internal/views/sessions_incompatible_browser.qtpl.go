@@ -50,7 +50,7 @@ func (p *SessionsIncompatibleBrowser) StreamContent(qw422016 *qt422016.Writer) {
 	for _, v := range AllowBrowserVersions {
 		qw422016.N().S(`      <div class="browser flex flex-column">
         `)
-		qw422016.N().S(string(ImageTag(p.Ctx, "browsers/"+v.Browser+".svg", NewAttrs().AriaHidden().Class("center"))))
+		StreamImageTag(qw422016, p.Ctx, "browsers/"+v.Browser+".svg", NewAttrs().AriaHidden().Class("center"))
 		qw422016.N().S(`
         <div class="flex flex-column align-center margin-block-start-half">
           <strong>`)

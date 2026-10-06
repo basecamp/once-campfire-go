@@ -22,7 +22,7 @@ func StreamUsersAutocompletablesTemplate(qw422016 *qt422016.Writer, ctx *ViewCon
 
     <button type="button" data-action="autocomplete#remove:prevent" data-value="" tabindex="-1" class="btn btn--plain txt-small translucent flex-item-no-shrink">
       `)
-	qw422016.N().S(string(ImageTag(ctx, "remove-circle.svg", NewAttrs().AriaHidden().Class("colorize--black"))))
+	StreamImageTag(qw422016, ctx, "remove-circle.svg", NewAttrs().AriaHidden().Class("colorize--black"))
 	qw422016.N().S(`
       <span class="for-screen-reader">Remove <span data-content="screenReaderLabel"></span></span>
     </button>

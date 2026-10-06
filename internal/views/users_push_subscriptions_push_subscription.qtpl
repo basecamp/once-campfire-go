@@ -9,11 +9,11 @@
 
     <span class="flex align-center gap">
       {% code BeginCapture(qw422016) %}
-        {%s= string(ImageTag(ctx, "notification-bell-everything.svg", NewAttrs().AriaHidden().Size(20))) %}
+        {%= ImageTag(ctx, "notification-bell-everything.svg", NewAttrs().AriaHidden().Size(20)) %}
         <span class="for-screen-reader">Send test notification</span>
 {% code capture1 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture1, RouteUserPushSubscriptionTestNotifications(pushSubscription.ID), NewAttrs().Class("btn btn--reversed"))) %}
       {% code BeginCapture(qw422016) %}
-        {%s= string(ImageTag(ctx, "minus.svg", NewAttrs().AriaHidden().Size(20))) %}
+        {%= ImageTag(ctx, "minus.svg", NewAttrs().AriaHidden().Size(20)) %}
         <span class="for-screen-reader">Delete subscription</span>
 {% code capture2 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture2, RouteUserPushSubscription(pushSubscription.ID), NewAttrs().Method("delete").Class("btn btn--negative"))) %}    </span>
   </span>

@@ -81,10 +81,10 @@ func (p *AccountsBotsEdit) StreamContent(qw422016 *qt422016.Writer) {
 
 	qw422016.N().S(`
       `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "trash.svg", NewAttrs().AriaHidden().Size(20))))
+	StreamImageTag(qw422016, p.Ctx, "trash.svg", NewAttrs().AriaHidden().Size(20))
 	qw422016.N().S(`
       `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))))
+	StreamImageTag(qw422016, p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))
 	qw422016.N().S(`
 `)
 	capture2 := EndCapture(qw422016)
@@ -96,10 +96,10 @@ func (p *AccountsBotsEdit) StreamContent(qw422016 *qt422016.Writer) {
 
 	qw422016.N().S(`
       `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "refresh.svg", NewAttrs().AriaHidden().Size(20))))
+	StreamImageTag(qw422016, p.Ctx, "refresh.svg", NewAttrs().AriaHidden().Size(20))
 	qw422016.N().S(`
       `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "key.svg", NewAttrs().AriaHidden().Size(20))))
+	StreamImageTag(qw422016, p.Ctx, "key.svg", NewAttrs().AriaHidden().Size(20))
 	qw422016.N().S(`
 `)
 	capture3 := EndCapture(qw422016)

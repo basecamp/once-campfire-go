@@ -1,8 +1,8 @@
 {% comment %}reference/crates/views/templates/users/_ban_button.html{% endcomment %}
 {% func UsersBanButton(ctx *ViewContext, user *UserSummary) %}{% if user.Active() %}  {% code BeginCapture(qw422016) %}
-    {%s= string(ImageTag(ctx, "cancel.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Ban "+user.Name))) %}
+    {%= ImageTag(ctx, "cancel.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Ban "+user.Name)) %}
     <span>Ban {%s user.Name %}</span>
 {% code capture1 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture1, RouteUserBan(user.ID), NewAttrs().Method("post").Class("btn full-width").Data("turbo_confirm", "Are you sure you want to ban this user? This will log them out, delete their messages, and block their IP addresses."))) %}{% else %}  {% code BeginCapture(qw422016) %}
-    {%s= string(ImageTag(ctx, "cancel.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Remove Ban "+user.Name))) %}
+    {%= ImageTag(ctx, "cancel.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Remove Ban "+user.Name)) %}
     <span>Remove ban</span>
 {% code capture2 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture2, RouteUserBan(user.ID), NewAttrs().Method("delete").Class("btn btn--negative full-width").Data("turbo_confirm", "Are you sure you want to remove the ban on this user?"))) %}{% endif %}{% endfunc %}

@@ -75,7 +75,9 @@ view models, page types and helpers they use are in the .go files of the same mo
   `DomID(m, id, p)`, `h::account_logo_tag(ctx, None/Some(s))` → `AccountLogoTag(ctx, ""/s)`,
   `h::sidebar_turbo_frame_tag(Some(src), "")` → `SidebarTurboFrameTag(Ptr(src), "")`.
 - Output: `{{ s }}` → `{%s s %}` (ERB escaping); integers → `{%dl n %}` (int64) / `{%d n %}`;
-  helpers' `HTML` and `|safe` → `{%s= string(h) %}`.
+  helpers' `HTML` and `|safe` → `{%s= string(h) %}`. The tag helpers `ImageTag`, `BuilderTag` and
+  `TurboStreamFrom` are written `{%= ImageTag(...) %}`, which builds the tag in the page
+  (StreamImageTag) instead of in a string that is then copied.
 - `{% let x = e %}` → `{% code x := e %}`; `if let Some(x) = opt` → `{% if opt != nil %}` and
   `*opt`; `for x in xs` → `{% for i := range xs %}` with `&xs[i]` where a pointer is wanted.
 - Filter blocks: askama2qtpl emits `{% code views.BeginCapture(qw422016) %}...{% code captureN :=
@@ -86,7 +88,10 @@ view models, page types and helpers they use are in the .go files of the same mo
   `link_to_zoom_qr_code` → `LinkToZoomQrCode`, `button_to_copy_to_clipboard` →
   `ButtonToCopyToClipboard`, `web_share_session_button` → `WebShareSessionButton`,
   `user_filter_menu_tag` → `UserFilterMenuTag`, `sidebar_turbo_frame_tag` →
-  `SidebarTurboFrameTagBlock`, `room_form` → `RoomForm` (rooms.go).
+  `SidebarTurboFrameTagBlock`, `room_form` → `RoomForm` (rooms.go). `LinkToBlock`, `ButtonToBlock`,
+  `LinkToRoom` and `SidebarTurboFrameTagBlock` also have EndCapture forms that wrap the block where
+  it was written: `{% code EndCaptureLinkTo(qw422016, url, options) %}` in place of the
+  `captureN := EndCapture(...)` and the helper call (the sidebar templates use them).
 - `{% include %}` → askama2qtpl emits `{%= Name(RX_ARGS) %}`; the arguments are listed below
   under "Included by"/"Includes".
 - `self.m()` on a page → `p.M()`. On a non-page template the Rust method is a Go method of its

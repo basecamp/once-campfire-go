@@ -79,12 +79,12 @@ func (f *Form) Multipart() *Form {
 // Open is `<form ...>` plus the _method hidden field (html_options_for_form_with +
 // extra_tags_for_form). No authenticity_token: forgery protection is by Sec-Fetch-Site.
 func (f *Form) Open() HTML {
-	var b strings.Builder
+	var b tagBuilder
 	f.openInto(&b)
 	return HTML(b.String())
 }
 
-func (f *Form) openInto(b *strings.Builder) {
+func (f *Form) openInto(b *tagBuilder) {
 	html := NewAttrs().AttrOpt("id", f.id).AttrOpt("class", f.class).Merge(f.data)
 	if *f.multipart {
 		html.put("enctype", textAttr("multipart/form-data"))
@@ -106,7 +106,7 @@ func (f *Form) openInto(b *strings.Builder) {
 
 // Wrap is the whole form around already-rendered content (a block-less form_with passes "").
 func (f *Form) Wrap(content HTML) HTML {
-	var b strings.Builder
+	var b tagBuilder
 	b.Grow(len(content) + 256)
 	f.openInto(&b)
 	b.WriteString(string(content))
@@ -269,8 +269,18 @@ const buttonToFormLen = 128
 // ButtonTo is button_to(url, options) { content }. options may carry method ("delete", "put",
 // "patch", "post" or "get"), form_class, and the button's own attributes.
 func ButtonTo(url string, options *Attrs, content HTML) HTML {
-	var b strings.Builder
+	var b tagBuilder
 	b.Grow(tagLen("button", options, len(content)+buttonToFormLen))
+	openButtonTo(&b, url, options)
+	b.WriteString(string(content))
+	b.WriteString(buttonToClose)
+	return HTML(b.String())
+}
+
+const buttonToClose = "</button></form>"
+
+// openButtonTo writes button_to's form, its _method field and the button's opening tag.
+func openButtonTo(b *tagBuilder, url string, options *Attrs) {
 	method := "post"
 	if v := options.remove("method"); v.kind != noValue {
 		method = v.String()
@@ -284,15 +294,11 @@ func ButtonTo(url string, options *Attrs, content HTML) HTML {
 		formMethod = "get"
 	}
 	form := NewAttrs().put("class", textAttr(formClass)).put("method", textAttr(formMethod)).put("action", textAttr(url))
-	openTag(&b, "form", form)
+	openTag(b, "form", form)
 	b.WriteByte('>')
 	switch method {
 	case "delete", "patch", "put":
 		b.WriteString(string(MethodTag(method)))
 	}
-	openContentTag(&b, "button", options.put("type", textAttr("submit")))
-	b.WriteString(string(content))
-	closeTag(&b, "button")
-	b.WriteString("</form>")
-	return HTML(b.String())
+	openContentTag(b, "button", options.put("type", textAttr("submit")))
 }

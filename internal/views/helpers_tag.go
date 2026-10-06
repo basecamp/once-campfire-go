@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+
+	qt "github.com/valyala/quicktemplate"
 )
 
 // ActionView::Helpers::TagHelper: attribute rendering (tag_options) and element builders.
@@ -337,23 +339,31 @@ func (a *Attrs) withDefaultData(defaults []attrEntry) *Attrs {
 			break
 		}
 	}
-	before := NewAttrs()
-	before.entries = append(before.entries, entries[:position]...)
-	data := NewAttrs()
-	data.entries = append(data.entries, defaults...)
-	after := NewAttrs()
+	// Built in one hash, sized for the link's href too: the attributes before the data ones, the
+	// defaults overridden by the caller's data attributes, then the rest.
+	merged := NewAttrs()
+	if n := len(entries) + len(defaults) + 1; n > len(merged.inline) {
+		merged.entries = make([]attrEntry, 0, n)
+	}
+	merged.entries = append(merged.entries, entries[:position]...)
+	for _, entry := range defaults {
+		merged.put(entry.name, entry.value)
+	}
 	for _, entry := range entries[position:] {
 		if strings.HasPrefix(entry.name, "data-") {
-			data.put(entry.name, entry.value)
-		} else {
-			after.put(entry.name, entry.value)
+			merged.put(entry.name, entry.value)
 		}
 	}
-	return before.Merge(data).Merge(after)
+	for _, entry := range entries[position:] {
+		if !strings.HasPrefix(entry.name, "data-") {
+			merged.put(entry.name, entry.value)
+		}
+	}
+	return merged
 }
 
 // renderInto is tag_options: the attributes, each with a leading space.
-func (a *Attrs) renderInto(b *strings.Builder) {
+func (a *Attrs) renderInto(b *tagBuilder) {
 	if a == nil {
 		return
 	}
@@ -375,7 +385,7 @@ func (a *Attrs) lenHint() int {
 }
 
 // renderAttr is one attribute of tag_options, with Rails' value rules.
-func renderAttr(b *strings.Builder, name string, value attrValue) {
+func renderAttr(b *tagBuilder, name string, value attrValue) {
 	switch value.kind {
 	case noValue:
 	case trueValue, falseValue:
@@ -408,14 +418,14 @@ func renderAttr(b *strings.Builder, name string, value attrValue) {
 }
 
 // pushAttrStart writes ` name="`.
-func pushAttrStart(b *strings.Builder, name string) {
+func pushAttrStart(b *tagBuilder, name string) {
 	b.WriteByte(' ')
 	b.WriteString(name)
 	b.WriteString(`="`)
 }
 
 // pushAttr writes ` name="value"`, with value as is.
-func pushAttr(b *strings.Builder, name, value string) {
+func pushAttr(b *tagBuilder, name, value string) {
 	pushAttrStart(b, name)
 	b.WriteString(value)
 	b.WriteByte('"')
@@ -433,14 +443,14 @@ func tagLen(name string, attrs *Attrs, contentLen int) int {
 }
 
 // openTag writes `<name attributes` (the tag left open).
-func openTag(b *strings.Builder, name string, attrs *Attrs) {
+func openTag(b *tagBuilder, name string, attrs *Attrs) {
 	b.WriteByte('<')
 	b.WriteString(name)
 	attrs.renderInto(b)
 }
 
 // openContentTag writes content_tag's opening tag. A textarea's content starts on a new line.
-func openContentTag(b *strings.Builder, name string, attrs *Attrs) {
+func openContentTag(b *tagBuilder, name string, attrs *Attrs) {
 	openTag(b, name, attrs)
 	b.WriteByte('>')
 	if name == "textarea" {
@@ -448,7 +458,7 @@ func openContentTag(b *strings.Builder, name string, attrs *Attrs) {
 	}
 }
 
-func closeTag(b *strings.Builder, name string) {
+func closeTag(b *tagBuilder, name string) {
 	b.WriteString("</")
 	b.WriteString(name)
 	b.WriteByte('>')
@@ -456,7 +466,7 @@ func closeTag(b *strings.Builder, name string) {
 
 // ContentTag is content_tag(name, content, options) with already-safe content.
 func ContentTag(name string, attrs *Attrs, content HTML) HTML {
-	var b strings.Builder
+	var b tagBuilder
 	b.Grow(tagLen(name, attrs, len(content)))
 	openContentTag(&b, name, attrs)
 	b.WriteString(string(content))
@@ -466,7 +476,7 @@ func ContentTag(name string, attrs *Attrs, content HTML) HTML {
 
 // ContentTagText is content_tag with plain-text content, escaped.
 func ContentTagText(name string, attrs *Attrs, content string) HTML {
-	var b strings.Builder
+	var b tagBuilder
 	b.Grow(tagLen(name, attrs, len(content)))
 	openContentTag(&b, name, attrs)
 	EscapeTo(&b, content)
@@ -477,23 +487,38 @@ func ContentTagText(name string, attrs *Attrs, content string) HTML {
 // BuilderTag is tag.name(**options) from the tag builder: void elements have no closing tag and
 // no slash, others render empty. Underscores in the name become dashes (tag.turbo_frame).
 func BuilderTag(name string, attrs *Attrs) HTML {
+	var b tagBuilder
+	builderTagInto(&b, name, attrs)
+	return HTML(b.String())
+}
+
+// StreamBuilderTag writes BuilderTag's tag into the page: templates write {%= BuilderTag(...) %}.
+func StreamBuilderTag(qw *qt.Writer, name string, attrs *Attrs) {
+	b, w := intoPage(qw)
+	builderTagInto(&b, name, attrs)
+	b.writeOut(qw, w)
+}
+
+func builderTagInto(b *tagBuilder, name string, attrs *Attrs) {
 	name = Dasherize(name)
-	var b strings.Builder
 	b.Grow(tagLen(name, attrs, 0))
-	openTag(&b, name, attrs)
+	openTag(b, name, attrs)
 	b.WriteByte('>')
 	if !isVoidElement(name) {
-		closeTag(&b, name)
+		closeTag(b, name)
 	}
-	return HTML(b.String())
 }
 
 // LegacyTag is the legacy tag(:name, options), used by image_tag and form fields: always
 // self-closing with " />".
 func LegacyTag(name string, attrs *Attrs) HTML {
-	var b strings.Builder
-	b.Grow(tagLen(name, attrs, 0))
-	openTag(&b, name, attrs)
-	b.WriteString(" />")
+	var b tagBuilder
+	legacyTagInto(&b, name, attrs)
 	return HTML(b.String())
+}
+
+func legacyTagInto(b *tagBuilder, name string, attrs *Attrs) {
+	b.Grow(tagLen(name, attrs, 0))
+	openTag(b, name, attrs)
+	b.WriteString(" />")
 }

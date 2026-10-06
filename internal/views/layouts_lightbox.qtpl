@@ -3,13 +3,13 @@
 
   <form method="dialog" class="lightbox__btn">
     <button class="btn">
-      {%s= string(ImageTag(ctx, "remove.svg", NewAttrs().AriaHidden())) %}
+      {%= ImageTag(ctx, "remove.svg", NewAttrs().AriaHidden()) %}
       <span class="for-screen-reader">Close image viewer</span>
     </button>
   </form>
 
   <a href="" class="lightbox__btn--download btn hide-in-ios-pwa" data-lightbox-target="download">
-    {%s= string(ImageTag(ctx, "download.svg", NewAttrs().AriaHidden())) %}
+    {%= ImageTag(ctx, "download.svg", NewAttrs().AriaHidden()) %}
     <span class="for-screen-reader">Download file</span>
   </a>
 
@@ -18,7 +18,7 @@
       data-action="web-share#share"
       data-web-share-files-value=""
       data-lightbox-target="share">
-    {%s= string(ImageTag(ctx, "share.svg", NewAttrs().AriaHidden())) %}
+    {%= ImageTag(ctx, "share.svg", NewAttrs().AriaHidden()) %}
     <span class="for-screen-reader">Share file</span>
   </button>
 </dialog>

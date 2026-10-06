@@ -1,6 +1,10 @@
 package views
 
-import "strconv"
+import (
+	"strconv"
+
+	qt "github.com/valyala/quicktemplate"
+)
 
 // turbo-rails helpers: turbo_frame_tag, turbo_stream_from, turbo_page_requires_reload.
 
@@ -13,8 +17,16 @@ func turboFrameOptions(id string, src, target attrValue, attributes *Attrs) *Att
 // TurboStreamFrom is turbo_stream_from(*streamables). The signed stream name comes from the caller
 // (Turbo::StreamsChannel.signed_stream_name).
 func TurboStreamFrom(signedStreamName string) HTML {
-	return BuilderTag("turbo-cable-stream-source",
-		NewAttrs().Attr("channel", "Turbo::StreamsChannel").Attr("signed-stream-name", signedStreamName))
+	return BuilderTag("turbo-cable-stream-source", turboStreamFromAttrs(signedStreamName))
+}
+
+// StreamTurboStreamFrom writes TurboStreamFrom's tag into the page.
+func StreamTurboStreamFrom(qw *qt.Writer, signedStreamName string) {
+	StreamBuilderTag(qw, "turbo-cable-stream-source", turboStreamFromAttrs(signedStreamName))
+}
+
+func turboStreamFromAttrs(signedStreamName string) *Attrs {
+	return NewAttrs().Attr("channel", "Turbo::StreamsChannel").Attr("signed-stream-name", signedStreamName)
 }
 
 // TurboPageRequiresReloadTag is turbo_page_requires_reload_tag, which turbo_page_requires_reload

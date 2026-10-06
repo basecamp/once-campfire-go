@@ -9,7 +9,7 @@
       {%s= string(HiddenFieldTag("push_subscription_endpoint", nil, NewAttrs().Data("sessions_target", "pushSubscriptionEndpoint"))) %}
 
       <button class="btn" data-action="sessions#logout:prevent">
-        {%s= string(ImageTag(p.Ctx, "logout.svg", NewAttrs().AriaHidden())) %}
+        {%= ImageTag(p.Ctx, "logout.svg", NewAttrs().AriaHidden()) %}
         <span class="for-screen-reader">Log out</span>
       </button>
 {% code capture1 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture1, form)) %}  </div>
@@ -20,20 +20,20 @@
   <div class="align-center center avatar__form gap" data-controller="upload-preview">
 {% code form := p.ProfileForm().Class("txt-medium") %}    {% code BeginCapture(qw422016) %}
       <label class="btn input--file">
-        {%s= string(ImageTag(p.Ctx, "camera.svg", NewAttrs().AriaHidden().Size(20))) %}
+        {%= ImageTag(p.Ctx, "camera.svg", NewAttrs().AriaHidden().Size(20)) %}
         {%s= string(form.FileField("avatar", NewAttrs().ID("file").Class("input").Accept("image/*").Data("upload_preview_target", "input").Data("action", "upload-preview#previewImage change->form#submit"))) %}
         <span class="for-screen-reader">Upload avatar</span>
       </label>
 {% code capture1 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture1, form)) %}
 {% code form = p.ProfileForm() %}    {% code BeginCapture(qw422016) %}
       <label class="btn avatar input--file txt-xx-large">
-        {%s= string(ImageTag(p.Ctx, p.User.AvatarPath, NewAttrs().AriaHidden().Size(300).Data("upload_preview_target", "image"))) %}
+        {%= ImageTag(p.Ctx, p.User.AvatarPath, NewAttrs().AriaHidden().Size(300).Data("upload_preview_target", "image")) %}
         {%s= string(form.FileField("avatar", NewAttrs().ID("file").Class("input").Accept("image/*").Data("upload_preview_target", "input").Data("action", "upload-preview#previewImage change->form#submit"))) %}
         <span class="for-screen-reader">Avatar</span>
       </label>
 {% code capture2 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture2, form)) %}
 {% if p.AvatarAttached %}      {% code BeginCapture(qw422016) %}
-        {%s= string(ImageTag(p.Ctx, "minus.svg", NewAttrs().AriaHidden().Size(20))) %}
+        {%= ImageTag(p.Ctx, "minus.svg", NewAttrs().AriaHidden().Size(20)) %}
         <span class="for-screen-reader">Delete avatar</span>
 {% code capture3 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture3, RouteUserAvatar(p.User.ID), NewAttrs().Method("delete").Class("btn btn--negative txt-small avatar__delete-btn"))) %}{% endif %}  </div>
 
@@ -44,7 +44,7 @@
 
         <label class="flex align-center gap flex-item-grow input input--actor">
           {%s= string(form.TextField("name", &p.User.Name, NewAttrs().Class("input txt-large ").Autocomplete("name").Placeholder("Enter your name").Autofocus().Required(true).Data("1p-ignore", true))) %}
-          {%s= string(ImageTag(p.Ctx, "person.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))) %}
+          {%= ImageTag(p.Ctx, "person.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black")) %}
         </label>
       </div>
 
@@ -53,7 +53,7 @@
 
         <label class="flex align-center gap flex-item-grow input input--actor">
           {%s= string(form.EmailField("email_address", nil, NewAttrs().Class("input txt-large").AttrOpt("value", p.User.EmailAddress).Autocomplete("username").Placeholder("Enter your email address").Required(false))) %}
-          {%s= string(ImageTag(p.Ctx, "email.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))) %}
+          {%= ImageTag(p.Ctx, "email.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black")) %}
         </label>
       </div>
 
@@ -62,7 +62,7 @@
 
         <label class="flex align-center gap flex-item-grow input input--actor">
           {%s= string(form.PasswordField("password", NewAttrs().Class("input txt-large").Autocomplete("new-password").Placeholder("Change password").Required(false).Maxlength(72))) %}
-          {%s= string(ImageTag(p.Ctx, "password.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))) %}
+          {%= ImageTag(p.Ctx, "password.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black")) %}
         </label>
       </div>
 
@@ -71,7 +71,7 @@
 
         <label class="flex align--center gap flex-item--grow input input--actor">
           {%s= string(form.TextArea("bio", p.User.Bio, NewAttrs().Class("input txt-large").Placeholder("A few words about yourself…").Maxlength(200).Rows(3).Required(false))) %}
-          {%s= string(ImageTag(p.Ctx, "bio.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))) %}
+          {%= ImageTag(p.Ctx, "bio.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black")) %}
         </label>
       </div>
 

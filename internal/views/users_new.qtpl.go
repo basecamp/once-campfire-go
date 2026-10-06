@@ -38,7 +38,7 @@ func (p *UsersNew) StreamNav(qw422016 *qt422016.Writer) {
 
 	qw422016.N().S(`
       `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "login-keys.svg", NewAttrs().AriaHidden())))
+	StreamImageTag(qw422016, p.Ctx, "login-keys.svg", NewAttrs().AriaHidden())
 	qw422016.N().S(`
       <span class="for-screen-reader">Sign in</span>
 `)
@@ -72,7 +72,7 @@ func (p *UsersNew) StreamContent(qw422016 *qt422016.Writer) {
   <section class="nametag u-relative">
     <div class="flex justify-center align-center pad-block">
       `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "lanyard.svg", NewAttrs().Class("nametag__lanyard").AriaHidden())))
+	StreamImageTag(qw422016, p.Ctx, "lanyard.svg", NewAttrs().Class("nametag__lanyard").AriaHidden())
 	qw422016.N().S(`
     </div>
 
@@ -90,7 +90,7 @@ func (p *UsersNew) StreamContent(qw422016 *qt422016.Writer) {
         <label class="align-center center avatar__form gap" data-controller="upload-preview">
           <div class="btn input--file">
             `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "camera.svg", NewAttrs().AriaHidden())))
+	StreamImageTag(qw422016, p.Ctx, "camera.svg", NewAttrs().AriaHidden())
 	qw422016.N().S(`
             `)
 	qw422016.N().S(string(form.FileField("avatar", NewAttrs().Class("input").Accept("image/*").Data("upload_preview_target", "input").Data("action", "upload-preview#previewImage"))))
@@ -100,7 +100,7 @@ func (p *UsersNew) StreamContent(qw422016 *qt422016.Writer) {
 
           <div class="btn avatar input--file txt-xx-large">
             `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "default-avatar.svg", NewAttrs().AriaHidden().Data("upload_preview_target", "image"))))
+	StreamImageTag(qw422016, p.Ctx, "default-avatar.svg", NewAttrs().AriaHidden().Data("upload_preview_target", "image"))
 	qw422016.N().S(`
             <span class="for-screen-reader">Avatar</span>
           </div>
@@ -116,7 +116,7 @@ func (p *UsersNew) StreamContent(qw422016 *qt422016.Writer) {
 	qw422016.N().S(string(form.TextField("name", nil, NewAttrs().Class("input").Autocomplete("name").Placeholder("Name").Autofocus().Required(true).Data("1p-ignore", true))))
 	qw422016.N().S(`
           `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "person.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	StreamImageTag(qw422016, p.Ctx, "person.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))
 	qw422016.N().S(`
         </label>
       </div>
@@ -130,7 +130,7 @@ func (p *UsersNew) StreamContent(qw422016 *qt422016.Writer) {
 	qw422016.N().S(string(form.EmailField("email_address", nil, NewAttrs().Class("input").Autocomplete("username").Placeholder("Email address").Required(true))))
 	qw422016.N().S(`
           `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "email.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	StreamImageTag(qw422016, p.Ctx, "email.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))
 	qw422016.N().S(`
         </label>
       </div>
@@ -144,7 +144,7 @@ func (p *UsersNew) StreamContent(qw422016 *qt422016.Writer) {
 	qw422016.N().S(string(form.PasswordField("password", NewAttrs().Class("input").Autocomplete("new-password").Placeholder("Password").Required(true).Maxlength(72))))
 	qw422016.N().S(`
           `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "password.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	StreamImageTag(qw422016, p.Ctx, "password.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))
 	qw422016.N().S(`
         </label>
       </div>
@@ -154,7 +154,7 @@ func (p *UsersNew) StreamContent(qw422016 *qt422016.Writer) {
 
 	qw422016.N().S(`
         `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "check.svg", NewAttrs().AriaHidden())))
+	StreamImageTag(qw422016, p.Ctx, "check.svg", NewAttrs().AriaHidden())
 	qw422016.N().S(`
         <span class="for-screen-reader">Save</span>
 `)

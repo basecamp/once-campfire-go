@@ -11,7 +11,7 @@
     </div>
 
     {% code BeginCapture(qw422016) %}
-      {%s= string(ImageTag(ctx, "pencil.svg", NewAttrs().AriaHidden().Size(20))) %}
+      {%= ImageTag(ctx, "pencil.svg", NewAttrs().AriaHidden().Size(20)) %}
       <span class="for-screen-reader">Edit {%s bot.User.Name %}</span>
 {% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture1, RouteEditAccountBot(bot.User.ID), NewAttrs().Class("btn flex-item-justify-end").Style("view-transition-name: chat-bot-" + strconv.FormatInt(bot.User.ID, 10)))) %}  </div>
 
@@ -21,7 +21,7 @@
       </legend>
 
 {% code curlTextLine := CurlTextLine(ctx.URL(RouteRoomBotMessages(room.ID, bot.BotKey))) %}      <div class="flex align-center gap">
-        {%s= string(ImageTag(ctx, "messages-outlined.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))) %}
+        {%= ImageTag(ctx, "messages-outlined.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black")) %}
 
         <div class="flex-item-grow">
           <input type="text" class="input full-width fill-white" value="{%s curlTextLine %}" aria-label="curl command for posting messages" readonly>
@@ -29,13 +29,13 @@
 
         <div class="txt-small">
           {% code BeginCapture(qw422016) %}
-            {%s= string(ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20))) %}
+            {%= ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20)) %}
             <span class="for-screen-reader">Copy message command</span>
 {% code capture2 := EndCapture(qw422016) %}{%s= string(ButtonToCopyToClipboard(capture2, curlTextLine)) %}        </div>
       </div>
 
 {% code curlUploadLine := CurlUploadLine(ctx.URL(RouteRoomBotMessages(room.ID, bot.BotKey))) %}      <div class="flex align-center gap">
-        {%s= string(ImageTag(ctx, "attachment.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))) %}
+        {%= ImageTag(ctx, "attachment.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black")) %}
 
         <div class="flex-item-grow">
           <input type="text" class="input full-width fill-white" value="{%s curlUploadLine %}" aria-label="curl command for posting attachments" readonly>
@@ -43,7 +43,7 @@
 
         <div class="txt-small">
           {% code BeginCapture(qw422016) %}
-            {%s= string(ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20))) %}
+            {%= ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20)) %}
             <span class="for-screen-reader">Copy attachment command</span>
 {% code capture3 := EndCapture(qw422016) %}{%s= string(ButtonToCopyToClipboard(capture3, curlUploadLine)) %}        </div>
       </div>

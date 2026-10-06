@@ -27,7 +27,7 @@ func StreamUsersSidebarsRoomsDirect(qw422016 *qt422016.Writer, ctx *ViewContext,
 		for i := range min(4, len(membership.Members)) {
 			qw422016.N().S(`          <span class="avatar">
             `)
-			qw422016.N().S(string(ImageTag(ctx, membership.Members[i].AvatarPath, NewAttrs().Size(20).AriaHidden())))
+			StreamImageTag(qw422016, ctx, membership.Members[i].AvatarPath, NewAttrs().Size(20).AriaHidden())
 			qw422016.N().S(`
           </span>
 `)
@@ -37,7 +37,7 @@ func StreamUsersSidebarsRoomsDirect(qw422016 *qt422016.Writer, ctx *ViewContext,
 	} else {
 		qw422016.N().S(`      <span class="avatar">
         `)
-		qw422016.N().S(string(ImageTag(ctx, membership.Members[0].AvatarPath, NewAttrs().Size(48).AriaHidden())))
+		StreamImageTag(qw422016, ctx, membership.Members[0].AvatarPath, NewAttrs().Size(48).AriaHidden())
 		qw422016.N().S(`
       </span>
 `)

@@ -1,12 +1,9 @@
 package views
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func renderAttrs(a *Attrs) string {
-	var b strings.Builder
+	var b tagBuilder
 	a.renderInto(&b)
 	return b.String()
 }

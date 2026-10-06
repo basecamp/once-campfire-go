@@ -12,12 +12,12 @@
     {%s= string(CurrentUserMetaTags(ctx)) %}
     {%s= string(ScriptAwareActionCableMetaTag(ctx)) %}
 
-    {%s= string(BuilderTag("meta", NewAttrs().Name("vapid-public-key").AttrOpt("content", ctx.VAPIDPublicKey))) %}
-    {%s= string(BuilderTag("meta", NewAttrs().Name("turbo-prefetch").Attr("content", "true"))) %}
+    {%= BuilderTag("meta", NewAttrs().Name("vapid-public-key").AttrOpt("content", ctx.VAPIDPublicKey)) %}
+    {%= BuilderTag("meta", NewAttrs().Name("turbo-prefetch").Attr("content", "true")) %}
 
-    {%s= string(BuilderTag("link", NewAttrs().Attr("rel", "manifest").Attr("href", "/webmanifest.json"))) %}
-    {%s= string(BuilderTag("link", NewAttrs().Attr("rel", "icon").Attr("href", ctx.Account.LogoURL).Type("image/png"))) %}
-    {%s= string(BuilderTag("link", NewAttrs().Attr("rel", "apple-touch-icon").Attr("href", ctx.Account.LogoURL))) %}
+    {%= BuilderTag("link", NewAttrs().Attr("rel", "manifest").Attr("href", "/webmanifest.json")) %}
+    {%= BuilderTag("link", NewAttrs().Attr("rel", "icon").Attr("href", ctx.Account.LogoURL).Type("image/png")) %}
+    {%= BuilderTag("link", NewAttrs().Attr("rel", "apple-touch-icon").Attr("href", ctx.Account.LogoURL)) %}
 
     {%s= string(ctx.StylesheetTags) %}
     {%s= string(CustomStylesTag(ctx)) %}
@@ -34,8 +34,8 @@
 
 {% code notice := ctx.FlashNotice %}{% if notice == nil %}{% code notice = ctx.FlashAlert %}{% endif %}{% if notice != nil %}      <div class="flash" data-controller="element-removal" data-action="animationend->element-removal#remove">
         <div class="flash__inner shadow" style="{% if ctx.FlashAlert != nil %}--flash-background: var(--color-negative){% endif %}">
-{% if ctx.FlashAlert != nil %}            {%s= string(ImageTag(ctx, "alert.svg", NewAttrs().Aria("hidden", true).Size(24).Class("colorize--white"))) %}</span>
-{% else %}            {%s= string(ImageTag(ctx, "check.svg", NewAttrs().Aria("hidden", true).Size(24).Class("colorize--white"))) %}</span>
+{% if ctx.FlashAlert != nil %}            {%= ImageTag(ctx, "alert.svg", NewAttrs().Aria("hidden", true).Size(24).Class("colorize--white")) %}</span>
+{% else %}            {%= ImageTag(ctx, "check.svg", NewAttrs().Aria("hidden", true).Size(24).Class("colorize--white")) %}</span>
 {% endif %}        </div>
         <span class="for-screen-reader" role="alert" aria-atomic="true">{%s *notice %}</span>
       </div>
@@ -52,7 +52,7 @@
     {%= LayoutsLightbox(ctx) %}
 
     <a href="https://once.com" id="app-logo" target="_blank" aria-label="Once software from 37signals home page">
-      {%s= string(ImageTag(ctx, "campfire-icon.png", NewAttrs().Alt("Campfire logo").Attr("width", 256).Attr("height", 216))) %}
+      {%= ImageTag(ctx, "campfire-icon.png", NewAttrs().Alt("Campfire logo").Attr("width", 256).Attr("height", 216)) %}
     </a>
   </body>
 </html>

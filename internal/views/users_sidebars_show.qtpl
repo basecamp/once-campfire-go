@@ -1,8 +1,8 @@
 {% comment %}reference/crates/views/templates/users/sidebars/show.html{% endcomment %}
 {% import "strconv" %}
 {% func (p *UsersSidebarsShow) Content() %}{% code BeginCapture(qw422016) %}
-  {%s= string(TurboStreamFrom(p.RoomsStream)) %}
-  {%s= string(TurboStreamFrom(p.UserRoomsStream)) %}
+  {%= TurboStreamFrom(p.RoomsStream) %}
+  {%= TurboStreamFrom(p.UserRoomsStream) %}
 
   <div class="sidebar__container overflow-y overflow-hide-scrollbar"
       data-controller="badge-dot"
@@ -12,14 +12,14 @@
       <div class="directs gap overflow-x overflow-hide-scrollbar">
         {% code BeginCapture(qw422016) %}
           <span class="avatar avatar--icon">
-            {%s= string(ImageTag(p.Ctx, "messages-add.svg", NewAttrs().Size(20).AriaHidden().Class("colorize--black"))) %}
+            {%= ImageTag(p.Ctx, "messages-add.svg", NewAttrs().Size(20).AriaHidden().Class("colorize--black")) %}
           </span>
 
           <span class="direct__author flex max-width min-width border-radius pad-inline-half">
             <span class="for-screen-reader">New</span>
             <span class="txt-small overflow-clip">Ping</span>
           </span>
-{% code capture2 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture2, RouteNewRoomsDirect(), NewAttrs().Class("direct direct__new").Data("turbo_frame", "_self"))) %}
+{% code EndCaptureLinkTo(qw422016, RouteNewRoomsDirect(), NewAttrs().Class("direct direct__new").Data("turbo_frame", "_self")) %}
         <div id="direct_rooms" contents data-controller="sorted-list" data-action="rooms-list:unread@window->sorted-list#updateItem">
           {% for _, membership := range p.DirectMemberships %}{%s= CachedDirectRoomItem(p.Ctx, membership).HTML %}{% endfor %}        </div>
 
@@ -33,22 +33,22 @@
 {% for i := range p.OtherMemberships %}          {%= UsersSidebarsRoomsShared(&p.OtherMemberships[i]) %}{% endfor %}      </div>
 
 {% if p.CanCreateRooms %}        {% code BeginCapture(qw422016) %}
-          {%s= string(ImageTag(p.Ctx, "add.svg", NewAttrs().Size(20).AriaHidden().Style("view-transition-name: new-room"))) %}
-{% code capture3 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture3, RouteNewRoomsOpen(), NewAttrs().Class("rooms__new-btn btn room align-center gap txt-reversed").Aria("label", "New Chat Room"))) %}{% endif %}    </div>
+          {%= ImageTag(p.Ctx, "add.svg", NewAttrs().Size(20).AriaHidden().Style("view-transition-name: new-room")) %}
+{% code EndCaptureLinkTo(qw422016, RouteNewRoomsOpen(), NewAttrs().Class("rooms__new-btn btn room align-center gap txt-reversed").Aria("label", "New Chat Room")) %}{% endif %}    </div>
 
     <button class="btn sidebar__toggle" data-action="toggle-class#toggle">
-      {%s= string(ImageTag(p.Ctx, "menu.svg", NewAttrs().Size(20).AriaHidden())) %}
+      {%= ImageTag(p.Ctx, "menu.svg", NewAttrs().Size(20).AriaHidden()) %}
       <span class="for-screen-reader">Open menu</span>
     </button>
   </div>
 
   <div class="flex align-end sidebar__tools gap justify-end">
     {% code BeginCapture(qw422016) %}
-      {%s= string(ImageTag(p.Ctx, p.CurrentUser.AvatarPath, NewAttrs().Size(48).AriaHidden().Style("view-transition-name: avatar-"+strconv.FormatInt(p.CurrentUser.ID, 10)))) %}
+      {%= ImageTag(p.Ctx, p.CurrentUser.AvatarPath, NewAttrs().Size(48).AriaHidden().Style("view-transition-name: avatar-"+strconv.FormatInt(p.CurrentUser.ID, 10))) %}
       <span class="for-screen-reader">My Settings</span>
-{% code capture4 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture4, RouteUserProfile(), NewAttrs().Class("btn avatar flex-item-no-shrink sidebar__tool"))) %}
+{% code EndCaptureLinkTo(qw422016, RouteUserProfile(), NewAttrs().Class("btn avatar flex-item-no-shrink sidebar__tool")) %}
     {% code BeginCapture(qw422016) %}
-      {%s= string(ImageTag(p.Ctx, "settings.svg", NewAttrs().Size(20).AriaHidden().Style("view-transition-name: account-settings"))) %}
+      {%= ImageTag(p.Ctx, "settings.svg", NewAttrs().Size(20).AriaHidden().Style("view-transition-name: account-settings")) %}
       <span class="for-screen-reader">Account Settings</span>
-{% code capture5 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture5, RouteEditAccount(), NewAttrs().Class("btn align-center gap txt-reversed sidebar__tool"))) %}  </div>
-{% code capture1 := EndCapture(qw422016) %}{%s= string(SidebarTurboFrameTagBlock(capture1)) %}{% endfunc %}
+{% code EndCaptureLinkTo(qw422016, RouteEditAccount(), NewAttrs().Class("btn align-center gap txt-reversed sidebar__tool")) %}  </div>
+{% code EndCaptureSidebarTurboFrameTag(qw422016) %}{% endfunc %}

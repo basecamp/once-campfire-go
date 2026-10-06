@@ -19,11 +19,11 @@ func StreamPwaInstallInstructions(qw422016 *qt422016.Writer, ctx *ViewContext) {
 		qw422016.N().S(`  <details class="notifications-help pwa__instructions hide-in-pwa" data-controller="pwa-install" data-pwa-install-prompting-class="pwa--can-install" data-notifications-target="details">
     <summary class="btn">
       `)
-		qw422016.N().S(string(ImageTag(ctx, "external/install.svg", NewAttrs().AriaHidden().Size(20))))
+		StreamImageTag(qw422016, ctx, "external/install.svg", NewAttrs().AriaHidden().Size(20))
 		qw422016.N().S(`
       <strong>Install Campfire as a web app.</strong>
       `)
-		qw422016.N().S(string(ImageTag(ctx, "disclosure.svg", NewAttrs().AriaHidden().Size(10).Class("disclosure"))))
+		StreamImageTag(qw422016, ctx, "disclosure.svg", NewAttrs().AriaHidden().Size(10).Class("disclosure"))
 		qw422016.N().S(`
     </summary>
 
@@ -31,7 +31,7 @@ func StreamPwaInstallInstructions(qw422016 *qt422016.Writer, ctx *ViewContext) {
 		if ctx.Platform.Edge {
 			qw422016.N().S(`        <ol>
           <li>Click <em>`)
-			qw422016.N().S(string(ImageTag(ctx, "install-edge.svg", NewAttrs().Alt("the app available - install Campfire chat button").Size(16))))
+			StreamImageTag(qw422016, ctx, "install-edge.svg", NewAttrs().Alt("the app available - install Campfire chat button").Size(16))
 			qw422016.N().S(`</em>in the address bar.</li>
           <li>Click <em>Install</em>.</li>
         </ol>
@@ -39,7 +39,7 @@ func StreamPwaInstallInstructions(qw422016 *qt422016.Writer, ctx *ViewContext) {
 		} else if ctx.Platform.Chrome && ctx.Platform.Android {
 			qw422016.N().S(`        <ol>
           <li>Tap the <em>`)
-			qw422016.N().S(string(ImageTag(ctx, "menu-dots-vertical.svg", NewAttrs().Alt("More options").Size(16))))
+			StreamImageTag(qw422016, ctx, "menu-dots-vertical.svg", NewAttrs().Alt("More options").Size(16))
 			qw422016.N().S(`</em> menu button.</li>
           <li>Tap <em>Install app</em> in the menu.</li>
         </ol>
@@ -47,7 +47,7 @@ func StreamPwaInstallInstructions(qw422016 *qt422016.Writer, ctx *ViewContext) {
 		} else if ctx.Platform.Firefox && ctx.Platform.Android {
 			qw422016.N().S(`        <ol>
           <li>Tap the <em>`)
-			qw422016.N().S(string(ImageTag(ctx, "menu-dots-vertical.svg", NewAttrs().Alt("More options").Size(16))))
+			StreamImageTag(qw422016, ctx, "menu-dots-vertical.svg", NewAttrs().Alt("More options").Size(16))
 			qw422016.N().S(`</em> menu button.</li>
           <li>Tap <em>Install</em> in the menu.</li>
         </ol>
@@ -66,7 +66,7 @@ func StreamPwaInstallInstructions(qw422016 *qt422016.Writer, ctx *ViewContext) {
 			qw422016.N().S(`, you must install Campfire as a web app.</p>
         <ol>
           <li>Tap <em>`)
-			qw422016.N().S(string(ImageTag(ctx, "external/share.svg", NewAttrs().Alt("the share button").Size(20))))
+			StreamImageTag(qw422016, ctx, "external/share.svg", NewAttrs().Alt("the share button").Size(20))
 			qw422016.N().S(`</em></li>
           <li>Tap <em>Add to Home Screen</em>.</li>
         </ol>
@@ -80,7 +80,7 @@ func StreamPwaInstallInstructions(qw422016 *qt422016.Writer, ctx *ViewContext) {
       <hr class="separator margin-block">
       <button class="btn btn--reversed center" data-action="pwa-install#promptInstall">
         `)
-		qw422016.N().S(string(ImageTag(ctx, "external/install.svg", NewAttrs().AriaHidden())))
+		StreamImageTag(qw422016, ctx, "external/install.svg", NewAttrs().AriaHidden())
 		qw422016.N().S(`
         Install now
       </button>

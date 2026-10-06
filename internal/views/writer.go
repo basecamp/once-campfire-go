@@ -95,28 +95,21 @@ func (p *RecordedPage) WriteTo(w io.Writer) (int64, error) {
 func (p *RecordedPage) String() string { return string(p.AppendTo(make([]byte, 0, p.Len()))) }
 
 // Writer is what templates render into: a page being recorded, or (with recording off) plain
-// text. Captures (a filter block's content) take the writes between BeginCapture and EndCapture.
+// text. A capture (a filter block's content) is written in place; captures holds where each open
+// one starts in the page's text.
 type Writer struct {
 	page      *RecordedPage
 	recording bool
-	captures  [][]byte
+	captures  []int
 }
 
 func (w *Writer) Write(p []byte) (int, error) {
-	if n := len(w.captures); n > 0 {
-		w.captures[n-1] = append(w.captures[n-1], p...)
-	} else {
-		w.page.Text = append(w.page.Text, p...)
-	}
+	w.page.Text = append(w.page.Text, p...)
 	return len(p), nil
 }
 
 func (w *Writer) WriteString(s string) (int, error) {
-	if n := len(w.captures); n > 0 {
-		w.captures[n-1] = append(w.captures[n-1], s...)
-	} else {
-		w.page.Text = append(w.page.Text, s...)
-	}
+	w.page.Text = append(w.page.Text, s...)
 	return len(s), nil
 }
 
@@ -207,14 +200,49 @@ func StreamFragment(qw *qt.Writer, f *Fragment) {
 // BeginCapture starts capturing what the template writes, for a filter block (`link_to ... do`).
 func BeginCapture(qw *qt.Writer) {
 	w := writerOf(qw)
-	w.captures = append(w.captures, nil)
+	w.captures = append(w.captures, len(w.page.Text))
 }
 
-// EndCapture ends the innermost capture and returns its content, which a block helper wraps.
+// EndCapture ends the innermost capture and takes its content out of the page, for a block helper
+// to wrap.
 func EndCapture(qw *qt.Writer) HTML {
 	w := writerOf(qw)
+	start := w.endCapture()
+	content := HTML(w.page.Text[start:])
+	w.page.Text = w.page.Text[:start]
+	return content
+}
+
+// blockWrap wraps the block just captured where it was written, for a block helper whose output is
+// an opening tag, the block and a closing tag (EndCaptureLinkTo and the others in
+// helpers_filters.go): the helper writes its opening tag into tag, after the block, and close moves
+// it in front of the block and closes it. The block isn't copied out and written back.
+type blockWrap struct {
+	w          *Writer
+	start, end int // the block, in the page's text
+	tag        tagBuilder
+}
+
+// wrapBlock ends the innermost capture, to wrap it.
+func wrapBlock(qw *qt.Writer) blockWrap {
+	w := writerOf(qw)
+	start := w.endCapture()
+	return blockWrap{w: w, start: start, end: len(w.page.Text), tag: tagBuilder{w.page.Text}}
+}
+
+func (b *blockWrap) close(closing string) {
+	text := b.tag.buf
+	// The opening tag is set aside (on the stack when it fits) while the block moves after it.
+	var small [512]byte
+	open := append(small[:0], text[b.end:]...)
+	copy(text[b.start+len(open):], text[b.start:b.end])
+	copy(text[b.start:], open)
+	b.w.page.Text = append(text, closing...)
+}
+
+func (w *Writer) endCapture() int {
 	n := len(w.captures) - 1
-	content := w.captures[n]
+	start := w.captures[n]
 	w.captures = w.captures[:n]
-	return HTML(content)
+	return start
 }

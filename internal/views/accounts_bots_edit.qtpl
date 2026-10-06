@@ -12,12 +12,12 @@
 
   <div class="flex align-center gap justify-space-between">
     {% code BeginCapture(qw422016) %}
-      {%s= string(ImageTag(p.Ctx, "trash.svg", NewAttrs().AriaHidden().Size(20))) %}
-      {%s= string(ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))) %}
+      {%= ImageTag(p.Ctx, "trash.svg", NewAttrs().AriaHidden().Size(20)) %}
+      {%= ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20)) %}
 {% code capture2 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture2, RouteAccountBot(p.BotID), NewAttrs().Method("delete").Class("btn txt--small btn--negative").Aria("label", "Delete this chat bot").Data("turbo_confirm", "Are you sure you want to permanently remove this bot from the account? This can’t be undone."))) %}
     {% code BeginCapture(qw422016) %}
-      {%s= string(ImageTag(p.Ctx, "refresh.svg", NewAttrs().AriaHidden().Size(20))) %}
-      {%s= string(ImageTag(p.Ctx, "key.svg", NewAttrs().AriaHidden().Size(20))) %}
+      {%= ImageTag(p.Ctx, "refresh.svg", NewAttrs().AriaHidden().Size(20)) %}
+      {%= ImageTag(p.Ctx, "key.svg", NewAttrs().AriaHidden().Size(20)) %}
 {% code capture3 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture3, RouteAccountBotKey(p.BotID), NewAttrs().Method("put").Class("btn full-width txt--small btn--negative").Aria("label", "Generate a new key").Data("turbo_confirm", "Are you sure you want to change the bot key? All usage of this bot must be updated."))) %}  </div>
 </section>
 {% endfunc %}

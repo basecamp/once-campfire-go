@@ -8,13 +8,17 @@ import "strconv"
 // LinkToRoom is link_to_room(room, **attributes) { content }. options is the attribute hash in
 // Ruby order, data-* entries included where the data: key was.
 func LinkToRoom(content HTML, roomID int64, options *Attrs) HTML {
+	return ContentTag("a", linkToRoomOptions(roomID, options), content)
+}
+
+func linkToRoomOptions(roomID int64, options *Attrs) *Attrs {
 	defaults := []attrEntry{
 		{"data-rooms-list-target", textAttr("room")},
 		{"data-room-id", textAttr(strconv.FormatInt(roomID, 10))},
 		{"data-badge-dot-target", textAttr("unread")},
 		{"data-sorted-list-target", textAttr("item")},
 	}
-	return ContentTag("a", linkOptions(RouteRoom(roomID), options.withDefaultData(defaults)), content)
+	return linkOptions(RouteRoom(roomID), options.withDefaultData(defaults))
 }
 
 // HumanizeInvolvement is HUMANIZE_INVOLVEMENT.

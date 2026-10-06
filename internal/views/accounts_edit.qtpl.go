@@ -48,7 +48,7 @@ func (p *AccountsEdit) StreamNav(qw422016 *qt422016.Writer) {
 
 		qw422016.N().S(`
         `)
-		qw422016.N().S(string(ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))))
+		StreamImageTag(qw422016, p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))
 		qw422016.N().S(`
         <span class="for-screen-reader">Set up chat bots</span>
 `)
@@ -61,7 +61,7 @@ func (p *AccountsEdit) StreamNav(qw422016 *qt422016.Writer) {
 
 		qw422016.N().S(`
         `)
-		qw422016.N().S(string(ImageTag(p.Ctx, "art.svg", NewAttrs().Size(20).AriaHidden())))
+		StreamImageTag(qw422016, p.Ctx, "art.svg", NewAttrs().Size(20).AriaHidden())
 		qw422016.N().S(`
         <span class="for-screen-reader">Custom styles</span>
 `)
@@ -103,7 +103,7 @@ func (p *AccountsEdit) StreamContent(qw422016 *qt422016.Writer) {
 		qw422016.N().S(`
         <label class="btn input--file">
           `)
-		qw422016.N().S(string(ImageTag(ctx, "camera.svg", NewAttrs().AriaHidden().Size(20))))
+		StreamImageTag(qw422016, ctx, "camera.svg", NewAttrs().AriaHidden().Size(20))
 		qw422016.N().S(`
           `)
 		qw422016.N().S(string(form1.FileField("logo", NewAttrs().Class("input").Accept("image/*").Data("action", "upload-preview#previewImage change->form#submit"))))
@@ -124,7 +124,7 @@ func (p *AccountsEdit) StreamContent(qw422016 *qt422016.Writer) {
 		qw422016.N().S(`
         <label class="btn avatar input--file account-logo txt-xx-large">
           `)
-		qw422016.N().S(string(ImageTag(ctx, ctx.Account.LogoURL, NewAttrs().Role("presentation").Size(48).Data("upload_preview_target", "image"))))
+		StreamImageTag(qw422016, ctx, ctx.Account.LogoURL, NewAttrs().Role("presentation").Size(48).Data("upload_preview_target", "image"))
 		qw422016.N().S(`
           `)
 		qw422016.N().S(string(form2.FileField("logo", NewAttrs().Class("input").Accept("image/*").Data("action", "upload-preview#previewImage change->form#submit"))))
@@ -143,7 +143,7 @@ func (p *AccountsEdit) StreamContent(qw422016 *qt422016.Writer) {
 
 			qw422016.N().S(`
           `)
-			qw422016.N().S(string(ImageTag(ctx, "minus.svg", NewAttrs().AriaHidden().Size(20))))
+			StreamImageTag(qw422016, ctx, "minus.svg", NewAttrs().AriaHidden().Size(20))
 			qw422016.N().S(`
           <span class="for-screen-reader">Delete logo</span>
 `)
@@ -176,7 +176,7 @@ func (p *AccountsEdit) StreamContent(qw422016 *qt422016.Writer) {
 
 		qw422016.N().S(`
           `)
-		qw422016.N().S(string(ImageTag(ctx, "check.svg", NewAttrs().AriaHidden().Size(20))))
+		StreamImageTag(qw422016, ctx, "check.svg", NewAttrs().AriaHidden().Size(20))
 		qw422016.N().S(`
           <span class="for-screen-reader">Save changes</span>
 `)
@@ -199,7 +199,7 @@ func (p *AccountsEdit) StreamContent(qw422016 *qt422016.Writer) {
 		qw422016.N().S(`
         <div class="flex-item-grow flex align-center gap txt-align-start">
           `)
-		qw422016.N().S(string(ImageTag(ctx, "crown.svg", NewAttrs().Class("colorize--black").AriaHidden().Size(18))))
+		StreamImageTag(qw422016, ctx, "crown.svg", NewAttrs().Class("colorize--black").AriaHidden().Size(18))
 		qw422016.N().S(` Must be admin to create new rooms
         </div>
 `)

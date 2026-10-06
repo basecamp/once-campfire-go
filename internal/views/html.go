@@ -17,14 +17,14 @@ func Escape(s string) string {
 	if strings.IndexAny(s, `&<>"'`) < 0 {
 		return s
 	}
-	var b strings.Builder
+	var b tagBuilder
 	b.Grow(len(s) + 16)
 	EscapeTo(&b, s)
 	return b.String()
 }
 
 // EscapeTo appends ERB::Util.html_escape(s) to b, a run of unescaped bytes at a time.
-func EscapeTo(b *strings.Builder, s string) {
+func EscapeTo(b *tagBuilder, s string) {
 	last := 0
 	for i := 0; i < len(s); i++ {
 		var replacement string

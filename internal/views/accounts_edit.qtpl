@@ -7,11 +7,11 @@
 
 {% if p.Ctx.CanAdminister() %}    <div class="flex align-center gap flex-item-justify-end">
       {% code BeginCapture(qw422016) %}
-        {%s= string(ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20))) %}
+        {%= ImageTag(p.Ctx, "bot.svg", NewAttrs().AriaHidden().Size(20)) %}
         <span class="for-screen-reader">Set up chat bots</span>
 {% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture1, RouteAccountBots(), NewAttrs().Class("btn").Style("view-transition-name: chat-bots"))) %}
       {% code BeginCapture(qw422016) %}
-        {%s= string(ImageTag(p.Ctx, "art.svg", NewAttrs().Size(20).AriaHidden())) %}
+        {%= ImageTag(p.Ctx, "art.svg", NewAttrs().Size(20).AriaHidden()) %}
         <span class="for-screen-reader">Custom styles</span>
 {% code capture2 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture2, RouteEditAccountCustomStyles(), NewAttrs().Class("btn").Style("view-transition-name: custom-styles"))) %}    </div>
 {% endif %}{% endfunc %}
@@ -19,20 +19,20 @@
 {% if ctx.CanAdminister() %}    <div class="align-center center avatar__form gap" data-controller="upload-preview">
 {% code form1 := FormWith(p.AccountAction()).Model("account").Method("patch").Class("txt--medium").Data("controller", "form") %}      {% code BeginCapture(qw422016) %}
         <label class="btn input--file">
-          {%s= string(ImageTag(ctx, "camera.svg", NewAttrs().AriaHidden().Size(20))) %}
+          {%= ImageTag(ctx, "camera.svg", NewAttrs().AriaHidden().Size(20)) %}
           {%s= string(form1.FileField("logo", NewAttrs().Class("input").Accept("image/*").Data("action", "upload-preview#previewImage change->form#submit"))) %}
           <span class="for-screen-reader">Upload logo</span>
         </label>
 {% code capture1 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture1, form1)) %}
 {% code form2 := FormWith(p.AccountAction()).Model("account").Method("patch").Data("controller", "form") %}      {% code BeginCapture(qw422016) %}
         <label class="btn avatar input--file account-logo txt-xx-large">
-          {%s= string(ImageTag(ctx, ctx.Account.LogoURL, NewAttrs().Role("presentation").Size(48).Data("upload_preview_target", "image"))) %}
+          {%= ImageTag(ctx, ctx.Account.LogoURL, NewAttrs().Role("presentation").Size(48).Data("upload_preview_target", "image")) %}
           {%s= string(form2.FileField("logo", NewAttrs().Class("input").Accept("image/*").Data("action", "upload-preview#previewImage change->form#submit"))) %}
           <span class="for-screen-reader">Upload logo</span>
         </label>
 {% code capture2 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture2, form2)) %}
 {% if ctx.Account.HasLogo %}        {% code BeginCapture(qw422016) %}
-          {%s= string(ImageTag(ctx, "minus.svg", NewAttrs().AriaHidden().Size(20))) %}
+          {%= ImageTag(ctx, "minus.svg", NewAttrs().AriaHidden().Size(20)) %}
           <span class="for-screen-reader">Delete logo</span>
 {% code capture3 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture3, ctx.Account.LogoURL, NewAttrs().Method("delete").Class("btn btn--negative txt-small avatar__delete-btn"))) %}{% endif %}    </div>
 
@@ -45,14 +45,14 @@
         </label>
 
         {% code BeginCapture(qw422016) %}
-          {%s= string(ImageTag(ctx, "check.svg", NewAttrs().AriaHidden().Size(20))) %}
+          {%= ImageTag(ctx, "check.svg", NewAttrs().AriaHidden().Size(20)) %}
           <span class="for-screen-reader">Save changes</span>
 {% code capture5 := EndCapture(qw422016) %}{%s= string(Button(capture5, NewAttrs().Class("btn btn--reversed center").Type("submit"))) %}      </div>
 {% code capture4 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture4, form3)) %}
     <div class="margin-block-start pad-block pad-inline-double fill-shade border-radius">
 {% code form4 := FormWith(p.AccountAction()).Model("account").Method("put").Data("controller", "form").Class("flex align-center gap center") %}      {% code BeginCapture(qw422016) %}
         <div class="flex-item-grow flex align-center gap txt-align-start">
-          {%s= string(ImageTag(ctx, "crown.svg", NewAttrs().Class("colorize--black").AriaHidden().Size(18))) %} Must be admin to create new rooms
+          {%= ImageTag(ctx, "crown.svg", NewAttrs().Class("colorize--black").AriaHidden().Size(18)) %} Must be admin to create new rooms
         </div>
 {% code settingsForm := form4.FieldsFor("settings") %}          {%s= string(settingsForm.HiddenField("restrict_room_creation_to_administrators", nil, NewAttrs().Value(strconv.FormatBool(!p.RestrictRoomCreationToAdministrators)))) %}
 

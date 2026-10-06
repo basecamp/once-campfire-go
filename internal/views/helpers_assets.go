@@ -1,6 +1,10 @@
 package views
 
-import "strings"
+import (
+	"strings"
+
+	qt "github.com/valyala/quicktemplate"
+)
 
 // image_tag and asset resolution (AssetTagHelper, AssetUrlHelper).
 
@@ -32,6 +36,19 @@ func isURL(source string) bool {
 // ImageTag is image_tag(source, options): the options in order, then src, then width/height from
 // size: ("20" or "20x30").
 func ImageTag(ctx *ViewContext, source string, options *Attrs) HTML {
+	var b tagBuilder
+	imageTagInto(&b, ctx, source, options)
+	return HTML(b.String())
+}
+
+// StreamImageTag writes ImageTag's tag into the page: templates write {%= ImageTag(...) %}.
+func StreamImageTag(qw *qt.Writer, ctx *ViewContext, source string, options *Attrs) {
+	b, w := intoPage(qw)
+	imageTagInto(&b, ctx, source, options)
+	b.writeOut(qw, w)
+}
+
+func imageTagInto(b *tagBuilder, ctx *ViewContext, source string, options *Attrs) {
 	size := options.remove("size")
 	options = options.put("src", textAttr(AssetPath(ctx, source)))
 	if size.kind != noValue {
@@ -42,5 +59,5 @@ func ImageTag(ctx *ViewContext, source string, options *Attrs) HTML {
 		}
 		options.put("width", textAttr(width)).put("height", textAttr(height))
 	}
-	return LegacyTag("img", options)
+	legacyTagInto(b, "img", options)
 }

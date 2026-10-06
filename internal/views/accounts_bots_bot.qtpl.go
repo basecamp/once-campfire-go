@@ -36,7 +36,7 @@ func StreamAccountsBotsBot(qw422016 *qt422016.Writer, ctx *ViewContext, bot *Bot
 
 	qw422016.N().S(`
       `)
-	qw422016.N().S(string(ImageTag(ctx, "pencil.svg", NewAttrs().AriaHidden().Size(20))))
+	StreamImageTag(qw422016, ctx, "pencil.svg", NewAttrs().AriaHidden().Size(20))
 	qw422016.N().S(`
       <span class="for-screen-reader">Edit `)
 	qw422016.E().S(bot.User.Name)
@@ -61,7 +61,7 @@ func StreamAccountsBotsBot(qw422016 *qt422016.Writer, ctx *ViewContext, bot *Bot
 
 		qw422016.N().S(`      <div class="flex align-center gap">
         `)
-		qw422016.N().S(string(ImageTag(ctx, "messages-outlined.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+		StreamImageTag(qw422016, ctx, "messages-outlined.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))
 		qw422016.N().S(`
 
         <div class="flex-item-grow">
@@ -76,7 +76,7 @@ func StreamAccountsBotsBot(qw422016 *qt422016.Writer, ctx *ViewContext, bot *Bot
 
 		qw422016.N().S(`
             `)
-		qw422016.N().S(string(ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20))))
+		StreamImageTag(qw422016, ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20))
 		qw422016.N().S(`
             <span class="for-screen-reader">Copy message command</span>
 `)
@@ -91,7 +91,7 @@ func StreamAccountsBotsBot(qw422016 *qt422016.Writer, ctx *ViewContext, bot *Bot
 
 		qw422016.N().S(`      <div class="flex align-center gap">
         `)
-		qw422016.N().S(string(ImageTag(ctx, "attachment.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+		StreamImageTag(qw422016, ctx, "attachment.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))
 		qw422016.N().S(`
 
         <div class="flex-item-grow">
@@ -106,7 +106,7 @@ func StreamAccountsBotsBot(qw422016 *qt422016.Writer, ctx *ViewContext, bot *Bot
 
 		qw422016.N().S(`
             `)
-		qw422016.N().S(string(ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20))))
+		StreamImageTag(qw422016, ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20))
 		qw422016.N().S(`
             <span class="for-screen-reader">Copy attachment command</span>
 `)

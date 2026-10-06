@@ -18,13 +18,13 @@ func StreamPwaSystemSettings(qw422016 *qt422016.Writer, ctx *ViewContext) {
 	qw422016.N().S(`<details class="notifications-help hide-in-browser" data-notifications-target="details">
   <summary class="btn">
     `)
-	qw422016.N().S(string(ImageTag(ctx, "external/gear.svg", NewAttrs().AriaHidden().Size(20))))
+	StreamImageTag(qw422016, ctx, "external/gear.svg", NewAttrs().AriaHidden().Size(20))
 	qw422016.N().S(`
     <strong>Check your `)
 	qw422016.E().S(ctx.Platform.OperatingSystem)
 	qw422016.N().S(` settings</strong>
     `)
-	qw422016.N().S(string(ImageTag(ctx, "disclosure.svg", NewAttrs().AriaHidden().Size(10).Class("disclosure"))))
+	StreamImageTag(qw422016, ctx, "disclosure.svg", NewAttrs().AriaHidden().Size(10).Class("disclosure"))
 	qw422016.N().S(`
   </summary>
 
@@ -32,12 +32,12 @@ func StreamPwaSystemSettings(qw422016 *qt422016.Writer, ctx *ViewContext) {
 	if ctx.Platform.Firefox && ctx.Platform.Android {
 		qw422016.N().S(`      <ol>
         <li>Tap the <em>`)
-		qw422016.N().S(string(ImageTag(ctx, "menu-dots-vertical.svg", NewAttrs().Alt("More options").Size(16))))
+		StreamImageTag(qw422016, ctx, "menu-dots-vertical.svg", NewAttrs().Alt("More options").Size(16))
 		qw422016.N().S(`</em> menu button.</li>
         <li>Tap <em>Settings</em>.</li>
         <li>Tap <em>Notifications</em>.</li>
         <li>Tap <em>`)
-		qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the toggle button").Size(22))))
+		StreamImageTag(qw422016, ctx, "external/switch.svg", NewAttrs().Alt("the toggle button").Size(22))
 		qw422016.N().S(`</em> to <em>Allow `)
 		qw422016.E().S(Capitalize(ctx.Platform.Browser))
 		qw422016.N().S(` notifications</em>.</li>
@@ -48,7 +48,7 @@ func StreamPwaSystemSettings(qw422016 *qt422016.Writer, ctx *ViewContext) {
         <li>Click <em>Start</em>, then <em>Settings</em>.</li>
         <li>Go to <em>System &gt; Notification</em>.</li>
         <li>Click <em>`)
-		qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the toggle button").Size(22))))
+		StreamImageTag(qw422016, ctx, "external/switch.svg", NewAttrs().Alt("the toggle button").Size(22))
 		qw422016.N().S(`</em> <em>ON</em> for Campfire.</li>
       </ol>
 `)
@@ -59,7 +59,7 @@ func StreamPwaSystemSettings(qw422016 *qt422016.Writer, ctx *ViewContext) {
 			qw422016.N().S(`          <li>Click <em>Start</em>, then <em>Settings</em>.</li>
           <li>Go to <em>System &gt; Notification</em>.</li>
           <li>Click <em>`)
-			qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the toggle button").Size(22))))
+			StreamImageTag(qw422016, ctx, "external/switch.svg", NewAttrs().Alt("the toggle button").Size(22))
 			qw422016.N().S(`</em> <em>ON</em> for Campfire.</li>
 `)
 		} else {
@@ -68,7 +68,7 @@ func StreamPwaSystemSettings(qw422016 *qt422016.Writer, ctx *ViewContext) {
           <li>Click <em>Notifications</em>.</li>
           <li>Click <em>Campfire</em>.</li>
           <li>Click <em>`)
-			qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the allow notifications switch").Size(22))))
+			StreamImageTag(qw422016, ctx, "external/switch.svg", NewAttrs().Alt("the allow notifications switch").Size(22))
 			qw422016.N().S(`</em> to <em>Allow notifications</em>.</li>
 `)
 		}
@@ -81,32 +81,32 @@ func StreamPwaSystemSettings(qw422016 *qt422016.Writer, ctx *ViewContext) {
         <li>Click <em>Notifications</em>.</li>
         <li>Click <em>Campfire</em>.</li>
         <li>Click <em>`)
-		qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the allow notifications switch").Size(22))))
+		StreamImageTag(qw422016, ctx, "external/switch.svg", NewAttrs().Alt("the allow notifications switch").Size(22))
 		qw422016.N().S(`</em> to <em>Allow notifications</em>.</li>
       </ol>
 `)
 	} else if (ctx.Platform.Safari || ctx.Platform.Chrome) && ctx.Platform.IOS {
 		qw422016.N().S(`      <ol>
         <li>Open the <em>`)
-		qw422016.N().S(string(ImageTag(ctx, "external/gear.svg", NewAttrs().AriaHidden().Size(20))))
+		StreamImageTag(qw422016, ctx, "external/gear.svg", NewAttrs().AriaHidden().Size(20))
 		qw422016.N().S(`</em> Settings app.</li>
         <li>Scroll to and tap <em>Campfire</em>.</li>
         <li>Tap <em>Notifications</em>.</li>
         <li>Tap <em>`)
-		qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the allow notifications switch button").Size(22))))
+		StreamImageTag(qw422016, ctx, "external/switch.svg", NewAttrs().Alt("the allow notifications switch button").Size(22))
 		qw422016.N().S(`</em> to <em>Allow Notifications</em>.</li>
       </ol>
 `)
 	} else if ctx.Platform.Chrome && ctx.Platform.Android {
 		qw422016.N().S(`      <ol>
         <li>Open the <em>`)
-		qw422016.N().S(string(ImageTag(ctx, "external/gear.svg", NewAttrs().AriaHidden().Size(20))))
+		StreamImageTag(qw422016, ctx, "external/gear.svg", NewAttrs().AriaHidden().Size(20))
 		qw422016.N().S(`</em> Settings app.</li>
         <li>Tap <em>Notifications</em>.</li>
         <li>Tap <em>App notifications</em>.</li>
         <li>Scroll to <em>Campfire</em>.</li>
         <li>Tap <em>`)
-		qw422016.N().S(string(ImageTag(ctx, "external/switch.svg", NewAttrs().Alt("the switch").Size(22))))
+		StreamImageTag(qw422016, ctx, "external/switch.svg", NewAttrs().Alt("the switch").Size(22))
 		qw422016.N().S(`</em> to <em>Allow Notifications</em>.</li>
       </ol>
 `)

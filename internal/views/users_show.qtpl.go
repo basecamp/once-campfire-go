@@ -29,7 +29,7 @@ func (p *UsersShow) StreamNav(qw422016 *qt422016.Writer) {
 
 		qw422016.N().S(`
         `)
-		qw422016.N().S(string(ImageTag(p.Ctx, "pencil.svg", NewAttrs().AriaHidden())))
+		StreamImageTag(qw422016, p.Ctx, "pencil.svg", NewAttrs().AriaHidden())
 		qw422016.N().S(`
         <span class="for-screen-reader">Edit my profile</span>
 `)
@@ -66,7 +66,7 @@ func (p *UsersShow) StreamContent(qw422016 *qt422016.Writer) {
 	qw422016.N().S(`">
     <div class="avatar txt-xx-large center" style="background: white">
       `)
-	qw422016.N().S(string(ImageTag(p.Ctx, user.AvatarPath, NewAttrs().Alt("Profile avatar").Class("avatar"))))
+	StreamImageTag(qw422016, p.Ctx, user.AvatarPath, NewAttrs().Alt("Profile avatar").Class("avatar"))
 	qw422016.N().S(`
     </div>
 
@@ -113,7 +113,7 @@ func (p *UsersShow) StreamContent(qw422016 *qt422016.Writer) {
 
 				qw422016.N().S(`
               `)
-				qw422016.N().S(string(ImageTag(p.Ctx, "messages.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Ping "+user.Name))))
+				StreamImageTag(qw422016, p.Ctx, "messages.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Ping "+user.Name))
 				qw422016.N().S(`
 `)
 				capture1 := EndCapture(qw422016)

@@ -21,7 +21,7 @@ func StreamLayoutsLightbox(qw422016 *qt422016.Writer, ctx *ViewContext) {
   <form method="dialog" class="lightbox__btn">
     <button class="btn">
       `)
-	qw422016.N().S(string(ImageTag(ctx, "remove.svg", NewAttrs().AriaHidden())))
+	StreamImageTag(qw422016, ctx, "remove.svg", NewAttrs().AriaHidden())
 	qw422016.N().S(`
       <span class="for-screen-reader">Close image viewer</span>
     </button>
@@ -29,7 +29,7 @@ func StreamLayoutsLightbox(qw422016 *qt422016.Writer, ctx *ViewContext) {
 
   <a href="" class="lightbox__btn--download btn hide-in-ios-pwa" data-lightbox-target="download">
     `)
-	qw422016.N().S(string(ImageTag(ctx, "download.svg", NewAttrs().AriaHidden())))
+	StreamImageTag(qw422016, ctx, "download.svg", NewAttrs().AriaHidden())
 	qw422016.N().S(`
     <span class="for-screen-reader">Download file</span>
   </a>
@@ -40,7 +40,7 @@ func StreamLayoutsLightbox(qw422016 *qt422016.Writer, ctx *ViewContext) {
       data-web-share-files-value=""
       data-lightbox-target="share">
     `)
-	qw422016.N().S(string(ImageTag(ctx, "share.svg", NewAttrs().AriaHidden())))
+	StreamImageTag(qw422016, ctx, "share.svg", NewAttrs().AriaHidden())
 	qw422016.N().S(`
     <span class="for-screen-reader">Share file</span>
   </button>

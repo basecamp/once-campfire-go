@@ -1,7 +1,7 @@
 {% comment %}reference/crates/views/templates/users/sidebars/rooms/_direct_placeholder.html{% endcomment %}
 {% func UsersSidebarsRoomsDirectPlaceholder(ctx *ViewContext, user *UserSummary) %}{% code BeginCapture(qw422016) %}
   <span class="avatar">
-    {%s= string(ImageTag(ctx, user.AvatarPath, NewAttrs().AriaHidden())) %}
+    {%= ImageTag(ctx, user.AvatarPath, NewAttrs().AriaHidden()) %}
   </span>
 
   <span class="direct__author flex align-center gap max-width min-width border-radius txt-small">
@@ -10,4 +10,4 @@
       {%s user.FirstName() %}
     </span>
   </span>
-{% code capture1 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture1, RoomsDirectsWithUser(user.ID), NewAttrs().Class("direct borderless fill-transparent unpad"))) %}{% endfunc %}
+{% code EndCaptureButtonTo(qw422016, RoomsDirectsWithUser(user.ID), NewAttrs().Class("direct borderless fill-transparent unpad")) %}{% endfunc %}

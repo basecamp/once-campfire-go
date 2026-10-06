@@ -12,7 +12,7 @@
           {%s= string(TranslationButton(p.Ctx, "email_address")) %}
           <label class="flex align-center gap input input--actor txt-large">
             {%s= string(form.EmailField("email_address", nil, NewAttrs().Required(true).Class("input").Autofocus().Autocomplete("username").Placeholder("Enter your email address").AttrOpt("value", p.EmailAddress))) %}
-            {%s= string(ImageTag(p.Ctx, "email.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))) %}
+            {%= ImageTag(p.Ctx, "email.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black")) %}
           </label>
         </div>
 
@@ -20,12 +20,12 @@
           {%s= string(TranslationButton(p.Ctx, "password")) %}
           <label class="flex align-center gap input input--actor txt-large">
             {%s= string(form.PasswordField("password", NewAttrs().Required(true).Class("input").Autocomplete("current-password").Placeholder("Enter your password").Maxlength(72))) %}
-            {%s= string(ImageTag(p.Ctx, "password.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))) %}
+            {%= ImageTag(p.Ctx, "password.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black")) %}
           </label>
         </div>
 
         {% code BeginCapture(qw422016) %}
-          {%s= string(ImageTag(p.Ctx, "arrow-right.svg", NewAttrs().AriaHidden())) %}
+          {%= ImageTag(p.Ctx, "arrow-right.svg", NewAttrs().AriaHidden()) %}
           <span class="for-screen-reader">Go</span>
 {% code capture2 := EndCapture(qw422016) %}{%s= string(Button(capture2, NewAttrs().Class("btn btn--reversed center txt-large").Type("submit").Name("log_in"))) %}      </fieldset>
 {% code capture1 := EndCapture(qw422016) %}{%s= string(FormWithBlock(capture1, form)) %}  </div>

@@ -54,7 +54,7 @@ func (p *WelcomeShow) StreamContent(qw422016 *qt422016.Writer) {
   <div class="message-area--empty min-width center">
     <figure class="center pad">
       `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "messages-empty.svg", NewAttrs().AriaHidden().Class("colorize--black translucent"))))
+	StreamImageTag(qw422016, p.Ctx, "messages-empty.svg", NewAttrs().AriaHidden().Class("colorize--black translucent"))
 	qw422016.N().S(`
       <span class="for-screen-reader">`)
 	qw422016.E().S(p.CurrentUserName)

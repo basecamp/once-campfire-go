@@ -20,7 +20,7 @@ func StreamUsersSidebarsRoomsDirectPlaceholder(qw422016 *qt422016.Writer, ctx *V
 	qw422016.N().S(`
   <span class="avatar">
     `)
-	qw422016.N().S(string(ImageTag(ctx, user.AvatarPath, NewAttrs().AriaHidden())))
+	StreamImageTag(qw422016, ctx, user.AvatarPath, NewAttrs().AriaHidden())
 	qw422016.N().S(`
   </span>
 
@@ -33,9 +33,8 @@ func StreamUsersSidebarsRoomsDirectPlaceholder(qw422016 *qt422016.Writer, ctx *V
     </span>
   </span>
 `)
-	capture1 := EndCapture(qw422016)
+	EndCaptureButtonTo(qw422016, RoomsDirectsWithUser(user.ID), NewAttrs().Class("direct borderless fill-transparent unpad"))
 
-	qw422016.N().S(string(ButtonToBlock(capture1, RoomsDirectsWithUser(user.ID), NewAttrs().Class("direct borderless fill-transparent unpad"))))
 }
 
 func WriteUsersSidebarsRoomsDirectPlaceholder(qq422016 qtio422016.Writer, ctx *ViewContext, user *UserSummary) {

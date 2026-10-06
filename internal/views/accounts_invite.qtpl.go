@@ -24,7 +24,7 @@ func StreamAccountsInvite(qw422016 *qt422016.Writer, ctx *ViewContext, joinCode 
     <strong id="invite_label" class="invite-label">Share to invite more people</strong>
     <span class="flex align-center gap input input--actor fill-white">
       `)
-	qw422016.N().S(string(ImageTag(ctx, "person-add.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))))
+	StreamImageTag(qw422016, ctx, "person-add.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))
 	qw422016.N().S(`
       <input type="text" class="input" id="invite_url" value="`)
 	qw422016.E().S(url)
@@ -39,7 +39,7 @@ func StreamAccountsInvite(qw422016 *qt422016.Writer, ctx *ViewContext, joinCode 
 	qw422016.N().S(`
       <span class="for-screen-reader">Show join link QR code</span>
       `)
-	qw422016.N().S(string(ImageTag(ctx, "qr-code.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))))
+	StreamImageTag(qw422016, ctx, "qr-code.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))
 	qw422016.N().S(`
 `)
 	capture1 := EndCapture(qw422016)
@@ -52,7 +52,7 @@ func StreamAccountsInvite(qw422016 *qt422016.Writer, ctx *ViewContext, joinCode 
 	qw422016.N().S(`
       <span class="for-screen-reader">Copy join link</span>
       `)
-	qw422016.N().S(string(ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))))
+	StreamImageTag(qw422016, ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))
 	qw422016.N().S(`
 `)
 	capture2 := EndCapture(qw422016)
@@ -65,7 +65,7 @@ func StreamAccountsInvite(qw422016 *qt422016.Writer, ctx *ViewContext, joinCode 
 	qw422016.N().S(`
       <span class="for-screen-reader">Share join link</span>
       `)
-	qw422016.N().S(string(ImageTag(ctx, "share.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))))
+	StreamImageTag(qw422016, ctx, "share.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))
 	qw422016.N().S(`
 `)
 	capture3 := EndCapture(qw422016)
@@ -79,7 +79,7 @@ func StreamAccountsInvite(qw422016 *qt422016.Writer, ctx *ViewContext, joinCode 
 
 		qw422016.N().S(`
         `)
-		qw422016.N().S(string(ImageTag(ctx, "refresh.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))))
+		StreamImageTag(qw422016, ctx, "refresh.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))
 		qw422016.N().S(`
         <span class="for-screen-reader">Regenerate join link</span>
 `)

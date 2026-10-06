@@ -64,7 +64,7 @@ func (p *SessionsNew) StreamContent(qw422016 *qt422016.Writer) {
 	qw422016.N().S(string(form.EmailField("email_address", nil, NewAttrs().Required(true).Class("input").Autofocus().Autocomplete("username").Placeholder("Enter your email address").AttrOpt("value", p.EmailAddress))))
 	qw422016.N().S(`
             `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "email.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	StreamImageTag(qw422016, p.Ctx, "email.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))
 	qw422016.N().S(`
           </label>
         </div>
@@ -78,7 +78,7 @@ func (p *SessionsNew) StreamContent(qw422016 *qt422016.Writer) {
 	qw422016.N().S(string(form.PasswordField("password", NewAttrs().Required(true).Class("input").Autocomplete("current-password").Placeholder("Enter your password").Maxlength(72))))
 	qw422016.N().S(`
             `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "password.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))))
+	StreamImageTag(qw422016, p.Ctx, "password.svg", NewAttrs().AriaHidden().Size(24).Class("colorize--black"))
 	qw422016.N().S(`
           </label>
         </div>
@@ -88,7 +88,7 @@ func (p *SessionsNew) StreamContent(qw422016 *qt422016.Writer) {
 
 	qw422016.N().S(`
           `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "arrow-right.svg", NewAttrs().AriaHidden())))
+	StreamImageTag(qw422016, p.Ctx, "arrow-right.svg", NewAttrs().AriaHidden())
 	qw422016.N().S(`
           <span class="for-screen-reader">Go</span>
 `)

@@ -74,7 +74,7 @@ func (p *AccountsCustomStylesEdit) StreamContent(qw422016 *qt422016.Writer) {
       <p class="flex flex-wrap align-center justify-center gap margin-none-block-start" style="--column-gap: 0.5ch; --row-gap: 0">
         <span>Add custom CSS styles.</span>
         `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "alert.svg", NewAttrs().Class("flex-inline colorize--black").Size(16).AriaHidden())))
+	StreamImageTag(qw422016, p.Ctx, "alert.svg", NewAttrs().Class("flex-inline colorize--black").Size(16).AriaHidden())
 	qw422016.N().S(`
         <span>Use Caution: you could break things.</span>
       </p>
@@ -91,7 +91,7 @@ func (p *AccountsCustomStylesEdit) StreamContent(qw422016 *qt422016.Writer) {
 
 	qw422016.N().S(`
       `)
-	qw422016.N().S(string(ImageTag(p.Ctx, "check.svg", NewAttrs().AriaHidden().Size(20))))
+	StreamImageTag(qw422016, p.Ctx, "check.svg", NewAttrs().AriaHidden().Size(20))
 	qw422016.N().S(`
       <span class="for-screen-reader">Save changes</span>
 `)

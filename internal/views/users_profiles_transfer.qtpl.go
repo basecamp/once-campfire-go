@@ -21,13 +21,13 @@ func StreamUsersProfilesTransfer(qw422016 *qt422016.Writer, ctx *ViewContext, us
 <fieldset>
   <legend class="gap">
     `)
-	qw422016.N().S(string(ImageTag(ctx, "laptop.svg", NewAttrs().AriaHidden().Size(36).Class("colorize--black"))))
+	StreamImageTag(qw422016, ctx, "laptop.svg", NewAttrs().AriaHidden().Size(36).Class("colorize--black"))
 	qw422016.N().S(`
     `)
-	qw422016.N().S(string(ImageTag(ctx, "transfer.svg", NewAttrs().AriaHidden().Size(36).Class("colorize--black"))))
+	StreamImageTag(qw422016, ctx, "transfer.svg", NewAttrs().AriaHidden().Size(36).Class("colorize--black"))
 	qw422016.N().S(`
     `)
-	qw422016.N().S(string(ImageTag(ctx, "mobile-phone.svg", NewAttrs().AriaHidden().Size(36).Class("colorize--black"))))
+	StreamImageTag(qw422016, ctx, "mobile-phone.svg", NewAttrs().AriaHidden().Size(36).Class("colorize--black"))
 	qw422016.N().S(`
   </legend>
 
@@ -37,7 +37,7 @@ func StreamUsersProfilesTransfer(qw422016 *qt422016.Writer, ctx *ViewContext, us
 	if !ctx.IsCurrentUser(user.ID) {
 		qw422016.N().S(`      <div class="flex align-center gap justify-center">
         `)
-		qw422016.N().S(string(ImageTag(ctx, "crown.svg", NewAttrs().Size(16).AriaHidden().Class("flex-item-no-shrink colorize--black"))))
+		StreamImageTag(qw422016, ctx, "crown.svg", NewAttrs().Size(16).AriaHidden().Class("flex-item-no-shrink colorize--black"))
 		qw422016.N().S(`
         <label for="session_transfer_url">Share to get them back into their account</label>
       </div>
@@ -58,7 +58,7 @@ func StreamUsersProfilesTransfer(qw422016 *qt422016.Writer, ctx *ViewContext, us
 	qw422016.N().S(`
         <span class="for-screen-reader">Show auto-login QR code</span>
         `)
-	qw422016.N().S(string(ImageTag(ctx, "qr-code.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))))
+	StreamImageTag(qw422016, ctx, "qr-code.svg", NewAttrs().AriaHidden().Size(20).Class("colorize--black"))
 	qw422016.N().S(`
 `)
 	capture1 := EndCapture(qw422016)
@@ -71,7 +71,7 @@ func StreamUsersProfilesTransfer(qw422016 *qt422016.Writer, ctx *ViewContext, us
 	qw422016.N().S(`
         <span class="for-screen-reader">Copy auto-login link</span>
         `)
-	qw422016.N().S(string(ImageTag(ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20).Class("flex-item-no-shrink colorize--black"))))
+	StreamImageTag(qw422016, ctx, "copy-paste.svg", NewAttrs().AriaHidden().Size(20).Class("flex-item-no-shrink colorize--black"))
 	qw422016.N().S(`
 `)
 	capture2 := EndCapture(qw422016)
@@ -84,7 +84,7 @@ func StreamUsersProfilesTransfer(qw422016 *qt422016.Writer, ctx *ViewContext, us
 	qw422016.N().S(`
         <span class="for-screen-reader">Share auto-login link</span>
         `)
-	qw422016.N().S(string(ImageTag(ctx, "share.svg", NewAttrs().AriaHidden().Size(20).Class("flex-item-no-shrink colorize--black"))))
+	StreamImageTag(qw422016, ctx, "share.svg", NewAttrs().AriaHidden().Size(20).Class("flex-item-no-shrink colorize--black"))
 	qw422016.N().S(`
 `)
 	capture3 := EndCapture(qw422016)

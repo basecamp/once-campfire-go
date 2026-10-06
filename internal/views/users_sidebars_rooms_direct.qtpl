@@ -3,11 +3,11 @@
   {% code BeginCapture(qw422016) %}
 {% if len(membership.Members) > 1 %}      <div class="avatar__group">
 {% for i := range min(4, len(membership.Members)) %}          <span class="avatar">
-            {%s= string(ImageTag(ctx, membership.Members[i].AvatarPath, NewAttrs().Size(20).AriaHidden())) %}
+            {%= ImageTag(ctx, membership.Members[i].AvatarPath, NewAttrs().Size(20).AriaHidden()) %}
           </span>
 {% endfor %}      </div>
 {% else %}      <span class="avatar">
-        {%s= string(ImageTag(ctx, membership.Members[0].AvatarPath, NewAttrs().Size(48).AriaHidden())) %}
+        {%= ImageTag(ctx, membership.Members[0].AvatarPath, NewAttrs().Size(48).AriaHidden()) %}
       </span>
 {% endif %}
     <span class="direct__author flex align-center gap max-width min-width border-radius txt-small">

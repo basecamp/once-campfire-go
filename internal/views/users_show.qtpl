@@ -5,14 +5,14 @@
 
   <div class="flex align-center gap flex-item-justify-end">
 {% if p.Ctx.IsCurrentUser(p.User.ID) %}      {% code BeginCapture(qw422016) %}
-        {%s= string(ImageTag(p.Ctx, "pencil.svg", NewAttrs().AriaHidden())) %}
+        {%= ImageTag(p.Ctx, "pencil.svg", NewAttrs().AriaHidden()) %}
         <span class="for-screen-reader">Edit my profile</span>
 {% code capture1 := EndCapture(qw422016) %}{%s= string(LinkToBlock(capture1, RouteUserProfile(), NewAttrs().Class("btn"))) %}{% endif %}  </div>
 {% endfunc %}
 {% func (p *UsersShow) Content() %}{% code user := &p.User %}<section class="panel txt-align-center">
   <div class="flex flex-column gap {% if user.Banned() %}banned{% endif %}">
     <div class="avatar txt-xx-large center" style="background: white">
-      {%s= string(ImageTag(p.Ctx, user.AvatarPath, NewAttrs().Alt("Profile avatar").Class("avatar"))) %}
+      {%= ImageTag(p.Ctx, user.AvatarPath, NewAttrs().Alt("Profile avatar").Class("avatar")) %}
     </div>
 
 {% if user.Bot() %}      <div class="pad-double--inline push--inline push--block-start">
@@ -27,7 +27,7 @@
 
 {% if user.Active() %}          <div class="pad-inline-double margin-inline margin-block-start">
             {% code BeginCapture(qw422016) %}
-              {%s= string(ImageTag(p.Ctx, "messages.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Ping "+user.Name))) %}
+              {%= ImageTag(p.Ctx, "messages.svg", NewAttrs().Aria("hidden", "true").Aria("label", "Ping "+user.Name)) %}
 {% code capture1 := EndCapture(qw422016) %}{%s= string(ButtonToBlock(capture1, RoomsDirectsWithUser(user.ID), NewAttrs().Class("btn btn--reversed full-width txt-large"))) %}          </div>
 
 {% if p.Ctx.CanAdminister() %}            <hr class="margin-block-start borderless">
