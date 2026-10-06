@@ -18,7 +18,8 @@ import (
 )
 
 func TestAuthenticationAndMessageFlow(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "app.sqlite3"), 2)
+	dbPath := filepath.Join(t.TempDir(), "app.sqlite3")
+	db, err := database.Open(dbPath, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +28,7 @@ func TestAuthenticationAndMessageFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := New(db, secrets, false)
+	app, err := New(db, secrets, false, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}

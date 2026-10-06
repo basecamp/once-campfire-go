@@ -20,6 +20,7 @@ import (
 	"github.com/basecamp/once-campfire-go/assets"
 	"github.com/basecamp/once-campfire-go/internal/cable"
 	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/fastdb"
 	"github.com/basecamp/once-campfire-go/internal/integrations"
 	"github.com/basecamp/once-campfire-go/internal/jobs"
 	"github.com/basecamp/once-campfire-go/internal/piececache"
@@ -49,6 +50,9 @@ func parseRecordedPieces(raw string) (enabled, valid bool) {
 
 type Server struct {
 	fragments *fragmentCache
+	// fastdb is the pooled fast read layer for the hot read paths
+	// (CAMPFIRE_FASTDB=off leaves it nil and the handlers use database/sql).
+	fastdb *fastdb.Pool
 	// pieces stores recorded-response pieces (raw + gzip member + digest)
 	// under content-versioned keys, sized by CAMPFIRE_RECORDED_CACHE_MB.
 	pieces         *piececache.Cache
@@ -151,7 +155,7 @@ type messageView struct {
 	Boosts           []database.Boost
 }
 
-func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...string) (*Server, error) {
+func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, storagePaths ...string) (*Server, error) {
 	// Same cost-12 dummy digest as reference/crates/db/src/models/user.rs.
 	// Unknown-user login still pays bcrypt; startup need not create a new hash.
 	hash := []byte("$2a$12$FiKmSp4UhLvSB4Sd/ZUjQunyKP6.NjDRHdr5LnKUVk.BUn4Mq12WS")
@@ -186,7 +190,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 		}
 	}
 	slog.Info("recorded response pieces", "enabled", recordedPieces, "cache_mib", recordedMB)
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, fastdb: openFastPool(dbPath), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -553,7 +557,9 @@ func (s *Server) auth(next func(http.ResponseWriter, *http.Request, database.Use
 			s.requestAuthentication(w, r)
 			return
 		}
-		u, err := s.DB.SessionUser(r.Context(), token)
+		fc, release := s.fastConn(r)
+		u, err := s.sessionUser(fc, r.Context(), token)
+		release()
 		if errors.Is(err, sql.ErrNoRows) {
 			s.requestAuthentication(w, r)
 			return
@@ -774,47 +780,17 @@ func viewMessages(messages []database.Message) []messageView {
 	return result
 }
 func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
-	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
+	room, messages, view, invitation, err := s.roomData(r, u)
 	if err != nil {
 		s.roomLookupFailure(w, r, err)
 		return
 	}
-	anchor, _ := strconv.ParseInt(strings.TrimPrefix(r.PathValue("anchor"), "@"), 10, 64)
-	messages, err := s.DB.MessagePageReferences(r.Context(), room.ID, anchor, "around")
-	if errors.Is(err, sql.ErrNoRows) {
-		messages, err = s.DB.MessagePageReferences(r.Context(), room.ID, 0, "around")
-	}
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	view, err := s.displayRoom(r.Context(), room, u)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
 	room = view.Room
-	var invitation bool
-	if err = s.DB.Read.QueryRowContext(r.Context(), "SELECT ?=(SELECT id FROM rooms ORDER BY created_at LIMIT 1) AND NOT EXISTS(SELECT 1 FROM messages WHERE room_id=? LIMIT 1 OFFSET 40)", room.ID, room.ID).Scan(&invitation); err != nil {
-		s.fail(w, err)
-		return
-	}
 	s.rememberRoom(w, r, strconv.FormatInt(room.ID, 10))
 	s.render(w, r, "room", 200, page{Invitation: invitation, Stream: s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)), Title: room.Name, User: u, Room: room, Messages: viewMessages(messages)})
 }
 func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.User) {
-	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
-	direction := "before"
-	if before == 0 {
-		before, _ = strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
-		direction = "after"
-	}
-	messages, err := s.DB.MessagePageReferences(r.Context(), room.ID, before, direction)
+	messages, err := s.messageData(r, u)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -891,12 +867,7 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 	}
 }
 func (s *Server) sidebar(w http.ResponseWriter, r *http.Request, u database.User) {
-	items, err := s.sidebarRooms(r.Context(), u)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	placeholders, err := s.DB.DirectPlaceholders(r.Context(), u.ID)
+	items, placeholders, err := s.sidebarData(r, u)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -956,7 +927,13 @@ func (s *Server) serveCable(w http.ResponseWriter, r *http.Request, u database.U
 	}
 	s.Cable.Serve(w, r, u, token)
 }
-func (s *Server) Close() { s.Jobs.Close(10 * time.Second); s.Cable.Close() }
+func (s *Server) Close() {
+	if s.fastdb != nil {
+		s.fastdb.Close()
+	}
+	s.Jobs.Close(10 * time.Second)
+	s.Cable.Close()
+}
 
 func appVersion() string {
 	for _, key := range []string{"APP_VERSION", "GIT_REVISION"} {

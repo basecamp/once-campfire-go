@@ -681,6 +681,73 @@ func TestDifferentialRoomMembers(t *testing.T) {
 	}
 }
 
+// TestDifferentialDirectPlaceholders pins database.DB.DirectPlaceholders,
+// including its inlined LIMIT, the always-appended caller id (duplicates
+// included) and the non-nil empty result.
+func TestDifferentialDirectPlaceholders(t *testing.T) {
+	path := fixtureDB(t)
+	d, c := openBoth(t, path)
+	ctx := context.Background()
+
+	users, err := queryIDs(t, d, "SELECT id FROM users ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) == 0 {
+		t.Fatal("fixture has no users")
+	}
+	placeholders := make([]User, 0, 20)
+	for _, user := range users {
+		want, err := d.DirectPlaceholders(ctx, user)
+		if err != nil {
+			t.Fatalf("database.DirectPlaceholders(%d): %v", user, err)
+		}
+		got, err := c.DirectPlaceholders(placeholders[:0], user)
+		if err != nil {
+			t.Fatalf("fastdb.DirectPlaceholders(%d): %v", user, err)
+		}
+		if (want == nil) != (got == nil) {
+			t.Errorf("DirectPlaceholders(%d) nil-ness: database %v, fastdb %v", user, want == nil, got == nil)
+		}
+		if len(got) != len(want) {
+			t.Errorf("DirectPlaceholders(%d): fastdb %d rows != database %d", user, len(got), len(want))
+			continue
+		}
+		for i := range want {
+			if !reflect.DeepEqual(got[i].record(), recordOfUser(want[i])) {
+				t.Errorf("DirectPlaceholders(%d)[%d]: fastdb %+v != database %+v", user, i, got[i].record(), recordOfUser(want[i]))
+			}
+		}
+		placeholders = got
+	}
+
+	// A user with no memberships anywhere: ids = [user], and every other
+	// active user is a placeholder up to the 19-slot limit.
+	const missing = int64(1) << 62
+	want, err := d.DirectPlaceholders(ctx, missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.DirectPlaceholders(nil, missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if (want == nil) != (got == nil) || len(want) != len(got) {
+		t.Fatalf("missing user: database nil=%v len=%d, fastdb nil=%v len=%d", want == nil, len(want), got == nil, len(got))
+	}
+	for i := range want {
+		if !reflect.DeepEqual(got[i].record(), recordOfUser(want[i])) {
+			t.Errorf("missing user[%d]: fastdb %+v != database %+v", i, got[i].record(), recordOfUser(want[i]))
+		}
+	}
+	// The caller themself can never be a placeholder.
+	for _, u := range []User(got) {
+		if u.ID == missing {
+			t.Errorf("missing user appears among its own placeholders")
+		}
+	}
+}
+
 // TestDifferentialDecodeErrors pins the decode-error shapes. A row whose
 // column cannot be decoded drops the partial slice on both readers
 // (scanMessages-style nil). A clean mid-scan step error cannot be injected —

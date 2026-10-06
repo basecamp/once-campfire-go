@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/fastdb"
 	"github.com/basecamp/once-campfire-go/internal/rails"
 )
 
@@ -42,12 +43,26 @@ func (r sidebarRoom) Label() string {
 	}
 	return strings.Join(names, "")
 }
-func (s *Server) displayRoom(ctx context.Context, room database.Room, user database.User) (sidebarRoom, error) {
+
+// displayRoom builds the sidebar's room view, loading the members of direct
+// rooms through fastdb when c is set (it is passed by the room and sidebar
+// handlers; read-path call sites outside those pass nil and use database/sql).
+func (s *Server) displayRoom(c *fastdb.Conn, ctx context.Context, room database.Room, user database.User) (sidebarRoom, error) {
 	view := sidebarRoom{Room: room}
 	if room.Type == "Rooms::Direct" {
-		members, err := s.DB.RoomMembers(ctx, room.ID)
-		if err != nil {
-			return view, err
+		var members []database.User
+		if c != nil {
+			fast, err := c.RoomMembers(nil, room.ID)
+			if err != nil {
+				return view, err
+			}
+			members = usersOf(fast)
+		} else {
+			var err error
+			members, err = s.DB.RoomMembers(ctx, room.ID)
+			if err != nil {
+				return view, err
+			}
 		}
 		var names []string
 		for _, member := range members {
@@ -72,14 +87,27 @@ func (s *Server) displayRoom(ctx context.Context, room database.Room, user datab
 	}
 	return view, nil
 }
-func (s *Server) sidebarRooms(ctx context.Context, user database.User) ([]sidebarRoom, error) {
-	rooms, err := s.DB.SidebarRooms(ctx, user.ID)
-	if err != nil {
-		return nil, err
+func (s *Server) sidebarRooms(c *fastdb.Conn, ctx context.Context, user database.User) ([]sidebarRoom, error) {
+	var rooms []database.SidebarRoom
+	if c != nil {
+		fast, err := c.SidebarRooms(nil, user.ID)
+		if err != nil {
+			return nil, err
+		}
+		rooms = make([]database.SidebarRoom, 0, len(fast))
+		for _, room := range fast {
+			rooms = append(rooms, sidebarRoomOf(room))
+		}
+	} else {
+		var err error
+		rooms, err = s.DB.SidebarRooms(ctx, user.ID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	var result []sidebarRoom
 	for _, room := range rooms {
-		view, err := s.displayRoom(ctx, room.Room, user)
+		view, err := s.displayRoom(c, ctx, room.Room, user)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +135,7 @@ func (s *Server) broadcastRoom(ctx context.Context, room database.Room, update b
 		return err
 	}
 	for _, user := range members {
-		view, err := s.displayRoom(ctx, room, user)
+		view, err := s.displayRoom(nil, ctx, room, user)
 		if err != nil {
 			return err
 		}

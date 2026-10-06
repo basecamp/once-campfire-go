@@ -22,9 +22,10 @@
 // with SQLITE_OPEN_NOMUTEX, one statement cache and scratch buffers. A Conn
 // must be used by exactly one goroutine at a time and must not be used after
 // Close. Engine code (ENGINE-15/16) pools Conns — one per goroutine, reused
-// across requests: opening a Conn per request would discard the prepared
-// statements and pay a file/shm open on every request. Close finalizes every
-// cached statement before closing the connection.
+// across requests — and the web read paths (ENGINE-18) borrow them from
+// Pool: opening a Conn per request would discard the prepared statements and
+// pay a file/shm open on every request. Close finalizes every cached
+// statement before closing the connection.
 //
 // # Next optimization
 //

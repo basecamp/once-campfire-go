@@ -1,0 +1,243 @@
+package web
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
+	"runtime"
+	"strconv"
+	"strings"
+
+	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/fastdb"
+)
+
+// parseFastDB maps a CAMPFIRE_FASTDB value to its setting, accepting the same
+// shapes as parseRecordedPieces. An unrecognised value reports valid=false so
+// the caller can warn while keeping the default on rather than silently
+// changing behaviour.
+func parseFastDB(raw string) (enabled, valid bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "on", "true", "1":
+		return true, true
+	case "off", "false", "0":
+		return false, true
+	default:
+		return true, false
+	}
+}
+
+// roomOf converts a fastdb room record to the database type the page
+// assembly uses. The strings are the same bytes fastdb decoded; the copy is a
+// struct assignment, not a re-decode.
+func roomOf(r fastdb.Room) database.Room {
+	return database.Room{ID: r.ID, CreatorID: r.CreatorID, Name: r.Name, Type: r.Type, UpdatedAt: r.UpdatedAt}
+}
+
+func sidebarRoomOf(r fastdb.SidebarRoom) database.SidebarRoom {
+	return database.SidebarRoom{Room: roomOf(r.Room), Involvement: r.Involvement, Unread: r.Unread}
+}
+
+func userOf(u fastdb.User) database.User {
+	return database.User{ID: u.ID, Name: u.Name, Email: u.Email, Password: u.Password, Bio: u.Bio, BotToken: u.BotToken, UpdatedAt: u.UpdatedAt, Role: u.Role, Status: u.Status}
+}
+
+func usersOf(users []fastdb.User) []database.User {
+	out := make([]database.User, 0, len(users))
+	for _, u := range users {
+		out = append(out, userOf(u))
+	}
+	return out
+}
+
+func messageOf(m fastdb.Message) database.Message {
+	return database.Message{ID: m.ID, RoomID: m.RoomID, CreatorID: m.CreatorID, ClientID: m.ClientID, Body: m.Body, Creator: m.Creator, CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt}
+}
+
+// fastConn borrows one fastdb connection for the request and returns the
+// release function. c is nil when the fast read path is off or the pool
+// cannot serve the borrow (closing down, request cancelled): callers fall
+// back to the database/sql readers for that request, which is the same
+// behaviour CAMPFIRE_FASTDB=off selects.
+func (s *Server) fastConn(r *http.Request) (c *fastdb.Conn, release func()) {
+	if s.fastdb == nil {
+		return nil, func() {}
+	}
+	c, err := s.fastdb.Borrow(r.Context())
+	if err != nil {
+		return nil, func() {}
+	}
+	return c, func() { s.fastdb.Return(c) }
+}
+
+// roomRow returns the room for user,id: through fastdb when c is set (a
+// missing or inaccessible room is ErrNoRows, the same sentinel the
+// database/sql reader returns), else through s.DB.
+func (s *Server) roomRow(c *fastdb.Conn, ctx context.Context, user, id int64) (database.Room, error) {
+	if c == nil {
+		return s.DB.Room(ctx, user, id)
+	}
+	var r fastdb.Room
+	if err := c.Room(&r, user, id); err != nil {
+		return database.Room{}, err
+	}
+	return roomOf(r), nil
+}
+
+// messageRefs returns the room's message window in the same shape
+// database.DB.MessagePageReferences yields (refs for before/plus-anchor-zero,
+// full records for after/around, chronologically ordered), through fastdb
+// when c is set.
+func (s *Server) messageRefs(c *fastdb.Conn, ctx context.Context, room, anchor int64, direction string) ([]database.Message, error) {
+	if c == nil {
+		return s.DB.MessagePageReferences(ctx, room, anchor, direction)
+	}
+	refs, err := c.MessagePageReferences(nil, room, anchor, direction)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]database.Message, 0, len(refs))
+	for _, m := range refs {
+		out = append(out, messageOf(m))
+	}
+	return out, nil
+}
+
+// sessionUser returns the active user for a session token, through fastdb
+// when c is set. ErrNoRows means the token is unknown or the user inactive,
+// exactly like database.DB.SessionUser.
+func (s *Server) sessionUser(c *fastdb.Conn, ctx context.Context, token string) (database.User, error) {
+	if c == nil {
+		return s.DB.SessionUser(ctx, token)
+	}
+	var u fastdb.User
+	if err := c.SessionUser(&u, token); err != nil {
+		return database.User{}, err
+	}
+	return userOf(u), nil
+}
+
+// invitation mirrors the raw room-page probe in Server.room: true when the
+// room is the account's first room and holds no more than 40 messages.
+func (s *Server) invitation(c *fastdb.Conn, ctx context.Context, room int64) (bool, error) {
+	if c != nil {
+		return c.Invitation(room)
+	}
+	var invitation bool
+	err := s.DB.Read.QueryRowContext(ctx, "SELECT ?=(SELECT id FROM rooms ORDER BY created_at LIMIT 1) AND NOT EXISTS(SELECT 1 FROM messages WHERE room_id=? LIMIT 1 OFFSET 40)", room, room).Scan(&invitation)
+	return invitation, err
+}
+
+// directPlaceholders returns the sidebar's start-a-ping candidates, through
+// fastdb when c is set.
+func (s *Server) directPlaceholders(c *fastdb.Conn, ctx context.Context, user int64) ([]database.User, error) {
+	if c == nil {
+		return s.DB.DirectPlaceholders(ctx, user)
+	}
+	users, err := c.DirectPlaceholders(nil, user)
+	if err != nil {
+		return nil, err
+	}
+	return usersOf(users), nil
+}
+
+// roomData runs the room page's database reads on one borrowed fastdb
+// connection (or the database/sql readers when the fast path is off) and
+// returns the page inputs. The connection is returned before any rendering,
+// so the pool's critical section covers only the reads; the render of a
+// large room page must not occupy a pool slot.
+//
+// A room lookup failure is the only error the room handler redirects on;
+// MessagePageReferences, displayRoom and the invitation probe all report
+// through s.fail. The retry around an anchor that no longer exists drops the
+// ErrNoRows from the first attempt exactly like the previous inline flow.
+func (s *Server) roomData(r *http.Request, u database.User) (room database.Room, messages []database.Message, view sidebarRoom, invitation bool, err error) {
+	c, release := s.fastConn(r)
+	defer release()
+	room, err = s.roomRow(c, r.Context(), u.ID, roomID(r))
+	if err != nil {
+		return
+	}
+	anchor, _ := strconv.ParseInt(strings.TrimPrefix(r.PathValue("anchor"), "@"), 10, 64)
+	messages, err = s.messageRefs(c, r.Context(), room.ID, anchor, "around")
+	if errors.Is(err, sql.ErrNoRows) {
+		messages, err = s.messageRefs(c, r.Context(), room.ID, 0, "around")
+	}
+	if err != nil {
+		return
+	}
+	view, err = s.displayRoom(c, r.Context(), room, u)
+	if err != nil {
+		return
+	}
+	invitation, err = s.invitation(c, r.Context(), room.ID)
+	return
+}
+
+// messageData runs the messages page's database reads (the room lookup for
+// membership, then the message window) on one borrowed fastdb connection (or
+// database/sql when the fast path is off) and returns the page inputs with
+// the connection already returned.
+func (s *Server) messageData(r *http.Request, u database.User) (messages []database.Message, err error) {
+	c, release := s.fastConn(r)
+	defer release()
+	var room database.Room
+	if room, err = s.roomRow(c, r.Context(), u.ID, roomID(r)); err != nil {
+		return
+	}
+	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	direction := "before"
+	if before == 0 {
+		before, _ = strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+		direction = "after"
+	}
+	messages, err = s.messageRefs(c, r.Context(), room.ID, before, direction)
+	return
+}
+
+// sidebarData runs the sidebar's database reads (SidebarRooms plus per-direct
+// RoomMembers, then DirectPlaceholders) on one borrowed fastdb connection (or
+// database/sql when the fast path is off) and returns the page inputs with
+// the connection already returned.
+func (s *Server) sidebarData(r *http.Request, u database.User) ([]sidebarRoom, []database.User, error) {
+	c, release := s.fastConn(r)
+	defer release()
+	items, err := s.sidebarRooms(c, r.Context(), u)
+	if err != nil {
+		return nil, nil, err
+	}
+	placeholders, err := s.directPlaceholders(c, r.Context(), u.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return items, placeholders, nil
+}
+
+// openFastPool opens the fast read pool for the server, honouring
+// CAMPFIRE_FASTDB (default on; off restores the database/sql readers). A pool
+// that cannot open (unreadable database, non-WAL file) downgrades to the
+// legacy readers with a warning instead of failing startup.
+func openFastPool(dbPath string) *fastdb.Pool {
+	enabled := true
+	if raw, ok := os.LookupEnv("CAMPFIRE_FASTDB"); ok {
+		var valid bool
+		enabled, valid = parseFastDB(raw)
+		if !valid {
+			slog.Warn("invalid CAMPFIRE_FASTDB; keeping fast reads on", "value", raw)
+		}
+	}
+	if !enabled {
+		slog.Info("fast reads", "enabled", false)
+		return nil
+	}
+	pool, err := fastdb.OpenPool(dbPath, max(1, runtime.GOMAXPROCS(0)))
+	if err != nil {
+		slog.Warn("fast read pool unavailable; falling back to database/sql reads", "path", dbPath, "error", err)
+		return nil
+	}
+	slog.Info("fast reads", "enabled", true, "path", dbPath)
+	return pool
+}

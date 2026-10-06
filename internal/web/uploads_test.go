@@ -26,7 +26,8 @@ import (
 func testApp(t testing.TB) (*Server, *httptest.Server, *http.Cookie, database.User) {
 	t.Helper()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "test.sqlite3"), 4)
+	dbPath := filepath.Join(root, "test.sqlite3")
+	db, err := database.Open(dbPath, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +36,7 @@ func testApp(t testing.TB) (*Server, *httptest.Server, *http.Cookie, database.Us
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := New(db, secrets, false, root)
+	app, err := New(db, secrets, false, dbPath, root)
 	if err != nil {
 		t.Fatal(err)
 	}

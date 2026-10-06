@@ -42,13 +42,13 @@ func testRecordedPair(t *testing.T) (*Server, *Server, *httptest.Server, *httpte
 		t.Fatal(err)
 	}
 	t.Setenv("CAMPFIRE_RECORDED_PIECES", "on")
-	on, err := New(db, secrets, false, root)
+	on, err := New(db, secrets, false, filepath.Join(root, "test.sqlite3"), root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(on.Close)
 	t.Setenv("CAMPFIRE_RECORDED_PIECES", "off")
-	off, err := New(db, secrets, false, root)
+	off, err := New(db, secrets, false, filepath.Join(root, "test.sqlite3"), root)
 	if err != nil {
 		t.Fatal(err)
 	}

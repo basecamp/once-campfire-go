@@ -67,7 +67,7 @@ func run() error {
 	if command == "db:prepare" {
 		return nil
 	}
-	app, err := web.New(db, secrets, os.Getenv("DISABLE_SSL") == "", storage)
+	app, err := web.New(db, secrets, os.Getenv("DISABLE_SSL") == "", path, storage)
 	if err != nil {
 		return err
 	}

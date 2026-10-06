@@ -65,6 +65,16 @@ from cached compressed pieces: the shell split at its `loadedAt` and message mar
 `0`..`2`) and the message list, each keyed by a SHA-256 of the rendered page inputs or of the
 message ids and updated-at stamps and stored as raw bytes plus a complete gzip member. Setting it
 `off` restores the legacy per-request render, compression and ETag path for A/B and rollback.
+`CAMPFIRE_FASTDB` (default `on`; also accepts `true`/`1` and `off`/`false`/`0`, warning on anything else)
+routes the hot read paths — room pages, message pages, the session lookup in `auth`, and the sidebar
+(rooms, direct-room members, placeholders) — through `internal/fastdb`, a thin SQLite read layer that
+scans with caller-owned buffers and no per-record database/sql decoding, holding one pooled read-only
+connection per application CPU. Setting it `off` restores the `database/sql` readers on the same
+handlers for A/B and rollback; search/FTS and every write (including the hourly `RefreshSession`
+UPDATE) always use `database/sql`. If the pool cannot open (unreadable database, non-WAL file), the
+server logs a warning and falls back to `database/sql` reads for that process instead of failing
+startup. The fast path also does not observe request cancellation mid-query; a cancelled request
+completes its read and renders rather than producing a context error.
 `CAMPFIRE_RECORDED_CACHE_MB` sizes that recorded-response piece cache independently (default 32;
 `0` disables storage while still serving from freshly rendered pieces). Each cached piece charges
 its raw bytes, its gzip member and the key, so one piece costs up to about twice its HTML size;

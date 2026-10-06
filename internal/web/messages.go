@@ -70,7 +70,7 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 			}
 			name = room.Name
 			if room.Type == "Rooms::Direct" {
-				view, err := s.displayRoom(ctx, room, database.User{})
+				view, err := s.displayRoom(nil, ctx, room, database.User{})
 				if err != nil {
 					return nil, err
 				}
