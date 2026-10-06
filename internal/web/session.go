@@ -196,8 +196,8 @@ func (s *Server) requireUnauthenticated(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		return true
 	}
-	var token string
-	if s.Secrets.VerifyCookie("session_token", rails.UnescapeCookie(cookie.Value), s.DB.Now(), &token) != nil {
+	token, err := s.verifiedSessionToken(rails.UnescapeCookie(cookie.Value), s.DB.Now())
+	if err != nil {
 		return true
 	}
 	if _, err := s.DB.SessionUser(r.Context(), token); err != nil {

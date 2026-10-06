@@ -53,6 +53,13 @@ type Server struct {
 	// fastdb is the pooled fast read layer for the hot read paths
 	// (CAMPFIRE_FASTDB=off leaves it nil and the handlers use database/sql).
 	fastdb *fastdb.Pool
+	// authFast enables the auth/session fast path (ENGINE-42,
+	// CAMPFIRE_AUTH_FAST=off disables it): a bounded cache of verified
+	// session_token cookie values with their signed expiry, and the joined
+	// session+user read that gates the hourly RefreshSession write in Go.
+	authFast bool
+	// authCache is the verified-cookie cache; nil when authFast is off.
+	authCache *verifiedCookieCache
 	// pieces stores recorded-response pieces (raw + gzip member + digest)
 	// under content-versioned keys, sized by CAMPFIRE_RECORDED_CACHE_MB.
 	pieces         *piececache.Cache
@@ -190,7 +197,23 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 		}
 	}
 	slog.Info("recorded response pieces", "enabled", recordedPieces, "cache_mib", recordedMB)
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, fastdb: openFastPool(dbPath), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	// CAMPFIRE_AUTH_FAST is the A/B and rollback switch for the auth/session
+	// fast path; on/true (or unset) keeps it on, off/false/0 restores the
+	// per-request full cookie verification and the two-step session read.
+	authFast := true
+	if raw, ok := os.LookupEnv("CAMPFIRE_AUTH_FAST"); ok {
+		var valid bool
+		authFast, valid = parseAuthFast(raw)
+		if !valid {
+			slog.Warn("invalid CAMPFIRE_AUTH_FAST; keeping auth fast path on", "value", raw)
+		}
+	}
+	var authCache *verifiedCookieCache
+	if authFast {
+		authCache = newVerifiedCookieCache()
+	}
+	slog.Info("auth fast path", "enabled", authFast)
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, fastdb: openFastPool(dbPath), authFast: authFast, authCache: authCache, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -548,17 +571,18 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 }
 func (s *Server) auth(next func(http.ResponseWriter, *http.Request, database.User)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		now := s.DB.Now()
 		var token string
 		c, err := r.Cookie("session_token")
 		if err == nil {
-			err = s.Secrets.VerifyCookie("session_token", rails.UnescapeCookie(c.Value), s.DB.Now(), &token)
+			token, err = s.verifiedSessionToken(rails.UnescapeCookie(c.Value), now)
 		}
 		if err != nil || token == "" {
 			s.requestAuthentication(w, r)
 			return
 		}
 		fc, release := s.fastConn(r)
-		u, err := s.sessionUser(fc, r.Context(), token)
+		u, lastActive, err := s.sessionState(fc, r.Context(), token)
 		release()
 		if errors.Is(err, sql.ErrNoRows) {
 			s.requestAuthentication(w, r)
@@ -568,15 +592,22 @@ func (s *Server) auth(next func(http.ResponseWriter, *http.Request, database.Use
 			s.fail(w, err)
 			return
 		}
-		refreshed, err := s.DB.RefreshSession(r.Context(), token, r.UserAgent(), remoteIP(r))
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		if refreshed {
-			if err = s.setAuthenticationCookie(w, token); err != nil {
+		// The hourly refresh: the joined read supplies last_active_at, so the
+		// RefreshSession writer (and the re-signed cookie) runs only when the
+		// session is due — the same gate RefreshSession's own SELECT applies
+		// on the legacy path, which reports a zero lastActive and therefore
+		// refreshes on every request exactly as before.
+		if lastActive.IsZero() || lastActive.Before(now.Add(-time.Hour)) {
+			refreshed, err := s.DB.RefreshSession(r.Context(), token, r.UserAgent(), remoteIP(r))
+			if err != nil {
 				s.fail(w, err)
 				return
+			}
+			if refreshed {
+				if err = s.setAuthenticationCookie(w, token); err != nil {
+					s.fail(w, err)
+					return
+				}
 			}
 		}
 		if s.blockBrowser(w, r) {
@@ -719,14 +750,19 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, u database.User)
 		s.fail(w, err)
 		return
 	}
-	var token string
-	if err = s.Secrets.VerifyCookie("session_token", rails.UnescapeCookie(c.Value), s.DB.Now(), &token); err != nil {
+	token, err := s.verifiedSessionToken(rails.UnescapeCookie(c.Value), s.DB.Now())
+	if err != nil {
 		s.fail(w, err)
 		return
 	}
 	if _, err = s.DB.Write.ExecContext(r.Context(), "DELETE FROM sessions WHERE token=? AND user_id=?", token, u.ID); err != nil {
 		s.fail(w, err)
 		return
+	}
+	if s.authCache != nil {
+		// The revoked token must not be served from the verification cache;
+		// the per-request session read would reject it either way.
+		s.authCache.remove(rails.UnescapeCookie(c.Value))
 	}
 	s.Cable.Disconnect(u.ID)
 	if endpoint := r.Form.Get("push_subscription_endpoint"); endpoint != "" {
@@ -920,8 +956,8 @@ func (s *Server) serveCable(w http.ResponseWriter, r *http.Request, u database.U
 		http.Error(w, "Unauthorized", 401)
 		return
 	}
-	var token string
-	if err = s.Secrets.VerifyCookie("session_token", rails.UnescapeCookie(c.Value), s.DB.Now(), &token); err != nil {
+	token, err := s.verifiedSessionToken(rails.UnescapeCookie(c.Value), s.DB.Now())
+	if err != nil {
 		http.Error(w, "Unauthorized", 401)
 		return
 	}

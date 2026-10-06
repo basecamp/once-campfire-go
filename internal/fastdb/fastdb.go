@@ -230,6 +230,13 @@ const (
 
 	querySessionUser = "SELECT " + userColumns + " FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND u.status=0"
 
+	// querySessionActive is the auth fast path's joined read (ENGINE-42): the
+	// session row's last_active_at alongside the user, replacing the separate
+	// SessionUser + RefreshSession SELECT of the legacy path. The refresh gate
+	// then runs in Go against the returned stamp, and only a session due for
+	// its hourly refresh reaches the RefreshSession writer.
+	querySessionActive = "SELECT " + userColumns + ",s.last_active_at FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND u.status=0"
+
 	querySidebarRooms = "SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at,coalesce(m.involvement,''),m.unread_at IS NOT NULL FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=? AND m.involvement!='invisible' ORDER BY lower(r.name)"
 
 	messageSelect = "SELECT m.id,m.room_id,m.creator_id,m.client_message_id,coalesce(t.body,''),coalesce(u.name,''),m.created_at,m.updated_at FROM messages m LEFT JOIN users u ON u.id=m.creator_id LEFT JOIN action_text_rich_texts t ON t.record_type='Message' AND t.record_id=m.id AND t.name='body' "
@@ -417,6 +424,49 @@ func (c *Conn) sessionUser(token string) (User, error) {
 		return user, ErrNoRows
 	}
 	return scanUser(&rows)
+}
+
+// SessionActive mirrors the joined session+user read of the auth fast path:
+// the active user for a session token and the session's last_active_at, from
+// one query. The refresh decision (hourly RefreshSession) is made in Go
+// against the returned stamp, exactly as database.DB.RefreshSession decides
+// against its own SELECT of the same column. On error dst holds the same
+// partially decoded value database/sql's Scan leaves behind (zero when the
+// failure precedes scanning).
+func (c *Conn) SessionActive(dst *User, token string) (time.Time, error) {
+	user, lastActive, err := c.sessionActive(token)
+	*dst = user
+	return lastActive, err
+}
+
+func (c *Conn) sessionActive(token string) (User, time.Time, error) {
+	var user User
+	var lastActive time.Time
+	h, err := c.acquire(querySessionActive)
+	if err != nil {
+		return user, lastActive, err
+	}
+	defer h.release()
+	if err := h.st.ClearBindings(); err != nil {
+		return user, lastActive, err
+	}
+	if err := h.st.BindText(1, token); err != nil {
+		return user, lastActive, err
+	}
+	rows := Rows{stmt: h.st}
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return user, lastActive, err
+		}
+		return user, lastActive, ErrNoRows
+	}
+	if user, err = scanUser(&rows); err != nil {
+		return user, lastActive, err
+	}
+	if lastActive, err = rows.Stamp(9); err != nil {
+		return user, lastActive, err
+	}
+	return user, lastActive, nil
 }
 
 // SidebarRooms mirrors database.DB.SidebarRooms, appending to dst (pass

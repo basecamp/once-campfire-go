@@ -75,6 +75,21 @@ UPDATE) always use `database/sql`. If the pool cannot open (unreadable database,
 server logs a warning and falls back to `database/sql` reads for that process instead of failing
 startup. The fast path also does not observe request cancellation mid-query; a cancelled request
 completes its read and renders rather than producing a context error.
+`CAMPFIRE_AUTH_FAST` (default `on`; same value shapes and warning on anything else) is the
+auth/session fast path: a bounded in-process cache of verified `session_token` cookie values keeps
+their token and signed expiry, so a previously verified cookie is not re-HMACed and re-decoded on
+every request — the cache re-checks the signed expiry against the current time on every request, is
+keyed by the signing-key generation (a rolled secret is never served from a cache populated under
+the old one), and only a full verification ever inserts an entry, so tampered, malformed, expired,
+revoked and banned sessions are rejected exactly as on the legacy path. The fast path also replaces
+the per-request `SessionUser` + `RefreshSession` SELECT pair with one joined fastdb read carrying
+`last_active_at`; the hourly `RefreshSession` write and the re-signed cookie still run through
+`database/sql` unchanged, gated in Go against that stamp, so a session is refreshed (and its cookie
+re-written) at most hourly — write-only-when-changed. Setting it `off` restores the legacy
+per-request full verification and two-step read for A/B and rollback; the engine pool still serves
+the other fastdb reads. One deliberate difference: on the legacy path a session deleted mid-request
+(between the two reads) surfaces as a 500 from `RefreshSession`; the joined read sees the deletion
+and redirects to sign-in instead.
 `CAMPFIRE_RECORDED_CACHE_MB` sizes that recorded-response piece cache independently (default 32;
 `0` disables storage while still serving from freshly rendered pieces). Each cached piece charges
 its raw bytes, its gzip member and the key, so one piece costs up to about twice its HTML size;
