@@ -150,3 +150,25 @@ six identical-byte thumbnails. Response-size context: Go room_show body is
 Raw: `bench/results/baseline-native-20261005/` (report, raw JSON, metadata with
 load averages). Note: light development activity (nice'd, on non-pinned CPUs)
 overlapped part of the native run; every sample records its load average.
+
+## Engine — first post-engine measurement (ENGINE-17, 2026-10-06)
+
+Native `bench/application`, 3 rotating reps, 5 s samples, c=16, identity,
+CPUs 8-11/12-15, load ~2.5 recorded in metadata. Medians [min–max] req/s:
+
+| Route | Published Go | Engine Go | Rust | Engine gain | Gap to Rust |
+|---|---:|---:|---:|---:|---:|
+| room_show | 17,120 [17,085–17,229] | 24,519 [24,474–24,556] | 31,162 [31,030–31,212] | +43% | 1.27× |
+| search | 16,178 [16,176–16,181] | 26,865 [26,770–26,895] | 33,010 [32,646–33,023] | +66% | 1.23× |
+| messages_page | 24,010 [24,006–24,076] | 25,215 [25,203–25,363] | 35,669 [35,409–35,738] | +5% | 1.41× |
+| sidebar | 27,266 [26,524–29,199] | 26,664 [25,271–27,645] | 40,752 [40,651–40,902] | −2% | 1.53× |
+| post_message | 5,376 [5,252–5,420] | 5,399 [5,272–5,442] | 7,952 [7,824–8,059] | 0% | 1.47× |
+
+Room p99 3.59→2.59 ms; search p99 3.28→1.89 ms. Raw:
+`bench/results/engine-20261006/` (report, raw JSON, metadata).
+
+Interpretation: ENGINE-16's recorded-response pieces moved the flagship rows
+(room +43%, search +66%), halving the Rust gap on both. Sidebar and
+post_message are outside the recorded-response path by design (fragment path
+and write path respectively) and are unmoved; messages_page gains little.
+Those three plus the remaining room/search gap are the next targets.
