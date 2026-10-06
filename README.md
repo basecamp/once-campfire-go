@@ -69,10 +69,13 @@ message ids and updated-at stamps and stored as raw bytes plus a complete gzip m
 routes the hot read paths — room pages, message pages, the session lookup in `auth`, and the sidebar
 (rooms, direct-room members, placeholders) — through `internal/fastdb`, a thin SQLite read layer that
 scans with caller-owned buffers and no per-record database/sql decoding, holding one pooled read-only
-connection per application CPU. Setting it `off` restores the `database/sql` readers on the same
+connection per application CPU (`CAMPFIRE_FASTDB_POOL_SIZE` overrides the size; the startup log line
+reports it). Setting it `off` restores the `database/sql` readers on the same
 handlers for A/B and rollback; search/FTS and every write (including the hourly `RefreshSession`
-UPDATE) always use `database/sql`. If the pool cannot open (unreadable database, non-WAL file), the
-server logs a warning and falls back to `database/sql` reads for that process instead of failing
+UPDATE) always use `database/sql`, and the profile and bots pages keep their user-list reads on
+`database/sql` by design, so the wired-path list above is accurate otherwise. If the pool cannot
+open (unreadable database, non-WAL file), the server logs a warning and falls back to
+`database/sql` reads for that process instead of failing
 startup. The fast path also does not observe request cancellation mid-query; a cancelled request
 completes its read and renders rather than producing a context error.
 `CAMPFIRE_RECORDED_CACHE_MB` sizes that recorded-response piece cache independently (default 32;

@@ -217,7 +217,9 @@ func (s *Server) sidebarData(r *http.Request, u database.User) ([]sidebarRoom, [
 }
 
 // openFastPool opens the fast read pool for the server, honouring
-// CAMPFIRE_FASTDB (default on; off restores the database/sql readers). A pool
+// CAMPFIRE_FASTDB (default on; off restores the database/sql readers). The
+// pool holds one Conn per application CPU; CAMPFIRE_FASTDB_POOL_SIZE
+// overrides the size (tests pin single-Conn serialization with it). A pool
 // that cannot open (unreadable database, non-WAL file) downgrades to the
 // legacy readers with a warning instead of failing startup.
 func openFastPool(dbPath string) *fastdb.Pool {
@@ -233,11 +235,20 @@ func openFastPool(dbPath string) *fastdb.Pool {
 		slog.Info("fast reads", "enabled", false)
 		return nil
 	}
-	pool, err := fastdb.OpenPool(dbPath, max(1, runtime.GOMAXPROCS(0)))
+	size := max(1, runtime.GOMAXPROCS(0))
+	if raw, ok := os.LookupEnv("CAMPFIRE_FASTDB_POOL_SIZE"); ok {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			slog.Warn("invalid CAMPFIRE_FASTDB_POOL_SIZE; using GOMAXPROCS", "value", raw)
+		} else {
+			size = n
+		}
+	}
+	pool, err := fastdb.OpenPool(dbPath, size)
 	if err != nil {
 		slog.Warn("fast read pool unavailable; falling back to database/sql reads", "path", dbPath, "error", err)
 		return nil
 	}
-	slog.Info("fast reads", "enabled", true, "path", dbPath)
+	slog.Info("fast reads", "enabled", true, "path", dbPath, "pool_size", size)
 	return pool
 }

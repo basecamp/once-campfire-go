@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -172,6 +173,83 @@ func TestFastDBReadParity(t *testing.T) {
 			t.Errorf("%d %s: fast body (%d bytes) != legacy body (%d bytes)", i, path, len(body), len(legacy))
 			continue
 		}
+	}
+}
+
+// TestFastDBPoolSizeOneSerializesDoubleBorrow runs the hot routes on a fast
+// pool of exactly one Conn, so every request's auth-then-handler double
+// borrow must serialize: auth releases its session-lookup borrow before the
+// handler borrows again. A full-HTTP parity run proves the size-1 pool still
+// serves byte-identical pages (a borrow that was not released would deadlock
+// the request), and a concurrent burst shakes scheduling around the single
+// Conn.
+func TestFastDBPoolSizeOneSerializesDoubleBorrow(t *testing.T) {
+	t.Setenv("CAMPFIRE_FASTDB_POOL_SIZE", "1")
+	on, _, onServer, offServer, cookie, user := testFastPair(t)
+	if on.fastdb == nil {
+		t.Fatal("fast server has no fast read pool")
+	}
+	onServer.Client().Timeout = 10 * time.Second
+	offServer.Client().Timeout = 10 * time.Second
+	for i, path := range []string{
+		"/rooms/1",
+		"/rooms/1/@1",
+		"/rooms/1/messages",
+		"/users/me/sidebar",
+		fmt.Sprintf("/users/%d/sidebar", user.ID),
+	} {
+		fast, fastBody := parityGet(t, onServer, path, cookie)
+		slow, slowBody := parityGet(t, offServer, path, cookie)
+		if fast.StatusCode != slow.StatusCode {
+			t.Errorf("%d %s: fast %d != legacy %d", i, path, fast.StatusCode, slow.StatusCode)
+			continue
+		}
+		if fast.Header.Get("Content-Type") != slow.Header.Get("Content-Type") {
+			t.Errorf("%d %s: content type %q != %q", i, path, fast.Header.Get("Content-Type"), slow.Header.Get("Content-Type"))
+		}
+		if string(fastBody) != string(slowBody) {
+			t.Errorf("%d %s: fast body (%d bytes) != legacy body (%d bytes)", i, path, len(fastBody), len(slowBody))
+		}
+	}
+	// Burst of concurrent requests against the single-Conn pool: every
+	// request in the auth+handler double borrow serializes, none may hang or
+	// error, and each borrow still reads the database.
+	var wg sync.WaitGroup
+	errs := make(chan error, 24)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 3 {
+				request, err := http.NewRequest("GET", onServer.URL+"/rooms/1/messages", nil)
+				if err != nil {
+					errs <- err
+					return
+				}
+				request.Host = "chat.test"
+				request.AddCookie(cookie)
+				response, err := onServer.Client().Do(request)
+				if err != nil {
+					errs <- err
+					return
+				}
+				body, err := io.ReadAll(response.Body)
+				response.Body.Close()
+				if err != nil {
+					errs <- err
+					return
+				}
+				if response.StatusCode != http.StatusOK || len(body) == 0 {
+					errs <- fmt.Errorf("burst request: status %d, %d bytes", response.StatusCode, len(body))
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
 	}
 }
 
