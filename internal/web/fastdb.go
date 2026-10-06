@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/fastdb"
@@ -90,20 +91,42 @@ func (s *Server) roomRow(c *fastdb.Conn, ctx context.Context, user, id int64) (d
 // messageRefs returns the room's message window in the same shape
 // database.DB.MessagePageReferences yields (refs for before/plus-anchor-zero,
 // full records for after/around, chronologically ordered), through fastdb
-// when c is set.
-func (s *Server) messageRefs(c *fastdb.Conn, ctx context.Context, room, anchor int64, direction string) ([]database.Message, error) {
+// when c is set, and the precomputed messages-page validator derived from it.
+//
+// The result is cached keyed by (room, room version, anchor, direction):
+// version is the room's updated_at, read from the room row both callers
+// already fetched for membership, so a hit costs one in-memory lookup and no
+// page scan — the version comparison is the key itself. A fill scans once,
+// stores only the references (id, room, update stamp), and returns that scan
+// for the current request; full message rows hydrate later on fragment cache
+// misses exactly where they always have. The returned references slice is the
+// cached window's on a hit and must not be mutated.
+func (s *Server) messageRefs(c *fastdb.Conn, ctx context.Context, room, anchor int64, direction string, version time.Time) ([]database.Message, messageValidator, error) {
+	key := messageRefsKey{room: room, version: version.UnixMicro(), anchor: anchor, direction: direction}
+	if entry, ok := s.refsCache.lookup(key); ok {
+		s.messageRefsHits.Add(1)
+		return entry.refs, messageValidator{etag: entry.etag, etagFrame: entry.etagFrame, modified: entry.modified}, nil
+	}
+	s.messageRefsMisses.Add(1)
+	var messages []database.Message
+	var err error
 	if c == nil {
-		return s.DB.MessagePageReferences(ctx, room, anchor, direction)
+		messages, err = s.DB.MessagePageReferences(ctx, room, anchor, direction)
+	} else {
+		var refs []fastdb.Message
+		if refs, err = c.MessagePageReferences(nil, room, anchor, direction); err == nil {
+			messages = make([]database.Message, 0, len(refs))
+			for _, m := range refs {
+				messages = append(messages, messageOf(m))
+			}
+		}
 	}
-	refs, err := c.MessagePageReferences(nil, room, anchor, direction)
 	if err != nil {
-		return nil, err
+		return nil, messageValidator{}, err
 	}
-	out := make([]database.Message, 0, len(refs))
-	for _, m := range refs {
-		out = append(out, messageOf(m))
-	}
-	return out, nil
+	validator := messageValidatorOf(messages)
+	s.refsCache.store(key, messages, validator)
+	return messages, validator, nil
 }
 
 // sessionUser returns the active user for a session token, through fastdb
@@ -162,9 +185,9 @@ func (s *Server) roomData(r *http.Request, u database.User) (room database.Room,
 		return
 	}
 	anchor, _ := strconv.ParseInt(strings.TrimPrefix(r.PathValue("anchor"), "@"), 10, 64)
-	messages, err = s.messageRefs(c, r.Context(), room.ID, anchor, "around")
+	messages, _, err = s.messageRefs(c, r.Context(), room.ID, anchor, "around", room.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		messages, err = s.messageRefs(c, r.Context(), room.ID, 0, "around")
+		messages, _, err = s.messageRefs(c, r.Context(), room.ID, 0, "around", room.UpdatedAt)
 	}
 	if err != nil {
 		return
@@ -180,8 +203,9 @@ func (s *Server) roomData(r *http.Request, u database.User) (room database.Room,
 // messageData runs the messages page's database reads (the room lookup for
 // membership, then the message window) on one borrowed fastdb connection (or
 // database/sql when the fast path is off) and returns the page inputs with
-// the connection already returned.
-func (s *Server) messageData(r *http.Request, u database.User) (messages []database.Message, err error) {
+// the connection already returned, together with the precomputed
+// conditional-GET validator for the window.
+func (s *Server) messageData(r *http.Request, u database.User) (messages []database.Message, validator messageValidator, err error) {
 	c, release := s.fastConn(r)
 	defer release()
 	var room database.Room
@@ -194,7 +218,7 @@ func (s *Server) messageData(r *http.Request, u database.User) (messages []datab
 		before, _ = strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 		direction = "after"
 	}
-	messages, err = s.messageRefs(c, r.Context(), room.ID, before, direction)
+	messages, validator, err = s.messageRefs(c, r.Context(), room.ID, before, direction, room.UpdatedAt)
 	return
 }
 

@@ -53,6 +53,14 @@ type Server struct {
 	// fastdb is the pooled fast read layer for the hot read paths
 	// (CAMPFIRE_FASTDB=off leaves it nil and the handlers use database/sql).
 	fastdb *fastdb.Pool
+	// refsCache holds message-page reference windows keyed by room version
+	// (CAMPFIRE_MESSAGE_REFS_CACHE_MB=0 leaves it storing nothing and every
+	// lookup misses, keeping the handlers on the scan path).
+	refsCache *messageRefsCache
+	// messageRefsHits/Misses count reference-cache lookups so tests can pin
+	// invalidation and the warm path.
+	messageRefsHits   atomic.Int64
+	messageRefsMisses atomic.Int64
 	// pieces stores recorded-response pieces (raw + gzip member + digest)
 	// under content-versioned keys, sized by CAMPFIRE_RECORDED_CACHE_MB.
 	pieces         *piececache.Cache
@@ -177,6 +185,14 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 			return nil, fmt.Errorf("invalid CAMPFIRE_RECORDED_CACHE_MB %q", raw)
 		}
 	}
+	refsMB := messageRefsDefaultMB
+	if raw, ok := os.LookupEnv("CAMPFIRE_MESSAGE_REFS_CACHE_MB"); ok {
+		refsMB, err = strconv.Atoi(raw)
+		if err != nil || refsMB < 0 || refsMB > 1<<20 {
+			return nil, fmt.Errorf("invalid CAMPFIRE_MESSAGE_REFS_CACHE_MB %q", raw)
+		}
+	}
+	slog.Info("message reference cache", "enabled", refsMB > 0, "cache_mib", refsMB)
 	// CAMPFIRE_RECORDED_PIECES is the A/B and rollback switch for the piece
 	// path; on/true (or unset) keeps it on, off/false/0 disables it. An
 	// unrecognised value warns and keeps the default so a typo cannot silently
@@ -190,7 +206,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 		}
 	}
 	slog.Info("recorded response pieces", "enabled", recordedPieces, "cache_mib", recordedMB)
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, fastdb: openFastPool(dbPath), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), refsCache: newMessageRefsCache(refsMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, fastdb: openFastPool(dbPath), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -790,7 +806,7 @@ func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
 	s.render(w, r, "room", 200, page{Invitation: invitation, Stream: s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)), Title: room.Name, User: u, Room: room, Messages: viewMessages(messages)})
 }
 func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.User) {
-	messages, err := s.messageData(r, u)
+	messages, validator, err := s.messageData(r, u)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -799,7 +815,7 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.Use
 		w.WriteHeader(204)
 		return
 	}
-	if messageFreshness(w, r, messages) {
+	if validator.apply(w, r) {
 		return
 	}
 	s.render(w, r, "messages", 200, page{Messages: viewMessages(messages)})

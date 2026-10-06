@@ -81,7 +81,20 @@ its raw bytes, its gzip member and the key, so one piece costs up to about twice
 with the fragment and recorded caches full the accounting is 64 MiB by default. The recorded room
 page's ETag covers the cache-stable pieces only, so it no longer moves with the per-request
 `loadedAt` timestamp — a deliberate difference from the legacy per-request hash, which would
-re-hash the shell on every request. `campfire db:prepare` initializes an empty database and checks
+re-hash the shell on every request. `CAMPFIRE_MESSAGE_REFS_CACHE_MB` sizes the message-page
+reference cache (default 8; `0` disables it, restoring the per-request 40-row scan): the room and
+messages pages both re-run the same `MessagePageReferences` scan on every request, so its result —
+the reference list (message id, room, update stamp) plus the messages-page validator (ETag,
+Last-Modified, Cache-Control, both Turbo-Frame variants, byte-identical to the former per-request
+rebuild) — is cached keyed by `(room, room updated_at, anchor, direction)` and served warm at one
+in-memory lookup with no scan (measured 48 ns/op, 0 allocs, vs 20.8 µs/op on the scan path).
+Validation is the key itself: every message create/edit/delete/boost writes `rooms.updated_at`, so
+a changed room version misses and refills. A hit returns only references; full message rows (rich
+text, author, boosts) hydrate exactly where they always did, on a per-message fragment cache miss,
+which also keeps the around/after pages on the same hydration path the before pages always used.
+The cache is bounded by bytes and by 4096 entries, pruned oldest-first to 75% of the budget like
+the fragment cache; a single window never exceeds a quarter of the budget.
+`campfire db:prepare` initializes an empty database and checks
 migration versions; existing databases missing migrations are rejected.
 
 The public listener uses `HTTP_PORT=80`. Set `TLS_DOMAIN` for automatic ACME certificates and HTTPS
