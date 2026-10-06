@@ -82,7 +82,7 @@ func (d *DB) MentioneesInRoom(ctx context.Context, room int64, ids []int64) ([]U
 }
 
 func (d *DB) optionalMessage(ctx context.Context, query string, args ...any) (ReferenceMessage, bool, error) {
-	messages, err := d.referenceMessages(ctx, query, args...)
+	messages, err := d.referenceMessages(ctx, 1, query, args...)
 	if err != nil || len(messages) == 0 {
 		return ReferenceMessage{}, false, err
 	}
@@ -101,7 +101,7 @@ func (d *DB) MessageFindReachable(ctx context.Context, user, id int64) (Referenc
 
 // MessagePageCreatedSince is room.messages.page_created_since(time).
 func (d *DB) MessagePageCreatedSince(ctx context.Context, room int64, since string) ([]ReferenceMessage, error) {
-	return d.referenceMessages(ctx, selectInRoom+` AND (created_at > ?) ORDER BY "messages"."created_at" ASC LIMIT 40`, room, since)
+	return d.referenceMessages(ctx, 40, selectInRoom+` AND (created_at > ?) ORDER BY "messages"."created_at" ASC LIMIT 40`, room, since)
 }
 
 // MessagePageUpdatedSince is room.messages.without(excluding).page_updated_since(time).
@@ -116,7 +116,7 @@ func (d *DB) MessagePageUpdatedSince(ctx context.Context, room int64, since stri
 		}
 	}
 	args = append(args, since)
-	messages, err := d.referenceMessages(ctx, selectInRoom+without+` AND (updated_at > ?) ORDER BY "messages"."created_at" DESC LIMIT 40`, args...)
+	messages, err := d.referenceMessages(ctx, 40, selectInRoom+without+` AND (updated_at > ?) ORDER BY "messages"."created_at" DESC LIMIT 40`, args...)
 	return reversed(messages), err
 }
 

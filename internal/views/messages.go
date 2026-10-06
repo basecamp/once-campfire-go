@@ -270,7 +270,8 @@ func CachedMessageFragment(cache *FragmentCache, id int64, updatedAt time.Time) 
 	if cache == nil {
 		return nil
 	}
-	return cache.Fragment(string(appendMessageFragmentKey(make([]byte, 0, 128), id, updatedAt)))
+	var key [128]byte
+	return cache.fragmentBytes(appendMessageFragmentKey(key[:0], id, updatedAt))
 }
 
 // appendMessageFragmentKey appends views/messages/_message:<digest>/messages/<id>-<version>/presentation-v3.

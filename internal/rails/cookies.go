@@ -10,11 +10,11 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,6 +29,8 @@ type Secrets struct {
 	signedGIDs []byte
 	streams    []byte
 	encryption cipher.AEAD
+	// Reused HMACs (pooledMAC): SHA-256 with signedIDs, SHA-1 with signing.
+	idMACs, cookieMACs sync.Pool
 }
 
 func DeriveKey(secret, salt string, length int) []byte {
@@ -107,8 +109,11 @@ func envelope(value any, name string, expires time.Time) ([]byte, error) {
 	}{base64.StdEncoding.EncodeToString(data), expiry, "cookie." + name}})
 }
 
+// urlSafeToStandard turns URL-safe Base64 into the standard alphabet.
+var urlSafeToStandard = strings.NewReplacer("-", "+", "_", "/")
+
 func decode64(s string) ([]byte, error) {
-	return base64.RawStdEncoding.DecodeString(strings.TrimRight(strings.NewReplacer("-", "+", "_", "/").Replace(s), "="))
+	return base64.RawStdEncoding.DecodeString(strings.TrimRight(urlSafeToStandard.Replace(s), "="))
 }
 
 func unpack(data []byte, name string, now time.Time, dest any) error {
@@ -150,9 +155,12 @@ func (s *Secrets) SignCookie(name string, value any, expires time.Time) (string,
 		return "", err
 	}
 	payload := base64.StdEncoding.EncodeToString(data)
-	mac := hmac.New(sha1.New, s.signing)
-	mac.Write([]byte(payload))
-	return payload + "--" + hex.EncodeToString(mac.Sum(nil)), nil
+	return payload + "--" + s.cookieMAC(payload), nil
+}
+
+// cookieMAC is the hex HMAC-SHA1 of a signed cookie's payload.
+func (s *Secrets) cookieMAC(payload string) string {
+	return pooledMAC(&s.cookieMACs, sha1.New, s.signing, payload)
 }
 
 func (s *Secrets) VerifyCookie(name, raw string, now time.Time, dest any) error {
@@ -161,9 +169,7 @@ func (s *Secrets) VerifyCookie(name, raw string, now time.Time, dest any) error 
 		return ErrInvalid
 	}
 	payload, signature := raw[:i], raw[i+2:]
-	mac := hmac.New(sha1.New, s.signing)
-	mac.Write([]byte(payload))
-	if !hmac.Equal([]byte(signature), []byte(hex.EncodeToString(mac.Sum(nil)))) {
+	if !hmac.Equal([]byte(signature), []byte(s.cookieMAC(payload))) {
 		return ErrInvalid
 	}
 	data, err := decode64(payload)

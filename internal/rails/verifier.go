@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,13 +25,15 @@ var ErrExpired = errors.New("message expired")
 type Verifier struct {
 	Key                                         []byte
 	SHA256, URLSafe, Padded, HTML, AllowMarshal bool
+	// macs, when set, holds reusable HMACs of Key with the verifier's algorithm (pooledMAC).
+	macs *sync.Pool
 }
 
 func (s *Secrets) AppVerifier(name string) Verifier {
 	return Verifier{Key: DeriveKey(s.secret, name, 64), HTML: true, AllowMarshal: true}
 }
 func (s *Secrets) idVerifier() Verifier {
-	return Verifier{Key: s.signedIDs, SHA256: true, URLSafe: true}
+	return Verifier{Key: s.signedIDs, SHA256: true, URLSafe: true, macs: &s.idMACs}
 }
 func (s *Secrets) sgidVerifier() Verifier {
 	return Verifier{Key: s.signedGIDs, URLSafe: true, Padded: true, HTML: true, AllowMarshal: true}
@@ -39,6 +42,9 @@ func (v Verifier) mac(data string) string {
 	var algorithm func() hash.Hash = sha1.New
 	if v.SHA256 {
 		algorithm = sha256.New
+	}
+	if v.macs != nil {
+		return pooledMAC(v.macs, algorithm, v.Key, data)
 	}
 	mac := hmac.New(algorithm, v.Key)
 	mac.Write([]byte(data))
@@ -112,6 +118,12 @@ func CanonicalJSON(raw []byte, escapeHTML bool) ([]byte, error) {
 	return out.Bytes(), nil
 }
 func jsonString(value string, escapeHTML bool) ([]byte, error) {
+	if plainJSONString(value, escapeHTML) {
+		out := make([]byte, 0, len(value)+2)
+		out = append(out, '"')
+		out = append(out, value...)
+		return append(out, '"'), nil
+	}
 	var out bytes.Buffer
 	encoder := json.NewEncoder(&out)
 	encoder.SetEscapeHTML(escapeHTML)
@@ -139,6 +151,38 @@ func jsonString(value string, escapeHTML bool) ([]byte, error) {
 	}
 	return result, nil
 }
+
+// pooledMAC is the hex HMAC of data with a keyed HMAC from pool, which holds HMACs of only one
+// algorithm and key: a page signs an id per avatar and checks a cookie per request, and a new HMAC
+// hashes its key twice before the data.
+func pooledMAC(pool *sync.Pool, algorithm func() hash.Hash, key []byte, data string) string {
+	mac, _ := pool.Get().(hash.Hash)
+	if mac == nil {
+		mac = hmac.New(algorithm, key)
+	} else {
+		mac.Reset()
+	}
+	mac.Write([]byte(data))
+	var sum [sha256.Size]byte
+	digest := hex.EncodeToString(mac.Sum(sum[:0]))
+	pool.Put(mac)
+	return digest
+}
+
+// plainJSONString is true when encoding/json writes value as is between quotes: printable ASCII
+// with nothing to escape.
+func plainJSONString(value string, escapeHTML bool) bool {
+	for i := 0; i < len(value); i++ {
+		switch c := value[i]; {
+		case c < 0x20 || c > 0x7e || c == '"' || c == '\\':
+			return false
+		case escapeHTML && (c == '<' || c == '>' || c == '&'):
+			return false
+		}
+	}
+	return true
+}
+
 func (v Verifier) Generate(value any, purpose string, expires time.Time) (string, error) {
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -151,6 +195,11 @@ func (v Verifier) GenerateRaw(raw []byte, purpose string, expires time.Time) (st
 	if err != nil {
 		return "", err
 	}
+	return v.generate(data, purpose, expires), nil
+}
+
+// generate signs data that is already canonical JSON.
+func (v Verifier) generate(data []byte, purpose string, expires time.Time) string {
 	if purpose != "" || !expires.IsZero() {
 		out := append([]byte(`{"_rails":{"data":`), data...)
 		if !expires.IsZero() {
@@ -173,7 +222,7 @@ func (v Verifier) GenerateRaw(raw []byte, purpose string, expires time.Time) (st
 		}
 	}
 	payload := encoding.EncodeToString(data)
-	return payload + "--" + v.mac(payload), nil
+	return payload + "--" + v.mac(payload)
 }
 func (v Verifier) VerifyRaw(message, purpose string, now time.Time) (json.RawMessage, error) {
 	length := 40
@@ -332,17 +381,14 @@ func underscore(name string) string {
 }
 
 func (s *Secrets) SignedID(model string, id int64, purpose string, expires time.Time) string {
-	value, err := s.idVerifier().Generate(id, modelPurpose(model, purpose), expires)
-	if err != nil {
-		panic(err)
-	}
-	return value
+	// An integer is its own canonical JSON.
+	return s.idVerifier().generate(strconv.AppendInt(nil, id, 10), modelPurpose(model, purpose), expires)
 }
 func (s *Secrets) VerifyID(model, message, purpose string, now time.Time) (int64, error) {
 	v := s.idVerifier()
 	raw, err := v.VerifyRaw(message, modelPurpose(model, purpose), now)
 	if err != nil && !errors.Is(err, ErrPurpose) && !errors.Is(err, ErrExpired) {
-		v.SHA256 = false
+		v.SHA256, v.macs = false, nil
 		v.AllowMarshal = true
 		raw, err = v.VerifyRaw(message, modelPurpose(model, purpose), now)
 	}

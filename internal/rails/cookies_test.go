@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -116,5 +117,32 @@ func TestRailsCookieVectors(t *testing.T) {
 				t.Fatal("accepted tampered ciphertext")
 			}
 		})
+	}
+}
+
+// Signed cookies sign and verify the same with reused HMACs as with fresh ones.
+func TestSignedCookieMACsAreReusable(t *testing.T) {
+	secrets, err := NewSecrets("secret-key-base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := secrets.SignCookie("session_token", "abc", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		again, _ := secrets.SignCookie("session_token", "abc", time.Time{})
+		if again != first {
+			t.Fatalf("signed again: %s, first %s", again, first)
+		}
+		var value string
+		if err := secrets.VerifyCookie("session_token", again, time.Now(), &value); err != nil || value != "abc" {
+			t.Fatalf("verify: %q %v", value, err)
+		}
+	}
+	tampered := first[:len(first)-1] + string("0123456789abcdef"[(strings.IndexByte("0123456789abcdef", first[len(first)-1])+1)%16])
+	var value string
+	if err := secrets.VerifyCookie("session_token", tampered, time.Now(), &value); err == nil {
+		t.Fatal("a tampered cookie verified")
 	}
 }

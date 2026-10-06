@@ -264,7 +264,7 @@ func (s *Server) findPagedMessages(r *http.Request, room *database.ReferenceRoom
 // messagesFresh is `fresh_when @messages`: the records' cache keys digested with the frame and
 // template etaggers, and their latest updated_at. True when the response is a 304.
 func messagesFresh(w http.ResponseWriter, r *http.Request, messages []database.ReferenceMessage) bool {
-	key := make([]byte, 0, 32*len(messages)+32)
+	key := make([]byte, 0, 48*len(messages)+32) // "messages/<id>-<20-digit version>/" each
 	var modified time.Time
 	for i, m := range messages {
 		if i > 0 {

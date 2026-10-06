@@ -1,9 +1,11 @@
 package rails
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -159,6 +161,51 @@ func TestVerifierMetadataSeparation(t *testing.T) {
 	}{{"blob_token", time.Unix(0, 0)}, {"", time.Unix(0, 0)}, {"blob_id", time.Unix(100, 0)}} {
 		if _, err = v.VerifyRaw(message, c.purpose, c.now); err == nil {
 			t.Fatal("accepted wrong-purpose or expired message")
+		}
+	}
+}
+
+// SignedID's shortcuts (the id as its own JSON, plain purposes quoted as they are, reused HMACs)
+// sign what Generate does.
+func TestSignedIDMatchesGenerate(t *testing.T) {
+	secrets, err := NewSecrets("secret-key-base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expires := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		id      int64
+		model   string
+		purpose string
+		expires time.Time
+	}{
+		{1, "User", "avatar", time.Time{}},
+		{-42, "Rooms::Open", "", time.Time{}},
+		{9007199254740993, "User", "avatar", expires},
+		{7, "User", "a\"b<c>&\u2028", time.Time{}},
+	} {
+		for range 3 {
+			got := secrets.SignedID(test.model, test.id, test.purpose, test.expires)
+			want, err := Verifier{Key: secrets.signedIDs, SHA256: true, URLSafe: true}.Generate(test.id, modelPurpose(test.model, test.purpose), test.expires)
+			if err != nil || got != want {
+				t.Fatalf("SignedID(%d, %q, %q) = %s, want %s (%v)", test.id, test.model, test.purpose, got, want, err)
+			}
+		}
+	}
+}
+
+func TestPlainJSONStringsMatchEncoder(t *testing.T) {
+	for _, s := range []string{"", "user/avatar", "a b~", "<b>", "&", "q\"", `back\slash`, "tab\t", "\x7f", "é", "\u2028"} {
+		for _, html := range []bool{false, true} {
+			got, _ := jsonString(s, html)
+			var out bytes.Buffer
+			encoder := json.NewEncoder(&out)
+			encoder.SetEscapeHTML(html)
+			encoder.Encode(s)
+			want := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSuffix(out.String(), "\n"), `\u2028`, "\u2028"), `\u2029`, "\u2029")
+			if string(got) != want {
+				t.Errorf("jsonString(%q, %v) = %s, want %s", s, html, got, want)
+			}
 		}
 	}
 }

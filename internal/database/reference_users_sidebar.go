@@ -23,15 +23,14 @@ type MembershipRoom struct {
 	Room       ReferenceRoom
 }
 
-func scanMembershipRoom(rows *Rows) (MembershipRoom, error) {
-	var m MembershipRoom
+func scanMembershipRoom(rows *Rows, m *MembershipRoom) error {
 	var unreadAt, connectedAt NullString
 	var connections int64
 	var created time.Time
 	err := rows.Scan(&m.Membership.ID, &m.Membership.RoomID, &m.Membership.UserID, &m.Membership.Involvement, &unreadAt, &connectedAt, &connections, timestamp{&created}, timestamp{&m.Membership.UpdatedAt},
 		&m.Room.ID, &m.Room.Name, &m.Room.Type, &m.Room.CreatorID, timestamp{&m.Room.CreatedAt}, timestamp{&m.Room.UpdatedAt})
 	m.Membership.Unread = unreadAt.Valid
-	return m, err
+	return err
 }
 
 func (d *DB) membershipRooms(ctx context.Context, query string, args ...any) ([]MembershipRoom, error) {
@@ -40,13 +39,13 @@ func (d *DB) membershipRooms(ctx context.Context, query string, args ...any) ([]
 		return nil, err
 	}
 	defer rows.Close()
-	var list []MembershipRoom
+	// Scanned in place, in a slice most users' rooms fit.
+	list := make([]MembershipRoom, 0, 16)
 	for rows.Next() {
-		m, err := scanMembershipRoom(rows)
-		if err != nil {
+		list = append(list, MembershipRoom{})
+		if err := scanMembershipRoom(rows, &list[len(list)-1]); err != nil {
 			return nil, err
 		}
-		list = append(list, m)
 	}
 	return list, rows.Err()
 }

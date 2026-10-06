@@ -84,6 +84,23 @@ func (c *FragmentCache) Fragment(key string) *Fragment {
 	return f
 }
 
+// fragmentBytes is Fragment for a key built in a buffer, looked up without copying it into a
+// string.
+func (c *FragmentCache) fragmentBytes(key []byte) *Fragment {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	element, ok := c.entries[string(key)]
+	if !ok {
+		return nil
+	}
+	c.recency.MoveToFront(element)
+	f, _ := element.Value.(*cacheEntry).value.(*Fragment)
+	return f
+}
+
 // write stores value unless key already holds one, and returns what key holds: when two renders
 // of a key race, the first one stored is what both return.
 func (c *FragmentCache) write(key string, value any, size int) any {

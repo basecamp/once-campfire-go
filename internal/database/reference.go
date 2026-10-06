@@ -108,19 +108,21 @@ type ReferenceMessage struct {
 	CreatedAt, UpdatedAt  time.Time
 }
 
-func (d *DB) referenceMessages(ctx context.Context, query string, args ...any) ([]ReferenceMessage, error) {
+// referenceMessages reads messages into a slice sized for the rows expected (a page's LIMIT),
+// scanning each row in place.
+func (d *DB) referenceMessages(ctx context.Context, expected int, query string, args ...any) ([]ReferenceMessage, error) {
 	rows, err := d.Read.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var messages []ReferenceMessage
+	messages := make([]ReferenceMessage, 0, expected)
 	for rows.Next() {
-		var m ReferenceMessage
+		messages = append(messages, ReferenceMessage{})
+		m := &messages[len(messages)-1]
 		if err := rows.Scan(&m.ID, &m.RoomID, &m.CreatorID, &m.ClientMessageID, timestamp{&m.CreatedAt}, timestamp{&m.UpdatedAt}); err != nil {
 			return nil, err
 		}
-		messages = append(messages, m)
 	}
 	return messages, rows.Err()
 }
@@ -134,7 +136,7 @@ func reversed(messages []ReferenceMessage) []ReferenceMessage {
 
 // MessageFindByID is Message::find_by_id.
 func (d *DB) MessageFindByID(ctx context.Context, id int64) (ReferenceMessage, bool, error) {
-	messages, err := d.referenceMessages(ctx, `SELECT `+messageColumns+` FROM "messages" WHERE "messages"."id" = ? LIMIT 1`, id)
+	messages, err := d.referenceMessages(ctx, 1, `SELECT `+messageColumns+` FROM "messages" WHERE "messages"."id" = ? LIMIT 1`, id)
 	if err != nil || len(messages) == 0 {
 		return ReferenceMessage{}, false, err
 	}
@@ -143,19 +145,19 @@ func (d *DB) MessageFindByID(ctx context.Context, id int64) (ReferenceMessage, b
 
 // MessageLastPage is room.messages.last_page: the newest 40, oldest first.
 func (d *DB) MessageLastPage(ctx context.Context, room int64) ([]ReferenceMessage, error) {
-	messages, err := d.referenceMessages(ctx, selectInRoom+` ORDER BY "messages"."created_at" DESC LIMIT 40`, room)
+	messages, err := d.referenceMessages(ctx, 40, selectInRoom+` ORDER BY "messages"."created_at" DESC LIMIT 40`, room)
 	return reversed(messages), err
 }
 
 // MessagePageBefore is room.messages.page_before(message).
 func (d *DB) MessagePageBefore(ctx context.Context, room int64, message ReferenceMessage) ([]ReferenceMessage, error) {
-	messages, err := d.referenceMessages(ctx, selectInRoom+` AND (created_at < ?) ORDER BY "messages"."created_at" DESC LIMIT 40`, room, Stamp(message.CreatedAt))
+	messages, err := d.referenceMessages(ctx, 40, selectInRoom+` AND (created_at < ?) ORDER BY "messages"."created_at" DESC LIMIT 40`, room, Stamp(message.CreatedAt))
 	return reversed(messages), err
 }
 
 // MessagePageAfter is room.messages.page_after(message).
 func (d *DB) MessagePageAfter(ctx context.Context, room int64, message ReferenceMessage) ([]ReferenceMessage, error) {
-	return d.referenceMessages(ctx, selectInRoom+` AND (created_at > ?) ORDER BY "messages"."created_at" ASC LIMIT 40`, room, Stamp(message.CreatedAt))
+	return d.referenceMessages(ctx, 40, selectInRoom+` AND (created_at > ?) ORDER BY "messages"."created_at" ASC LIMIT 40`, room, Stamp(message.CreatedAt))
 }
 
 // MessagePageAround is room.messages.page_around(message): up to 40 before, the message, up to
@@ -186,7 +188,8 @@ func (d *DB) MessageSearchReachable(ctx context.Context, user int64, query strin
 	if terms == "" {
 		return nil, nil
 	}
-	messages, err := d.referenceMessages(ctx, selectReachable+` join message_search_index idx on messages.id = idx.rowid WHERE "memberships"."user_id" = ? AND (idx.body match ?) ORDER BY "messages"."created_at" DESC LIMIT 100`, user, terms)
+	// Searches mostly find fewer messages than the LIMIT.
+	messages, err := d.referenceMessages(ctx, 16, selectReachable+` join message_search_index idx on messages.id = idx.rowid WHERE "memberships"."user_id" = ? AND (idx.body match ?) ORDER BY "messages"."created_at" DESC LIMIT 100`, user, terms)
 	return reversed(messages), err
 }
 
