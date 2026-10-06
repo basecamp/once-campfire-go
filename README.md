@@ -59,7 +59,9 @@ handler as fallback, `off` disables ownership for A/B and rollback, and `force` 
 disables caching), which holds per-message fragments, the sidebar and the legacy recorded shells
 when the piece path is off; the engine piece cache reads the same key when routes migrate to it, so
 with both full the worst case is 2× the configured MiB (64 MiB by default), kept intentionally
-during the strangler migration. `CAMPFIRE_RECORDED_PIECES` (default `on`; also accepts `true`/`1`
+during the strangler migration. `CAMPFIRE_CABLE_FAST` (default `on`) gates the Action Cable
+fan-out fast paths (ENGINE-40): per-wake batched/vectored writes and the exact-payload frame
+cache; `off` selects the legacy one-write-per-frame path for A/B. `CAMPFIRE_RECORDED_PIECES` (default `on`; also accepts `true`/`1`
 and `off`/`false`/`0`, warning on anything else) serves recorded room, messages and search pages
 from cached compressed pieces: the shell split at its `loadedAt` and message markers (`layout`,
 `0`..`2`) and the message list, each keyed by a SHA-256 of the rendered page inputs or of the

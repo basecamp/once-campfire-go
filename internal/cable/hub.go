@@ -2,10 +2,12 @@
 package cable
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,11 +18,196 @@ import (
 	"github.com/coder/websocket"
 )
 
+// fast gates the ENGINE-40 fan-out fast paths for a hub: per-wake batched
+// writes (one vectored write per wake instead of one write per frame) and
+// the exact-payload frame cache. Set CAMPFIRE_CABLE_FAST=off to select the
+// legacy path; default on. Read once per hub at New; tests in this package
+// may flip hub.fast directly on a hub they own.
+func fastFromEnv() bool {
+	return os.Getenv("CAMPFIRE_CABLE_FAST") != "off"
+}
+
+// Frame-cache bounds. Bounded FIFO retention: an eviction always drops the
+// oldest entries, per key and globally, so a stream alternating between a
+// handful of payloads keeps them all (no latest-frame-only thrash).
+var (
+	frameCachePerKey     = 8       // distinct payloads retained per (scope, identifier)
+	frameCacheMaxEntries = 4096    // global entry bound
+	frameCacheMaxBytes   = 8 << 20 // global payload-byte bound (plus 64B fixed overhead per entry)
+)
+
+type frameCacheKey struct{ scope, id string }
+
+type frameCacheEntry struct {
+	key   frameCacheKey
+	hash  uint64
+	frame *websocket.PreparedMessage
+
+	gPrev, gNext *frameCacheEntry // global FIFO: gPrev toward oldest, gNext toward newest
+	kNext        *frameCacheEntry // per-key chain: newest → oldest
+	hNext        *frameCacheEntry // hash chain: newest → oldest
+}
+
+// frameCache reuses immutable prepared frames across publishes for identical
+// (scope, identifier, payload) triples, on top of the prepared message's
+// shared compressed bytes. A hit skips re-marshaling and re-deflating the
+// payload; reuse is safe because PreparedMessage is immutable (frames may
+// also stay queued on slow clients while they are cached).
+//
+// Poisoning is impossible by construction: equality requires the full
+// payload bytes, never the hash alone.
+type frameCache struct {
+	mu      sync.Mutex
+	first   *frameCacheEntry // global FIFO head (oldest)
+	last    *frameCacheEntry // global FIFO tail (newest)
+	newest  map[frameCacheKey]*frameCacheEntry
+	byHash  map[uint64]*frameCacheEntry
+	entries int
+	bytes   int64
+}
+
+func newFrameCache() *frameCache {
+	return &frameCache{
+		newest: make(map[frameCacheKey]*frameCacheEntry),
+		byHash: make(map[uint64]*frameCacheEntry),
+	}
+}
+
+const (
+	fnvOffset = 14695981039346656037
+	fnvPrime  = 1099511628211
+)
+
+// frameHash is FNV-1a 64 over scope, id and payload with separators, so that
+// (scope, id, payloadA) and (scope, id, payloadB) never collide in the hash
+// map beyond the usual 64-bit probability.
+func frameHash(scope, id string, payload []byte) uint64 {
+	h := uint64(fnvOffset)
+	for i := 0; i < len(scope); i++ {
+		h ^= uint64(scope[i])
+		h *= fnvPrime
+	}
+	h ^= 0
+	h *= fnvPrime
+	for i := 0; i < len(id); i++ {
+		h ^= uint64(id[i])
+		h *= fnvPrime
+	}
+	h ^= 0
+	h *= fnvPrime
+	for _, b := range payload {
+		h ^= uint64(b)
+		h *= fnvPrime
+	}
+	return h
+}
+
+// lookupOrCreate returns the cached frame whose key and exact payload match,
+// creating and inserting one otherwise. Callers must not mutate data.
+func (fc *frameCache) lookupOrCreate(scope, id string, data []byte) *websocket.PreparedMessage {
+	h := frameHash(scope, id, data)
+	key := frameCacheKey{scope: scope, id: id}
+
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+
+	for e := fc.byHash[h]; e != nil; e = e.hNext {
+		if e.key == key && bytes.Equal(e.frame.Data(), data) {
+			return e.frame
+		}
+	}
+
+	e := &frameCacheEntry{
+		key:   key,
+		hash:  h,
+		frame: websocket.NewPreparedMessage(websocket.MessageText, data),
+	}
+
+	// Insert at the per-key head (newest) and the global tail (newest).
+	e.kNext = fc.newest[key]
+	fc.newest[key] = e
+	e.gPrev = fc.last
+	if fc.last != nil {
+		fc.last.gNext = e
+	} else {
+		fc.first = e
+	}
+	fc.last = e
+	e.hNext = fc.byHash[h]
+	fc.byHash[h] = e
+	fc.entries++
+	fc.bytes += int64(len(data)) + 64
+
+	// Per-key FIFO: drop the key's oldest entry once it holds its bound of
+	// distinct payloads.
+	count := 0
+	var oldest *frameCacheEntry
+	for n := e; n != nil; n = n.kNext {
+		count++
+		oldest = n
+	}
+	if count > frameCachePerKey && oldest != nil && oldest != e {
+		fc.remove(oldest)
+	}
+	// Global FIFO: drop the oldest entry overall while over either bound.
+	for fc.entries > frameCacheMaxEntries || fc.bytes > int64(frameCacheMaxBytes) {
+		fc.remove(fc.first)
+	}
+	return e.frame
+}
+
+// remove unlinks e from every structure; e must be present.
+func (fc *frameCache) remove(e *frameCacheEntry) {
+	if e.gPrev != nil {
+		e.gPrev.gNext = e.gNext
+	} else {
+		fc.first = e.gNext
+	}
+	if e.gNext != nil {
+		e.gNext.gPrev = e.gPrev
+	} else {
+		fc.last = e.gPrev
+	}
+
+	prev := (*frameCacheEntry)(nil)
+	for n := fc.newest[e.key]; n != nil && n != e; n = n.kNext {
+		prev = n
+	}
+	if prev != nil {
+		prev.kNext = e.kNext
+	} else if fc.newest[e.key] == e {
+		if e.kNext != nil {
+			fc.newest[e.key] = e.kNext
+		} else {
+			delete(fc.newest, e.key)
+		}
+	}
+
+	prev = nil
+	for n := fc.byHash[e.hash]; n != nil && n != e; n = n.hNext {
+		prev = n
+	}
+	if prev != nil {
+		prev.hNext = e.hNext
+	} else if fc.byHash[e.hash] == e {
+		if e.hNext != nil {
+			fc.byHash[e.hash] = e.hNext
+		} else {
+			delete(fc.byHash, e.hash)
+		}
+	}
+
+	fc.entries--
+	fc.bytes -= int64(len(e.frame.Data())) + 64
+}
+
 type Hub struct {
 	db      *database.DB
 	secrets *rails.Secrets
+	fast    bool
 	mu      sync.RWMutex
 	clients map[*client]struct{}
+	cache   *frameCache
 }
 type client struct {
 	disconnect    chan bool
@@ -39,7 +226,7 @@ type subscription struct {
 }
 
 func New(db *database.DB, secrets *rails.Secrets) *Hub {
-	return &Hub{db: db, secrets: secrets, clients: map[*client]struct{}{}}
+	return &Hub{db: db, secrets: secrets, fast: fastFromEnv(), clients: map[*client]struct{}{}, cache: newFrameCache()}
 }
 func (c *client) send(value any) bool {
 	data, err := json.Marshal(value)
@@ -93,6 +280,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 		defer cancel()
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
+		var batch [websocket.BatchMaxFrames]*websocket.PreparedMessage
 		for {
 			var data []byte
 			var frame *websocket.PreparedMessage
@@ -110,11 +298,35 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 				}
 				data, _ = json.Marshal(map[string]any{"type": "ping", "message": time.Now().Unix()})
 			}
-			timeout, stop := context.WithTimeout(ctx, 30*time.Second)
+			// ENGINE-40 fast path: coalesce the wake's frame with everything
+			// queued (bounded batch) into one write per wake. The select above
+			// took the queue's oldest frame, so drain order preserves FIFO.
+			// Slow-client policy is untouched: sendFrame still drops into the
+			// 256-frame queue and cancels on overflow.
+			n := 1
 			if frame == nil {
 				frame = websocket.NewPreparedMessage(websocket.MessageText, data)
 			}
-			err := conn.WritePrepared(timeout, frame)
+			batch[0] = frame
+			if h.fast && !closeAfter {
+			drain:
+				for n < len(batch) {
+					select {
+					case f := <-c.out:
+						batch[n] = f
+						n++
+					default:
+						break drain
+					}
+				}
+			}
+			timeout, stop := context.WithTimeout(ctx, 30*time.Second)
+			var err error
+			if h.fast {
+				err = conn.WritePreparedBatch(timeout, batch[:n])
+			} else {
+				err = conn.WritePrepared(timeout, batch[0])
+			}
 			stop()
 			if err != nil || closeAfter {
 				return
@@ -255,13 +467,22 @@ func (h *Hub) publish(ctx context.Context, room int64, name string, message any)
 		client     *client
 		identifier string
 		room       int64
+		scope      string
 	}
 	var recipients []recipient
+	roomScope := ""
+	if room != 0 {
+		roomScope = fmt.Sprintf("room:%d", room)
+	}
 	h.mu.RLock()
 	for c := range h.clients {
 		for identifier, sub := range c.subscriptions {
 			if room != 0 && sub.Room == room && sub.Channel == "RoomMessagesChannel" || name != "" && sub.Stream == name {
-				recipients = append(recipients, recipient{c, identifier, sub.Room})
+				scope := name
+				if sub.Channel == "RoomMessagesChannel" {
+					scope = roomScope
+				}
+				recipients = append(recipients, recipient{c, identifier, sub.Room, scope})
 			}
 		}
 	}
@@ -288,6 +509,8 @@ func (h *Hub) publish(ctx context.Context, room int64, name string, message any)
 		}
 	}
 
+	// Reuse frames per identifier within this publish; the frame cache
+	// extends the reuse across publishes of identical payloads (ENGINE-40).
 	frames := make(map[string]*websocket.PreparedMessage)
 	for _, r := range recipients {
 		if allowed[r.room][r.client.token] != r.client.user.ID {
@@ -304,7 +527,11 @@ func (h *Hub) publish(ctx context.Context, room int64, name string, message any)
 			if err != nil {
 				return
 			}
-			frame = websocket.NewPreparedMessage(websocket.MessageText, data)
+			if h.fast {
+				frame = h.cache.lookupOrCreate(r.scope, r.identifier, data)
+			} else {
+				frame = websocket.NewPreparedMessage(websocket.MessageText, data)
+			}
 			frames[r.identifier] = frame
 		}
 		r.client.sendFrame(frame)

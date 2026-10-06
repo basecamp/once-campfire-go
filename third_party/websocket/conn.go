@@ -51,6 +51,20 @@ type Conn struct {
 	br             *bufio.Reader
 	bw             *bufio.Writer
 
+	// readSrc is the byte source for header-first reads. Server connections
+	// accepted via Accept read frames directly off this source (usually the
+	// raw net.Conn, with any handshake-buffered bytes replayed first) and
+	// hold no large buffered reader while idle. Client connections and
+	// tests keep the legacy br path (readSrc nil).
+	readSrc io.Reader
+
+	// Batch write scratch: reused across WritePreparedBatch calls so a wake
+	// coalescing up to batchMaxFrames frames performs no allocations.
+	batchHeader []byte
+	batchRsv1   []bool
+	batchData   [][]byte
+	batchBufs   net.Buffers
+
 	readTimeoutStop  atomic.Pointer[func() bool]
 	writeTimeoutStop atomic.Pointer[func() bool]
 
@@ -99,6 +113,10 @@ type connConfig struct {
 
 	br *bufio.Reader
 	bw *bufio.Writer
+
+	// readSrc enables the header-first read path (server connections).
+	// When set, br must be nil.
+	readSrc io.Reader
 }
 
 func newConn(cfg connConfig) *Conn {
@@ -111,6 +129,8 @@ func newConn(cfg connConfig) *Conn {
 
 		br: cfg.br,
 		bw: cfg.bw,
+
+		readSrc: cfg.readSrc,
 
 		closed:         make(chan struct{}),
 		activePings:    make(map[string]chan<- struct{}),

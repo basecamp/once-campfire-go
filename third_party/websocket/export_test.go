@@ -19,6 +19,15 @@ func (c *Conn) RecordBytesWritten() *int {
 
 func (c *Conn) RecordBytesRead() *int {
 	var bytesRead int
+	if c.readSrc != nil {
+		src := c.readSrc
+		c.readSrc = util.ReaderFunc(func(p []byte) (int, error) {
+			n, err := src.Read(p)
+			bytesRead += n
+			return n, err
+		})
+		return &bytesRead
+	}
 	c.br.Reset(util.ReaderFunc(func(p []byte) (int, error) {
 		n, err := c.rwc.Read(p)
 		bytesRead += n

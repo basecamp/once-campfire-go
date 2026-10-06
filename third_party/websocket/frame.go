@@ -49,13 +49,20 @@ type header struct {
 
 // readFrameHeader reads a header from the reader.
 // See https://tools.ietf.org/html/rfc6455#section-5.2.
-func readFrameHeader(r *bufio.Reader, readBuf []byte) (h header, err error) {
+//
+// Campfire ENGINE-40: operates on a plain io.Reader so server connections
+// can read headers directly off the socket (header-first, exact-payload
+// reads) without a per-connection buffered reader. ReadByte-style access is
+// replaced by a single 2-byte ReadFull, which is identical on a *bufio.Reader
+// and one syscall on a raw connection.
+func readFrameHeader(r io.Reader, readBuf []byte) (h header, err error) {
 	defer errd.Wrap(&err, "failed to read frame header")
 
-	b, err := r.ReadByte()
+	_, err = io.ReadFull(r, readBuf[:2])
 	if err != nil {
 		return header{}, err
 	}
+	b, b2 := readBuf[0], readBuf[1]
 
 	h.fin = b&(1<<7) != 0
 	h.rsv1 = b&(1<<6) != 0
@@ -64,14 +71,9 @@ func readFrameHeader(r *bufio.Reader, readBuf []byte) (h header, err error) {
 
 	h.opcode = opcode(b & 0xf)
 
-	b, err = r.ReadByte()
-	if err != nil {
-		return header{}, err
-	}
+	h.masked = b2&(1<<7) != 0
 
-	h.masked = b&(1<<7) != 0
-
-	payloadLength := b &^ (1 << 7)
+	payloadLength := b2 &^ (1 << 7)
 	switch {
 	case payloadLength < 126:
 		h.payloadLength = int64(payloadLength)
@@ -170,4 +172,57 @@ func writeFrameHeader(h header, w *bufio.Writer, buf []byte) (err error) {
 	}
 
 	return nil
+}
+
+// writeHeaderBytes encodes h into buf and returns the number of bytes
+// written. buf must hold at least 14 bytes (2 + 8 extended length + 4 mask).
+// Campfire ENGINE-40: used by WritePreparedBatch to assemble frame headers
+// for a single vectored write without a bufio.Writer.
+func writeHeaderBytes(h header, buf []byte) int {
+	n := 0
+	b := byte(h.opcode)
+	if h.fin {
+		b |= 1 << 7
+	}
+	if h.rsv1 {
+		b |= 1 << 6
+	}
+	if h.rsv2 {
+		b |= 1 << 5
+	}
+	if h.rsv3 {
+		b |= 1 << 4
+	}
+	buf[n] = b
+	n++
+
+	lengthByte := byte(0)
+	if h.masked {
+		lengthByte |= 1 << 7
+	}
+	switch {
+	case h.payloadLength > math.MaxUint16:
+		lengthByte |= 127
+	case h.payloadLength > 125:
+		lengthByte |= 126
+	default:
+		lengthByte |= byte(h.payloadLength)
+	}
+	buf[n] = lengthByte
+	n++
+
+	switch {
+	case h.payloadLength > math.MaxUint16:
+		binary.BigEndian.PutUint64(buf[n:], uint64(h.payloadLength))
+		n += 8
+	case h.payloadLength > 125:
+		binary.BigEndian.PutUint16(buf[n:], uint16(h.payloadLength))
+		n += 2
+	}
+
+	if h.masked {
+		binary.LittleEndian.PutUint32(buf[n:], h.maskKey)
+		n += 4
+	}
+	return n
 }

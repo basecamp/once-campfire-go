@@ -1,7 +1,27 @@
 Based on github.com/coder/websocket v1.8.15, retaining its MIT license.
 
-Campfire adds prepared.go and prepared_test.go. PreparedMessage shares immutable
-payloads and lazily compressed bytes across server connections negotiating
-permessage-deflate without context takeover. Other connection modes use Write.
-The existing frame writer still handles locking, cancellation and close state.
-No upstream Go source files were changed. Upstream tests run in bin/check.
+Campfire additions (all under ENGINE-40, behind the hub's
+`CAMPFIRE_CABLE_FAST` switch for the hub-level paths):
+
+- prepared.go: PreparedMessage shares immutable payloads and lazily
+  compressed bytes across server connections negotiating permessage-deflate
+  without context takeover. `WritePreparedBatch` coalesces up to
+  `BatchMaxFrames` (64) prepared frames into one vectored network write
+  (writev on TCP conns) with reused per-connection scratch; other connection
+  modes fall back to the ordinary writer.
+- Header-first server reads: `accept.go` discards the hijacked 4KiB read
+  buffer (replaying only the bytes net/http already buffered), so a freshly
+  accepted socket holds no read buffer at all. The first frame read lazily
+  allocates a 512-byte scratch (`read.go` `readScratchSize`), and payload
+  reads at or above that size bypass the scratch with one exact-length
+  syscall (bufio passes them straight through). `Conn.Read` reads a single
+  message into one exact-length buffer; fragmented and compressed messages
+  hand off to the unchanged streaming reader with identical wire behavior.
+- Frame-level bytes are identical to v1.8.15 for every case (verified by
+  byte-for-byte batch-vs-sequential tests and the whole upstream suite).
+
+Behavioral notes:
+- A 30s write deadline now bounds a whole batch (one wake) rather than each
+  frame; the hub's slow-client 256-frame queue and overflow disconnect are
+  unchanged.
+- Client connections and tests keep the upstream buffered path untouched.

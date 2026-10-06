@@ -207,3 +207,38 @@ active; Rust medians are tight and the rotating order absorbs shared load.
 
 Sidebar and room confirm the profile's database/sql-glue share; search/post were
 not wired (ENGINE-30/31 own them). Raw: `bench/results/engine18-20261006/`.
+
+## ENGINE-40 record (2026-10-06, cable fan-out fast path)
+
+Shipped behind `CAMPFIRE_CABLE_FAST` (default on; `off` = legacy one-write-per-frame
+path). Three pieces:
+
+- Read: server connections no longer retain net/http's hijacked 4KiB read buffer; a
+  freshly accepted socket holds nothing, the first frame lazily allocates a 512-byte
+  scratch (`readScratchSize`), and payload reads at or above that size bypass the
+  scratch with one exact-length syscall. `Conn.Read` now allocates exactly
+  `payloadLength` and reads it directly; fragmented/compressed messages hand off to
+  the unchanged streaming reader. Wire bytes identical (byte-for-byte
+  batch-vs-sequential test + full upstream suite).
+- Write: `WritePreparedBatch` coalesces up to 64 frames into one vectored write
+  (writev on TCP conns), reuse scratch, no per-batch allocation. Hub drains the
+  256-frame queue per wake into one batch; slow-client overflow policy unchanged.
+- Frame cache: per-(scope, identifier) exact-payload reuse with bounded FIFO
+  retention (8 payloads per key, 4096 entries / 8 MiB global), on top of prepared
+  message sharing; equality requires full payload bytes (no poisonable state).
+
+Micro-benchmarks (net.Pipe, GOMAXPROCS=4, both directions included):
+
+| Benchmark | Single | Batch(8) | Δ |
+|---|---:|---:|---:|
+| WritePrepared per message | 6,946 ns | 1,199 ns | ×5.8 |
+| server Read (exact vs Reader+ReadAll) | 1,308 ns | 1,065 ns | −19% |
+
+Alloc: exact read 128 B/op vs legacy 512 B/op (exact-size payload). Application-level
+fan-out A/B (bench/application --cable-clients 100/1000/10000 vs Rust) is still owed:
+the shared harness run is outside this task. Deliberate difference from legacy: the
+30 s write deadline now bounds the whole batch (one wake) rather than each frame.
+
+Differences vs legacy path verified byte-for-byte on a broadcast corpus (small,
+unicode, empty, compressed, repeated payloads) over a real socket: identical decoded
+payloads and identifiers with the fast path on and off.
