@@ -3,6 +3,7 @@ package views
 import (
 	"crypto/sha256"
 	"io"
+	"math/bits"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -96,7 +97,7 @@ func (p *RecordedPage) String() string { return string(p.AppendTo(make([]byte, 0
 // Writer is what templates render into: a page being recorded, or (with recording off) plain
 // text. Captures (a filter block's content) take the writes between BeginCapture and EndCapture.
 type Writer struct {
-	page      RecordedPage
+	page      *RecordedPage
 	recording bool
 	captures  [][]byte
 }
@@ -121,6 +122,41 @@ func (w *Writer) WriteString(s string) (int, error) {
 
 var writers = sync.Pool{New: func() any { return new(Writer) }}
 
+// Pages whose text buffers are at least 1 << minPooledClass bytes go back to a pool once their
+// response is written (ReleasePage), one pool per power-of-two capacity: a room page's text is
+// rendered thousands of times a second, and a fresh buffer each time is most of what the
+// garbage collector has to keep up with.
+const (
+	minPooledClass = 12
+	maxPooledClass = 21
+)
+
+var pagePools [maxPooledClass + 1]sync.Pool
+
+// pooledPage is a page from the pool whose text holds at least sizeHint bytes, or nil.
+func pooledPage(sizeHint int) *RecordedPage {
+	class := bits.Len(uint(sizeHint - 1))
+	if sizeHint < 1<<minPooledClass || class > maxPooledClass {
+		return nil
+	}
+	if page, ok := pagePools[class].Get().(*RecordedPage); ok {
+		return page
+	}
+	return &RecordedPage{Text: make([]byte, 0, 1<<class)}
+}
+
+// ReleasePage hands a page's buffers back for later renders. The page must not be used again: call
+// it once the page's bytes have been written.
+func ReleasePage(page *RecordedPage) {
+	class := bits.Len(uint(cap(page.Text))) - 1
+	if class < minPooledClass || class > maxPooledClass {
+		return
+	}
+	clear(page.Fragments)
+	page.Text, page.Fragments = page.Text[:0], page.Fragments[:0]
+	pagePools[class].Put(page)
+}
+
 // Render renders a page with its cached fragments recorded rather than copied, into a text
 // buffer of sizeHint bytes.
 func Render(sizeHint int, render func(qw *qt.Writer)) *RecordedPage {
@@ -135,16 +171,18 @@ func RenderString(sizeHint int, render func(qw *qt.Writer)) string {
 
 func renderPage(sizeHint int, recording bool, render func(qw *qt.Writer)) *RecordedPage {
 	w := writers.Get().(*Writer)
-	w.page = RecordedPage{Text: make([]byte, 0, sizeHint)}
+	if w.page = pooledPage(sizeHint); w.page == nil {
+		w.page = &RecordedPage{Text: make([]byte, 0, sizeHint)}
+	}
 	w.recording = recording
 	qw := qt.AcquireWriter(w)
 	render(qw)
 	qt.ReleaseWriter(qw)
 	page := w.page
-	w.page = RecordedPage{}
+	w.page = nil
 	w.captures = w.captures[:0]
 	writers.Put(w)
-	return &page
+	return page
 }
 
 func writerOf(qw *qt.Writer) *Writer {

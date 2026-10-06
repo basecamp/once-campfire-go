@@ -286,7 +286,11 @@ func (s *Server) writePage(w http.ResponseWriter, r *http.Request, status int, c
 	h := w.Header()
 	h.Set("Content-Type", contentType)
 	if preload {
-		h.Set("Link", appendPreloadLinks(h.Get("Link"), stylesheetPreloadLinks))
+		if link := h.Get("Link"); link != "" {
+			h.Set("Link", appendPreloadLinks(link, stylesheetPreloadLinks))
+		} else {
+			h.Set("Link", stylesheetPreloadHeader)
+		}
 	}
 	target := w
 	for {
@@ -303,6 +307,7 @@ func (s *Server) writePage(w http.ResponseWriter, r *http.Request, status int, c
 	}
 	w.WriteHeader(status)
 	w.Write([]byte(page.String()))
+	views.ReleasePage(page)
 }
 
 // stylesheetPreloadLinks are the `<href>; rel=preload; as=style; nopush` links for every stylesheet
@@ -321,6 +326,10 @@ var stylesheetPreloadLinks = func() []string {
 	}
 	return links
 }()
+
+// stylesheetPreloadHeader is the stylesheets' Link header, built once, for a response that has no
+// Link header of its own.
+var stylesheetPreloadHeader = appendPreloadLinks("", stylesheetPreloadLinks)
 
 // appendPreloadLinks is send_preload_links_header: a link that would push the header past 1,000
 // bytes is left out.

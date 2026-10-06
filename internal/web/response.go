@@ -52,6 +52,9 @@ func (w *responseBuffer) finish(r *http.Request) {
 		w.body = borrowBuffer()
 	}
 	defer releaseBuffer(w.body)
+	if w.page != nil {
+		defer views.ReleasePage(w.page)
+	}
 	if w.status == 0 {
 		w.status = 200
 	}
