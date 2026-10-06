@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 )
 
 var responseBuffers = sync.Pool{New: func() any { return new(bytes.Buffer) }}
@@ -32,6 +33,10 @@ type responseBuffer struct {
 	// is sized once from the pieces' total and written in one call; parts
 	// remains the legacy multi-part path.
 	encoded []byte
+	// encodedLength carries the body length when there are no bytes to write
+	// (a HEAD request on the piece path): assembly is skipped and only the
+	// Content-Length the GET response would have is reported.
+	encodedLength int
 }
 
 func (w *responseBuffer) WriteHeader(status int) {
@@ -71,7 +76,14 @@ func (w *responseBuffer) finish(r *http.Request) {
 		h.Set("Cache-Control", value)
 	}
 	if w.status == 200 {
-		modified, _ := http.ParseTime(h.Get("Last-Modified"))
+		// http.ParseTime allocates on every call, including the empty value
+		// most recorded responses carry, so parse only a present header.
+		modified := time.Time{}
+		if value := h.Get("Last-Modified"); value != "" {
+			if parsed, err := http.ParseTime(value); err == nil {
+				modified = parsed
+			}
+		}
 		if notModified(w.ResponseWriter, r, h.Get("ETag"), modified) {
 			return
 		}
@@ -79,14 +91,22 @@ func (w *responseBuffer) finish(r *http.Request) {
 	if h.Get("Content-Type") == "" && w.status != 204 && w.status != 304 {
 		h.Set("Content-Type", "text/html; charset=utf-8")
 	}
-	if len(w.encoded) > 0 && w.status != 204 && w.status != 304 {
-		h.Set("Content-Length", strconv.Itoa(len(w.encoded)))
-	} else if len(w.parts) > 0 && w.status != 204 && w.status != 304 {
-		size := 0
-		for _, part := range w.parts {
-			size += len(part)
+	// Content-Length is formatted into a stack buffer; the one string that
+	// reaches the header map is the allocation, not the integer conversion.
+	var length [20]byte
+	if w.status != 204 && w.status != 304 {
+		switch {
+		case len(w.encoded) > 0:
+			h.Set("Content-Length", string(strconv.AppendInt(length[:0], int64(len(w.encoded)), 10)))
+		case w.encodedLength > 0:
+			h.Set("Content-Length", string(strconv.AppendInt(length[:0], int64(w.encodedLength), 10)))
+		case len(w.parts) > 0:
+			size := 0
+			for _, part := range w.parts {
+				size += len(part)
+			}
+			h.Set("Content-Length", string(strconv.AppendInt(length[:0], int64(size), 10)))
 		}
-		h.Set("Content-Length", strconv.Itoa(size))
 	}
 	w.ResponseWriter.WriteHeader(w.status)
 	if r.Method != "HEAD" && w.status != 204 && w.status != 304 {

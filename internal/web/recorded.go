@@ -38,8 +38,11 @@ func messageListKey(messages []database.Message) string {
 // recordedMessageList returns the message-list payload for a recorded page,
 // caching it as a compressed piece on the piece path. The key is content
 // derived (message ids and updated-at stamps), so writes invalidate by key
-// change alone.
-func (s *Server) recordedMessageList(ctx context.Context, messages []database.Message) (recordedPayload, error) {
+// change alone. needMember asks for the gzip member because this request will
+// assemble a gzip body; when the cache cannot store anything and no gzip body
+// is being assembled, the compression would be discarded immediately, so it is
+// skipped.
+func (s *Server) recordedMessageList(ctx context.Context, messages []database.Message, needMember bool) (recordedPayload, error) {
 	if !s.recordedPieces {
 		entry, err := s.messageList(ctx, messages)
 		return recordedPayload{fragment: entry}, err
@@ -57,7 +60,11 @@ func (s *Server) recordedMessageList(ctx context.Context, messages []database.Me
 		body.WriteString(string(view.Fragment))
 	}
 	raw := []byte(body.String())
-	entry, _ := s.pieces.Put(key, raw, compressGzip(raw))
+	var member []byte
+	if needMember || s.pieces.Enabled() {
+		member = compressGzip(raw)
+	}
+	entry, _ := s.pieces.Put(key, raw, member)
 	return recordedPayload{piece: entry}, nil
 }
 

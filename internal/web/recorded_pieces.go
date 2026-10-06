@@ -10,12 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/basecamp/once-campfire-go/internal/httpcompat"
 	"github.com/basecamp/once-campfire-go/internal/piececache"
 )
 
@@ -61,6 +63,19 @@ type shellLayout struct {
 	segments [3][]byte
 	slots    [2]recordedSlot
 	count    int
+}
+
+// errShellUnavailable marks a shell that cannot be split into pieces; a
+// tombstone under the shell's layout key keeps every later request from
+// re-rendering it just to fail the split again.
+var errShellUnavailable = errors.New("recorded shell: not splittable into pieces")
+
+// recordedMessageMarker is the one-shot insertion marker the legacy recorded
+// render replaces with the message list. The piece path splits the shell at
+// markers instead, so a marker is only generated when a legacy render will
+// actually run.
+func recordedMessageMarker() template.HTML {
+	return template.HTML("\x00campfire-" + rand.Text() + "\x00")
 }
 
 // recordedShellKey identifies a shell by every page input the template reads,
@@ -134,14 +149,20 @@ func splitRecordedShell(rendered []byte, loadedMarker, messageMarker string) (sh
 
 // shellPieces returns the stable pieces for a page shell, rendering and storing
 // them on a miss. Pieces are keyed by content, so a miss is always a cold page,
-// never a stale one.
-func (s *Server) shellPieces(p page, name string) (recordedShell, error) {
+// never a stale one. needMember asks for gzip members because this request will
+// assemble a gzip body; when the cache cannot store anything and no gzip body
+// is being assembled, the members would be discarded immediately, so segment
+// compression is skipped.
+func (s *Server) shellPieces(p page, name string, needMember bool) (recordedShell, error) {
 	key, err := recordedShellKey(name, p)
 	if err != nil {
 		return recordedShell{}, err
 	}
-	if shell, ok := s.loadShell(key); ok {
+	switch shell, status := s.loadShell(key); status {
+	case shellHit:
 		return shell, nil
+	case shellUnavailable:
+		return recordedShell{}, errShellUnavailable
 	}
 	messageMarker := "\x00campfire-" + rand.Text() + "\x00"
 	loadedMarker := "campfire-loaded-" + rand.Text()
@@ -154,6 +175,9 @@ func (s *Server) shellPieces(p page, name string) (recordedShell, error) {
 	}
 	layout, err := splitRecordedShell(b.Bytes(), loadedMarker, messageMarker)
 	if err != nil {
+		// A tombstone prevents the next request from rendering the shell only
+		// to fail the same split; the caller serves the legacy render instead.
+		s.pieces.Put(recordedShellLayoutKey(key), []byte{0}, nil)
 		return recordedShell{}, err
 	}
 	var shell recordedShell
@@ -165,32 +189,52 @@ func (s *Server) shellPieces(p page, name string) (recordedShell, error) {
 	}
 	s.pieces.Put(recordedShellLayoutKey(key), []byte{byte(layout.count), shell.loadedMask}, nil)
 	for i := 0; i < layout.count; i++ {
-		entry, _ := s.pieces.Put(recordedShellSegmentKey(key, i), layout.segments[i], compressGzip(layout.segments[i]))
+		var member []byte
+		if needMember || s.pieces.Enabled() {
+			member = compressGzip(layout.segments[i])
+		}
+		entry, _ := s.pieces.Put(recordedShellSegmentKey(key, i), layout.segments[i], member)
 		shell.segments[i] = entry
 	}
 	return shell, nil
 }
 
+// shellStatus is loadShell's tri-state result.
+type shellStatus uint8
+
+const (
+	shellMiss shellStatus = iota
+	shellHit
+	shellUnavailable
+)
+
 // loadShell rebuilds a shell from the cache. A missing layout or segment is a
-// miss: the caller renders and re-stores.
-func (s *Server) loadShell(key string) (recordedShell, bool) {
+// miss: the caller renders and re-stores. A one-byte layout is the tombstone
+// left by a failed split.
+func (s *Server) loadShell(key string) (recordedShell, shellStatus) {
 	layout := s.pieces.Get(recordedShellLayoutKey(key))
-	if layout == nil || len(layout.Raw) != 2 {
-		return recordedShell{}, false
+	if layout == nil {
+		return recordedShell{}, shellMiss
+	}
+	if len(layout.Raw) == 1 {
+		return recordedShell{}, shellUnavailable
+	}
+	if len(layout.Raw) != 2 {
+		return recordedShell{}, shellMiss
 	}
 	count, mask := int(layout.Raw[0]), layout.Raw[1]
 	if count < 2 || count > 3 || mask>>(count-1) != 0 {
-		return recordedShell{}, false
+		return recordedShell{}, shellMiss
 	}
 	shell := recordedShell{count: count, loadedMask: mask}
 	for i := 0; i < count; i++ {
 		entry := s.pieces.Get(recordedShellSegmentKey(key, i))
 		if entry == nil {
-			return recordedShell{}, false
+			return recordedShell{}, shellMiss
 		}
 		shell.segments[i] = entry
 	}
-	return shell, true
+	return shell, shellHit
 }
 
 // writeRecordedPieces serves a recorded response from cached pieces. It returns
@@ -202,14 +246,21 @@ func (s *Server) loadShell(key string) (recordedShell, bool) {
 // gzip client gets one assembled multi-member buffer and a pre-set
 // Content-Encoding that front.Deflate passes through; an identity client gets
 // the pieces' raw bytes through the parts channel, which is already the wire
-// form and copies nothing.
+// form and copies nothing. HEAD requests skip assembly and report the length
+// the GET body would have.
 func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, status int, name string, p page, recorded recordedPayload) (bool, error) {
 	payload := recorded.piece
 	if payload == nil {
+		s.recordedShellFallbacks.Add(1)
 		return false, nil
 	}
-	shell, err := s.shellPieces(p, name)
+	gzipped := clientAcceptsGzip(r)
+	shell, err := s.shellPieces(p, name, gzipped)
 	if err != nil {
+		s.recordedShellFallbacks.Add(1)
+		if s.recordedShellWarned.CompareAndSwap(false, true) {
+			slog.Warn("recorded response served by the legacy renderer", "name", name, "error", err)
+		}
 		return false, nil
 	}
 
@@ -237,9 +288,9 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 	if notModified(w, r, h.Get("ETag"), time.Time{}) {
 		return true, nil
 	}
-
 	buffered := findResponseBuffer(w)
-	if clientAcceptsGzip(r) {
+
+	if gzipped {
 		var loaded *piececache.Entry
 		if shell.loadedMask != 0 {
 			raw := []byte(p.LoadedAt)
@@ -257,6 +308,22 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 			} else {
 				parts = append(parts, payload)
 			}
+		}
+		if r.Method == "HEAD" {
+			total := 0
+			for _, part := range parts {
+				total += len(part.Member)
+			}
+			h.Set("Content-Encoding", "gzip")
+			addVaryAcceptEncoding(h)
+			w.WriteHeader(status)
+			if sw, ok := w.(*sessionWriter); ok && sw.failed {
+				return true, nil
+			}
+			if buffered != nil {
+				buffered.encodedLength = total
+			}
+			return true, nil
 		}
 		var dst []byte
 		if buffered != nil {
@@ -302,6 +369,16 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 	if sw, ok := w.(*sessionWriter); ok && sw.failed {
 		return true, nil
 	}
+	if r.Method == "HEAD" {
+		if buffered != nil {
+			total := 0
+			for _, raw := range raws {
+				total += len(raw)
+			}
+			buffered.encodedLength = total
+		}
+		return true, nil
+	}
 	if buffered == nil {
 		for _, raw := range raws {
 			if _, err := w.Write(raw); err != nil {
@@ -335,11 +412,13 @@ func weakETag(digest [32]byte) string {
 }
 
 // addVaryAcceptEncoding mirrors front.addVary: append the token unless it (or a
-// wildcard) is already present.
+// wildcard) is already present in any Vary value.
 func addVaryAcceptEncoding(h http.Header) {
-	for _, value := range strings.Split(h.Get("Vary"), ",") {
-		if strings.EqualFold(strings.TrimSpace(value), "Accept-Encoding") || strings.TrimSpace(value) == "*" {
-			return
+	for _, line := range h.Values("Vary") {
+		for _, value := range strings.Split(line, ",") {
+			if strings.EqualFold(strings.TrimSpace(value), "Accept-Encoding") || strings.TrimSpace(value) == "*" {
+				return
+			}
 		}
 	}
 	if old := h.Get("Vary"); old != "" {
@@ -350,48 +429,14 @@ func addVaryAcceptEncoding(h http.Header) {
 }
 
 // clientAcceptsGzip reports whether this request may receive a pre-encoded gzip
-// body. It is a conservative subset of front.encoding's selection: pre-encoding
-// is allowed only when gzip is explicitly acceptable at full weight and no
-// identity token with a positive q appears. A false negative only means the
-// response goes out as identity bytes and front.Deflate compresses it; a false
-// positive would let a pre-encoded body through front.Deflate's
-// Content-Encoding pass-through for a client that declined gzip.
+// body. It defers to httpcompat.Encoding, the same selector front.Deflate uses
+// for its own negotiation, so a pre-encoded body is only sent when the
+// middleware would itself have chosen gzip (front.Deflate passes a pre-set
+// Content-Encoding through untouched, including its 406 policy). When front is
+// not in the chain, at worst the response goes out as identity bytes and the
+// caller compresses them.
 func clientAcceptsGzip(r *http.Request) bool {
-	header := r.Header.Get("Accept-Encoding")
-	if header == "" {
-		return false
-	}
-	gzip := false
-	for tokens := 0; tokens < 16; tokens++ {
-		part, rest, _ := strings.Cut(header, ",")
-		header = rest
-		name, params, _ := strings.Cut(part, ";")
-		name = strings.ToLower(strings.TrimSpace(name))
-		q := 1.0
-		params = strings.TrimSpace(params)
-		if strings.HasPrefix(params, "q=") {
-			value := strings.TrimPrefix(params, "q=")
-			end := 0
-			for end < len(value) && (value[end] >= '0' && value[end] <= '9' || value[end] == '.') {
-				end++
-			}
-			if end > 0 {
-				q, _ = strconv.ParseFloat(value[:end], 64)
-			}
-		}
-		switch name {
-		case "gzip":
-			gzip = gzip || q >= 1
-		case "identity":
-			if q > 0 {
-				return false
-			}
-		}
-		if header == "" {
-			break
-		}
-	}
-	return gzip
+	return httpcompat.Encoding(r.Header.Get("Accept-Encoding")) == "gzip"
 }
 
 // recordedCompressor is one pooled gzip writer plus the buffer it fills. The

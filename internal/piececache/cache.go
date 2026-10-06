@@ -94,6 +94,12 @@ func New(limit int) *Cache {
 	return &Cache{entries: make(map[string]*list.Element), limit: limit}
 }
 
+// Enabled reports whether the cache can store anything at all. Put still
+// applies the per-entry limit/4 cap when this is true; it only distinguishes
+// storage that is disabled outright, so a caller can skip work (compression,
+// key building) whose result could never be retained.
+func (c *Cache) Enabled() bool { return c.limit/4 > 0 }
+
 // Get returns the entry stored under key, or nil on a miss. A hit moves the
 // entry to the front of the LRU and returns the immutable view without
 // copying.
@@ -154,13 +160,15 @@ func (c *Cache) Put(key string, raw, member []byte) (*Entry, bool) {
 	return entry, true
 }
 
-// LimitFromEnv returns the cache byte limit: DefaultLimit when
-// CAMPFIRE_FRAGMENT_CACHE_MB is unset, otherwise that many mebibytes. The key
-// is the one the legacy fragment cache reads (internal/web/server.go), so one
-// deployment knob sizes both caches independently; values outside [0, 1<<20]
-// or non-numeric are an error, exactly as the legacy parser treats them. A
-// caller must treat the error as startup-fatal, mirroring web.New, rather than
-// serving with an unintended cache budget.
+// LimitFromEnv returns the cache byte limit for the engine's piece cache:
+// DefaultLimit when CAMPFIRE_FRAGMENT_CACHE_MB is unset, otherwise that many
+// mebibytes. The key is shared with the legacy fragment cache
+// (internal/web/server.go), so one deployment knob sizes both when the engine
+// routes land. The recorded-response piece cache added in this tree is a
+// different cache and reads its own CAMPFIRE_RECORDED_CACHE_MB; this function
+// does not size it. Values outside [0, 1<<20] or non-numeric are an error,
+// exactly as the legacy parser treats them. A caller must treat the error as
+// startup-fatal rather than serving with an unintended cache budget.
 func LimitFromEnv() (int, error) {
 	megabytes := DefaultLimit >> 20
 	if raw, ok := os.LookupEnv("CAMPFIRE_FRAGMENT_CACHE_MB"); ok {

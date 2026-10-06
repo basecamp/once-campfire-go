@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -41,22 +40,26 @@ type Server struct {
 	pieces         *piececache.Cache
 	recordedPieces bool
 	// recordedAssemblies counts gzip piece-path assemblies so tests can pin
-	// that a 304 never assembles a body.
-	recordedAssemblies atomic.Int64
-	Webhooks           *integrations.WebhookClient
-	Jobs               *jobs.Runner
-	Push               *integrations.PushSender
-	Unfurler           *integrations.Unfurler
-	Storage            *storage.Store
-	Cable              *cable.Hub
-	DB                 *database.DB
-	Secrets            *rails.Secrets
-	Secure             bool
-	mux                *router
-	templates          *template.Template
-	attemptsMu         sync.Mutex
-	attempts           map[string]attempt
-	dummyHash          []byte
+	// that a 304 never assembles a body. recordedShellFallbacks counts
+	// requests that fell back to the legacy render because the shell could not
+	// be split into pieces; recordedShellWarned fires the one-time warning.
+	recordedAssemblies     atomic.Int64
+	recordedShellFallbacks atomic.Int64
+	recordedShellWarned    atomic.Bool
+	Webhooks               *integrations.WebhookClient
+	Jobs                   *jobs.Runner
+	Push                   *integrations.PushSender
+	Unfurler               *integrations.Unfurler
+	Storage                *storage.Store
+	Cable                  *cable.Hub
+	DB                     *database.DB
+	Secrets                *rails.Secrets
+	Secure                 bool
+	mux                    *router
+	templates              *template.Template
+	attemptsMu             sync.Mutex
+	attempts               map[string]attempt
+	dummyHash              []byte
 }
 type attempt struct {
 	Count int
@@ -156,9 +159,21 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 			return nil, fmt.Errorf("invalid CAMPFIRE_RECORDED_CACHE_MB %q", raw)
 		}
 	}
-	// CAMPFIRE_RECORDED_PIECES=off is the A/B and rollback switch for the piece
-	// path; any other value (including unset) keeps it on.
-	recordedPieces := !strings.EqualFold(strings.TrimSpace(os.Getenv("CAMPFIRE_RECORDED_PIECES")), "off")
+	// CAMPFIRE_RECORDED_PIECES is the A/B and rollback switch for the piece
+	// path; on/true (or unset) keeps it on, off/false/0 disables it. An
+	// unrecognised value warns and keeps the default so a typo cannot silently
+	// change serving.
+	recordedPieces := true
+	if raw, ok := os.LookupEnv("CAMPFIRE_RECORDED_PIECES"); ok {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "", "on", "true", "1":
+		case "off", "false", "0":
+			recordedPieces = false
+		default:
+			slog.Warn("invalid CAMPFIRE_RECORDED_PIECES; keeping pieces on", "value", raw)
+		}
+	}
+	slog.Info("recorded response pieces", "enabled", recordedPieces, "cache_mib", recordedMB)
 	s := &Server{fragments: newFragmentCache(cacheMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
@@ -412,13 +427,16 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 			raw[i] = m.Message
 		}
 		if name == "room" || name == "messages" || name == "search" {
-			payload, listErr := s.recordedMessageList(r.Context(), raw)
+			needMember := s.recordedPieces && clientAcceptsGzip(r)
+			payload, listErr := s.recordedMessageList(r.Context(), raw, needMember)
 			if listErr != nil {
 				s.fail(w, listErr)
 				return
 			}
 			recorded = &payload
-			p.MessagesHTML = template.HTML("\x00campfire-" + rand.Text() + "\x00")
+			if !s.recordedPieces {
+				p.MessagesHTML = recordedMessageMarker()
+			}
 		} else {
 			p.Messages, err = s.messageViews(r.Context(), raw)
 			if err == nil && name == "edit-message" {
@@ -449,6 +467,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 		// template shape). The piece payload carries no legacy fragment, so
 		// render the list through the legacy path for this request; the next
 		// request repeats the attempt and falls back the same way.
+		p.MessagesHTML = recordedMessageMarker()
 		fragment, listErr := s.messageList(r.Context(), raw)
 		if listErr != nil {
 			s.fail(w, listErr)

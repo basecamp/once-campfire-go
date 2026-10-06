@@ -2,7 +2,9 @@ package web
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
+	"fmt"
 	"html/template"
 	"io"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/piececache"
 )
 
@@ -135,4 +138,90 @@ func BenchmarkRecordedResponse(b *testing.B) {
 			buffered.finish(gzipRequest)
 		}
 	})
+}
+
+// benchSentence builds deterministic, varied HTML text so the compressed
+// payload has production-like entropy rather than one repeated fragment.
+func benchSentence(seed int) string {
+	words := []string{"campfire", "message", "thread", "weekly", "update", "review", "deploy", "server", "latency", "cache", "render", "template", "attachment", "meeting", "notes", "question", "answer", "timeline", "sidebar", "socket"}
+	var b strings.Builder
+	for i := 0; i < 24; i++ {
+		b.WriteString(words[(seed+i*7)%len(words)])
+		if i%6 == 5 {
+			b.WriteString(". ")
+		} else {
+			b.WriteByte(' ')
+		}
+	}
+	return b.String()
+}
+
+// BenchmarkRecordedHitPath runs the integrated per-request hit path:
+// recordedMessageList (content key + payload lookup) -> writeRecordedPieces
+// (shell lookup, validator, gzip assembly or identity parts) ->
+// responseBuffer.finish. The payload is rendered once from 40 real messages
+// through the template stack, so its size and entropy are production-like.
+func BenchmarkRecordedHitPath(b *testing.B) {
+	b.Setenv("CAMPFIRE_RECORDED_PIECES", "on")
+	app, _, _, user := testApp(b)
+	ctx := context.Background()
+	rooms, err := app.DB.Rooms(ctx, user.ID)
+	if err != nil {
+		b.Fatal(err)
+	}
+	room := rooms[0]
+	for i := 0; i < 40; i++ {
+		body := fmt.Sprintf("<p>Message %d: <strong>%s</strong></p><ul><li>%s</li><li>%s</li></ul>", i, benchSentence(i), benchSentence(i+3), benchSentence(i+11))
+		if _, err := app.DB.CreateMessage(ctx, user.ID, room.ID, fmt.Sprintf("hit-bench-%d", i), body, benchSentence(i)); err != nil {
+			b.Fatal(err)
+		}
+	}
+	messages, err := app.DB.MessagePageReferences(ctx, room.ID, 0, "around")
+	if err != nil {
+		b.Fatal(err)
+	}
+	if len(messages) != 40 {
+		b.Fatalf("page has %d messages, want 40", len(messages))
+	}
+	raw := make([]database.Message, len(messages))
+	copy(raw, messages)
+	p := page{Room: room, User: user, Screen: "room", Chat: true, Title: room.Name, LoadedAt: "1767225845000"}
+	payload, err := app.recordedMessageList(ctx, raw, true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if payload.piece == nil {
+		b.Fatal("piece path disabled")
+	}
+	shell, err := app.shellPieces(p, "room", true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	pageBytes := len(payload.piece.Raw) + len(p.LoadedAt)
+	for i := 0; i < shell.count; i++ {
+		pageBytes += len(shell.segments[i].Raw)
+	}
+	writer := &benchResponseWriter{header: http.Header{}}
+	request := httptest.NewRequest("GET", "/rooms/1", nil)
+	gzipRequest := httptest.NewRequest("GET", "/rooms/1", nil)
+	gzipRequest.Header.Set("Accept-Encoding", "gzip")
+	run := func(b *testing.B, req *http.Request, needMember bool) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.ReportMetric(float64(pageBytes), "body_B")
+		for i := 0; i < b.N; i++ {
+			clear(writer.header)
+			payload, err := app.recordedMessageList(ctx, raw, needMember)
+			if err != nil {
+				b.Fatal(err)
+			}
+			buffered := &responseBuffer{ResponseWriter: writer}
+			if _, err := app.writeRecordedPieces(buffered, req, 200, "room", p, payload); err != nil {
+				b.Fatal(err)
+			}
+			buffered.finish(req)
+		}
+	}
+	b.Run("gzip", func(b *testing.B) { run(b, gzipRequest, true) })
+	b.Run("identity", func(b *testing.B) { run(b, request, false) })
 }

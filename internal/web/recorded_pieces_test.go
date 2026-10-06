@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -69,11 +71,14 @@ func testRecordedPair(t *testing.T) (*Server, *Server, *httptest.Server, *httpte
 }
 
 type recordedExchange struct {
-	status   int
-	etag     string
-	encoding string
-	vary     string
-	body     []byte
+	status        int
+	etag          string
+	encoding      string
+	vary          string
+	contentType   string
+	contentLength string
+	cacheControl  string
+	body          []byte
 }
 
 func recordedClient() *http.Client {
@@ -95,9 +100,22 @@ func recordedGet(t *testing.T, client *http.Client, server *httptest.Server, pat
 	return exchange
 }
 
+func recordedHead(t *testing.T, client *http.Client, server *httptest.Server, path, accept string, cookie *http.Cookie) recordedExchange {
+	t.Helper()
+	exchange, err := recordedFetchMethod(client, server, "HEAD", path, accept, "", cookie)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return exchange
+}
+
 // recordedFetch is the goroutine-safe form of recordedGet.
 func recordedFetch(client *http.Client, server *httptest.Server, path, accept, ifNoneMatch string, cookie *http.Cookie) (recordedExchange, error) {
-	request, err := http.NewRequest("GET", server.URL+path, nil)
+	return recordedFetchMethod(client, server, "GET", path, accept, ifNoneMatch, cookie)
+}
+
+func recordedFetchMethod(client *http.Client, server *httptest.Server, method, path, accept, ifNoneMatch string, cookie *http.Cookie) (recordedExchange, error) {
+	request, err := http.NewRequest(method, server.URL+path, nil)
 	if err != nil {
 		return recordedExchange{}, err
 	}
@@ -122,7 +140,16 @@ func recordedFetch(client *http.Client, server *httptest.Server, path, accept, i
 	if err != nil {
 		return recordedExchange{}, err
 	}
-	return recordedExchange{status: response.StatusCode, etag: response.Header.Get("ETag"), encoding: response.Header.Get("Content-Encoding"), vary: response.Header.Get("Vary"), body: body}, nil
+	return recordedExchange{
+		status:        response.StatusCode,
+		etag:          response.Header.Get("ETag"),
+		encoding:      response.Header.Get("Content-Encoding"),
+		vary:          response.Header.Get("Vary"),
+		contentType:   response.Header.Get("Content-Type"),
+		contentLength: response.Header.Get("Content-Length"),
+		cacheControl:  response.Header.Get("Cache-Control"),
+		body:          body,
+	}, nil
 }
 
 func recordedWrite(t *testing.T, client *http.Client, server *httptest.Server, method, path string, form url.Values, cookie *http.Cookie) int {
@@ -199,6 +226,23 @@ func compareRecorded(t *testing.T, label string, pieces, legacy recordedExchange
 	}
 	if !strings.Contains(strings.ToLower(pieces.vary), "accept-encoding") {
 		t.Fatalf("%s: Vary %q lacks Accept-Encoding", label, pieces.vary)
+	}
+	if pieces.contentType != legacy.contentType {
+		t.Fatalf("%s: Content-Type %q vs %q", label, pieces.contentType, legacy.contentType)
+	}
+	if pieces.cacheControl != legacy.cacheControl {
+		t.Fatalf("%s: Cache-Control %q vs %q", label, pieces.cacheControl, legacy.cacheControl)
+	}
+	// A declared Content-Length must describe the bytes actually received on
+	// that side; the multi-member gzip body differs in length from the legacy
+	// single member, so cross-side comparison is only meaningful for identity.
+	for name, x := range map[string]recordedExchange{"pieces": pieces, "legacy": legacy} {
+		if x.contentLength != "" && x.contentLength != strconv.Itoa(len(x.body)) {
+			t.Fatalf("%s: %s Content-Length %s, body %d bytes", label, name, x.contentLength, len(x.body))
+		}
+	}
+	if pieces.encoding == "" && pieces.contentLength != legacy.contentLength {
+		t.Fatalf("%s: identity Content-Length %q vs %q", label, pieces.contentLength, legacy.contentLength)
 	}
 	pieceBody := decodeRecorded(t, pieces)
 	legacyBody := decodeRecorded(t, legacy)
@@ -309,6 +353,155 @@ func TestRecordedPiecesConditionalSkipsAssembly(t *testing.T) {
 	}
 }
 
+func TestRecordedShellKeySeparatesMessageCount(t *testing.T) {
+	base := page{Room: database.Room{ID: 7, Name: "Room & <name>", Type: "Rooms::Open"}, Screen: "search", Query: "q"}
+	none, err := recordedShellKey("search", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	one := base
+	one.Messages = make([]messageView, 1)
+	oneKey, err := recordedShellKey("search", one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two := base
+	two.Messages = make([]messageView, 2)
+	twoKey, err := recordedShellKey("search", two)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none == oneKey || none == twoKey || oneKey == twoKey {
+		t.Fatalf("message count does not separate shell keys: %q %q %q", none, oneKey, twoKey)
+	}
+	// The route name separates shells too.
+	if other, err := recordedShellKey("room", base); err != nil || other == none {
+		t.Fatalf("route name does not separate shell keys: %q %v", other, err)
+	}
+}
+
+// TestRecordedPiecesColdRace serves a fresh, uncached page from many goroutines
+// at once and requires every decoded body to equal the legacy oracle. Two
+// concurrent first renders must store identical pieces (the split points are
+// marker-independent), so no request can observe a half-stored shell or a
+// payload mixed from another render.
+func TestRecordedPiecesColdRace(t *testing.T) {
+	on, _, onServer, offServer, cookie, user := testRecordedPair(t)
+	ctx := context.Background()
+	rooms, err := on.DB.Rooms(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 6; i++ {
+		if _, err := on.DB.CreateMessage(ctx, user.ID, rooms[0].ID, fmt.Sprintf("race-%d", i), fmt.Sprintf("<p>race message %d</p>", i), fmt.Sprintf("race message %d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := fmt.Sprintf("/rooms/%d", rooms[0].ID)
+	client := recordedClient()
+	defer client.CloseIdleConnections()
+	oracle := recordedGet(t, client, offServer, path, "gzip", "", cookie)
+	if oracle.status != 200 {
+		t.Fatalf("oracle status %d", oracle.status)
+	}
+	want := decodeRecorded(t, oracle)
+	// No warm-up: the piece-path server has never rendered this page.
+	const workers = 16
+	results := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			response, err := recordedFetch(client, onServer, path, "gzip", "", cookie)
+			if err != nil {
+				results <- err
+				return
+			}
+			decoded, err := decodeRecordedErr(response)
+			if err != nil {
+				results <- err
+				return
+			}
+			if response.status != 200 {
+				results <- fmt.Errorf("status %d", response.status)
+				return
+			}
+			if !bytes.Equal(decoded, want) {
+				results <- fmt.Errorf("cold-race body differs (%d vs %d bytes)", len(decoded), len(want))
+				return
+			}
+			results <- nil
+		}()
+	}
+	for i := 0; i < workers; i++ {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestRecordedPiecesPayloadReplacement races concurrent first renders of the
+// same message list. Every caller must receive the same, complete payload
+// bytes even though they contend to publish the entry under one key.
+func TestRecordedPiecesPayloadReplacement(t *testing.T) {
+	app, _, _, user := testApp(t)
+	ctx := context.Background()
+	rooms, err := app.DB.Rooms(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 8; i++ {
+		if _, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, fmt.Sprintf("payload-race-%d", i), fmt.Sprintf("<p>payload race %d</p>", i), fmt.Sprintf("payload race %d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	messages, err := app.DB.MessagePageReferences(ctx, rooms[0].ID, 0, "around")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workers = 12
+	type result struct {
+		raw []byte
+		err error
+	}
+	results := make(chan result, workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			payload, err := app.recordedMessageList(ctx, messages, true)
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			if payload.piece == nil {
+				results <- result{err: fmt.Errorf("no piece")}
+				return
+			}
+			results <- result{raw: payload.piece.Raw}
+		}()
+	}
+	var first []byte
+	for i := 0; i < workers; i++ {
+		got := <-results
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if !bytes.Contains(got.raw, []byte("payload race 7")) {
+			t.Fatalf("payload %d bytes lacks the last message", len(got.raw))
+		}
+		if first == nil {
+			first = got.raw
+			continue
+		}
+		if !bytes.Equal(first, got.raw) {
+			t.Fatalf("concurrent payloads differ (%d vs %d bytes)", len(first), len(got.raw))
+		}
+	}
+	// The published entry is the same immutable payload.
+	key := messageListKey(messages)
+	stored := app.pieces.Get(key)
+	if stored == nil || !bytes.Equal(stored.Raw, first) {
+		t.Fatal("cache entry does not match the returned payload")
+	}
+}
+
 func TestRecordedPiecesInvalidateOnWrites(t *testing.T) {
 	app, server, cookie, user := testApp(t)
 	ctx := context.Background()
@@ -356,6 +549,12 @@ func TestRecordedPiecesInvalidateOnWrites(t *testing.T) {
 	if !bytes.Contains(edited, []byte("edited marker")) || bytes.Contains(edited, []byte("invalidation marker")) {
 		t.Fatal("room did not reflect the edit")
 	}
+	// The edit also changes search: q=invalidation no longer matches the
+	// message, so a stale cached result must not survive.
+	search = recordedGet(t, client, server, searchPath, "gzip", "", cookie)
+	if search.status != 200 || bytes.Contains(decodeRecorded(t, search), []byte("invalidation marker")) {
+		t.Fatalf("search still serves the pre-edit content: %d", search.status)
+	}
 
 	// A room rename feeds the shell key.
 	if err := app.DB.UpdateRoom(ctx, room.ID, "Rooms::Open", "Renamed & Room", nil); err != nil {
@@ -371,12 +570,19 @@ func TestRecordedPiecesInvalidateOnWrites(t *testing.T) {
 		t.Fatalf("delete status %d", status)
 	}
 	roomResponse = recordedGet(t, client, server, roomPath, "gzip", "", cookie)
-	if bytes.Contains(decodeRecorded(t, roomResponse), []byte("edited marker")) {
+	deleted := decodeRecorded(t, roomResponse)
+	if bytes.Contains(deleted, []byte("edited marker")) || bytes.Contains(deleted, []byte("invalidation marker")) {
 		t.Fatal("room still serves the deleted message")
 	}
 	search = recordedGet(t, client, server, searchPath, "gzip", "", cookie)
-	if bytes.Contains(decodeRecorded(t, search), []byte("edited marker")) {
+	stale := decodeRecorded(t, search)
+	if bytes.Contains(stale, []byte("edited marker")) || bytes.Contains(stale, []byte("invalidation marker")) {
 		t.Fatal("search still serves the deleted message")
+	}
+	// A search for the edited text must also drop the message after deletion.
+	search = recordedGet(t, client, server, "/searches?q=edited", "gzip", "", cookie)
+	if bytes.Contains(decodeRecorded(t, search), []byte("edited marker")) {
+		t.Fatal("search for the edited text still serves the deleted message")
 	}
 
 	// Membership changes feed the search page's message list (Search joins
@@ -456,6 +662,129 @@ func TestRecordedPiecesConcurrent(t *testing.T) {
 	for i := 0; i < 24; i++ {
 		if err := <-results; err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// TestRecordedPiecesLoadedAtAdvance pins the room route's ETag contract when
+// the clock moves but every content key stays fixed: the body changes (the
+// loadedAt timestamp is a per-request piece) while the validator stays stable,
+// so a conditional request still receives 304.
+func TestRecordedPiecesLoadedAtAdvance(t *testing.T) {
+	on, _, onServer, _, cookie, user := testRecordedPair(t)
+	ctx := context.Background()
+	rooms, err := on.DB.Rooms(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := on.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "loaded-at", "<p>loaded at</p>", "loaded at"); err != nil {
+		t.Fatal(err)
+	}
+	var clock atomic.Int64
+	clock.Store(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).UnixMilli())
+	on.DB.Now = func() time.Time { return time.UnixMilli(clock.Load()) }
+	client := recordedClient()
+	defer client.CloseIdleConnections()
+	path := fmt.Sprintf("/rooms/%d", rooms[0].ID)
+	first := recordedGet(t, client, onServer, path, "gzip", "", cookie)
+	if first.status != 200 || first.etag == "" {
+		t.Fatalf("first response: %d etag=%q", first.status, first.etag)
+	}
+	clock.Add(1000)
+	second := recordedGet(t, client, onServer, path, "gzip", "", cookie)
+	if second.status != 200 {
+		t.Fatalf("second response: %d", second.status)
+	}
+	if bytes.Equal(decodeRecorded(t, first), decodeRecorded(t, second)) {
+		t.Fatal("advancing loadedAt did not change the body")
+	}
+	if second.etag != first.etag {
+		t.Fatalf("room ETag moved with loadedAt: %q vs %q", second.etag, first.etag)
+	}
+	conditional := recordedGet(t, client, onServer, path, "gzip", first.etag, cookie)
+	if conditional.status != http.StatusNotModified || len(conditional.body) != 0 {
+		t.Fatalf("conditional after loadedAt advance: %d with %d bytes", conditional.status, len(conditional.body))
+	}
+}
+
+// TestRecordedPiecesHeadSkipsAssembly pins the HEAD contract: no body, the
+// Content-Length the GET response would carry, and no assembly work.
+func TestRecordedPiecesHeadSkipsAssembly(t *testing.T) {
+	t.Setenv("CAMPFIRE_FROZEN_TIME", "2026-01-02T03:04:05Z")
+	app, server, cookie, user := testApp(t)
+	ctx := context.Background()
+	rooms, err := app.DB.Rooms(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, fmt.Sprintf("head-%d", i), fmt.Sprintf("<p>head %d</p>", i), fmt.Sprintf("head %d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client := recordedClient()
+	defer client.CloseIdleConnections()
+	path := fmt.Sprintf("/rooms/%d", rooms[0].ID)
+	gzipGet := recordedGet(t, client, server, path, "gzip", "", cookie)
+	if gzipGet.encoding != "gzip" || gzipGet.contentLength == "" {
+		t.Fatalf("gzip GET: encoding=%q length=%q", gzipGet.encoding, gzipGet.contentLength)
+	}
+	assemblies := app.recordedAssemblies.Load()
+	gzipHead := recordedHead(t, client, server, path, "gzip", cookie)
+	if gzipHead.status != 200 || len(gzipHead.body) != 0 {
+		t.Fatalf("gzip HEAD: %d with %d bytes", gzipHead.status, len(gzipHead.body))
+	}
+	if gzipHead.encoding != "gzip" || gzipHead.contentLength != gzipGet.contentLength {
+		t.Fatalf("gzip HEAD: encoding=%q length=%q, GET length=%q", gzipHead.encoding, gzipHead.contentLength, gzipGet.contentLength)
+	}
+	if got := app.recordedAssemblies.Load(); got != assemblies {
+		t.Fatalf("HEAD assembled %d time(s)", got-assemblies)
+	}
+	identityGet := recordedGet(t, client, server, path, "identity", "", cookie)
+	identityHead := recordedHead(t, client, server, path, "identity", cookie)
+	if identityHead.status != 200 || len(identityHead.body) != 0 {
+		t.Fatalf("identity HEAD: %d with %d bytes", identityHead.status, len(identityHead.body))
+	}
+	if identityHead.contentLength != identityGet.contentLength || identityHead.encoding != "" {
+		t.Fatalf("identity HEAD: length=%q encoding=%q, GET length=%q", identityHead.contentLength, identityHead.encoding, identityGet.contentLength)
+	}
+}
+
+// TestClientAcceptsGzipParityWithFront drives front.Deflate with an identity
+// handler so the middleware's own negotiation decides, then asserts that
+// whenever the web layer would pre-encode, front selected gzip for the same
+// header. A duplicate-token header is the case where a naive parser and the
+// middleware's ranking can disagree.
+func TestClientAcceptsGzipParityWithFront(t *testing.T) {
+	server := httptest.NewServer(front.Deflate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		io.WriteString(w, "probe")
+	})))
+	defer server.Close()
+	client := recordedClient()
+	defer client.CloseIdleConnections()
+	headers := []string{
+		"", "gzip", "gzip;q=0.5", "gzip, identity", "gzip;q=0", "*", "identity", "br",
+		"gzip;q=1, identity;q=1", "gzip;q=2", "gzip;q=0.999",
+		"gzip;q=0, gzip;q=1", "gzip;q=1, gzip;q=0", "GZIP", "gzip ; q=1",
+	}
+	for _, header := range headers {
+		request, err := http.NewRequest("GET", server.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if header != "" {
+			request.Header.Set("Accept-Encoding", header)
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+		selectedGzip := response.Header.Get("Content-Encoding") == "gzip"
+		if clientAcceptsGzip(request) && !selectedGzip {
+			t.Fatalf("Accept-Encoding %q: web would pre-encode but front chose identity/406 (status %d)", header, response.StatusCode)
 		}
 	}
 }
@@ -560,13 +889,24 @@ func TestClientAcceptsGzip(t *testing.T) {
 		{"gzip, deflate, br, zstd", true},
 		{"gzip;q=1", true},
 		{"gzip;q=0", false},
-		{"gzip;q=0.5", false},
-		{"gzip, identity", false},
+		{"gzip;q=0.5", true},
+		{"gzip, identity", true},
 		{"gzip, identity;q=0", true},
 		{"identity", false},
-		{"*", false},
+		{"*", true},
 		{"br", false},
-		{"gzip;q=0, gzip;q=1", true},
+		{"gzip;q=2", true},
+		{"gzip;q=0.999", true},
+		{"gzip;q=0.5, identity;q=1", false},
+		{"identity;q=0, identity", false},
+		// Duplicate tokens: front's selector rejects a name on any q=0
+		// occurrence, so these must agree with it exactly.
+		{"gzip;q=0, gzip;q=1", false},
+		{"gzip, gzip;q=0", false},
+		{"gzip;q=0, gzip", false},
+		{"gzip ; q=1", true},
+		// The selector is case-sensitive, as the middleware always was.
+		{"GZIP", false},
 	}
 	for _, c := range cases {
 		request := httptest.NewRequest("GET", "/", nil)
