@@ -172,3 +172,21 @@ Interpretation: ENGINE-16's recorded-response pieces moved the flagship rows
 post_message are outside the recorded-response path by design (fragment path
 and write path respectively) and are unmoved; messages_page gains little.
 Those three plus the remaining room/search gap are the next targets.
+
+## Official harness checkpoint (2026-10-06, engine image pre-ENGINE-18)
+
+Official Elixir harness, production Docker images, HTTP suite, 2 rotating reps,
+c=16, seed `64ecbb80`, CPUs 8-11/12-15. Rust reproduces the published table
+(36,378 vs 36,260 room), validating the run.
+
+| Route c=16 | Rails | Go (engine) | Rust | Gap to Rust |
+|---|---:|---:|---:|---:|
+| room_show | 224 | 34,546 | 36,378 | 1.05× |
+| search | 380 | 26,368 | 34,620 | 1.31× |
+| messages_page | 395 | 30,705 | 41,860 | 1.36× |
+| post_message | 265 | 4,828 | 6,746 | 1.40× |
+| sidebar | 528 | 19,987 | 35,085 | 1.76× |
+
+CPU µs/success: room 110 vs 105; search 139 vs 96; messages 123 vs 90;
+post 552 vs 379; sidebar 186 vs 109. Zero HTTP errors. Raw:
+`../once-campfire-elixir/bench/results/engine-official-ckpt/`.
