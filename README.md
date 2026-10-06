@@ -55,11 +55,20 @@ in `backups/`, and certificate cache in `thruster/`. `CAMPFIRE_DATABASE_PATH` an
 override individual locations; `RAILS_ENV` defaults to `production`. `CAMPFIRE_ENGINE` controls route
 ownership for the performance engine: `on` (default) serves owned routes in the engine with the legacy
 handler as fallback, `off` disables ownership for A/B and rollback, and `force` is reserved for tests.
-`CAMPFIRE_FRAGMENT_CACHE_MB` sizes each in-process HTML cache independently (default 32; `0` disables
-caching): both the legacy fragment cache and the engine piece cache read it, so with both full the
-worst case is 2× the configured MiB (64 MiB by default), kept intentionally while routes migrate one
-at a time. `campfire db:prepare` initializes an empty database and checks migration versions; existing
-databases missing migrations are rejected.
+`CAMPFIRE_FRAGMENT_CACHE_MB` sizes the legacy in-process HTML fragment cache (default 32; `0`
+disables caching); the engine piece cache reads the same key when routes migrate to it, so with both
+full the worst case is 2× the configured MiB (64 MiB by default), kept intentionally during the
+strangler migration. `CAMPFIRE_RECORDED_PIECES` (default `on`) serves recorded room, messages and
+search pages from cached compressed pieces; `off` restores the legacy per-request render,
+compression and ETag path for A/B and rollback. `CAMPFIRE_RECORDED_CACHE_MB` sizes that
+recorded-response piece cache independently (default 32; `0` disables storage while still serving
+from freshly rendered pieces). Each cached piece charges its raw bytes, its gzip member and the key,
+so one piece costs up to about twice its HTML size; with the fragment and recorded caches full the
+accounting is 64 MiB by default. The recorded room page's ETag covers the cache-stable pieces only,
+so it no longer moves with the per-request `loadedAt` timestamp — a deliberate difference from the
+legacy per-request hash, which would re-hash the shell on every request. `campfire db:prepare`
+initializes an empty database and checks migration versions; existing databases missing migrations
+are rejected.
 
 The public listener uses `HTTP_PORT=80`. Set `TLS_DOMAIN` for automatic ACME certificates and HTTPS
 on `HTTPS_PORT=443`. The internal application listener defaults to `TARGET_BIND=127.0.0.1` and

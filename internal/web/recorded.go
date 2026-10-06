@@ -11,19 +11,59 @@ import (
 	"strings"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/piececache"
 )
 
 // The marker exists only during template execution. The actual response inserts
 // the cached message list without copying it through template/fmt/page buffers.
 
-func (s *Server) messageList(ctx context.Context, messages []database.Message) (fragmentEntry, error) {
+// recordedPayload is a rendered message list in whichever representation the
+// active path uses: one immutable piece (raw+gzip member+digest) when
+// CAMPFIRE_RECORDED_PIECES is on, or the legacy HTML fragment when it is off.
+type recordedPayload struct {
+	piece    *piececache.Entry
+	fragment fragmentEntry
+}
+
+func messageListKey(messages []database.Message) string {
 	var key strings.Builder
 	key.WriteString("message-list/")
 	for _, message := range messages {
 		key.WriteString(messageCacheKey(message))
 		key.WriteByte('/')
 	}
-	if entry, ok := s.fragments.entry(key.String()); ok {
+	return key.String()
+}
+
+// recordedMessageList returns the message-list payload for a recorded page,
+// caching it as a compressed piece on the piece path. The key is content
+// derived (message ids and updated-at stamps), so writes invalidate by key
+// change alone.
+func (s *Server) recordedMessageList(ctx context.Context, messages []database.Message) (recordedPayload, error) {
+	if !s.recordedPieces {
+		entry, err := s.messageList(ctx, messages)
+		return recordedPayload{fragment: entry}, err
+	}
+	key := messageListKey(messages)
+	if entry := s.pieces.Get(key); entry != nil {
+		return recordedPayload{piece: entry}, nil
+	}
+	views, err := s.messageItems(ctx, messages)
+	if err != nil {
+		return recordedPayload{}, err
+	}
+	var body strings.Builder
+	for _, view := range views {
+		body.WriteString(string(view.Fragment))
+	}
+	raw := []byte(body.String())
+	entry, _ := s.pieces.Put(key, raw, compressGzip(raw))
+	return recordedPayload{piece: entry}, nil
+}
+
+func (s *Server) messageList(ctx context.Context, messages []database.Message) (fragmentEntry, error) {
+	key := messageListKey(messages)
+	if entry, ok := s.fragments.entry(key); ok {
 		return entry, nil
 	}
 	views, err := s.messageItems(ctx, messages)
@@ -35,8 +75,8 @@ func (s *Server) messageList(ctx context.Context, messages []database.Message) (
 		body.WriteString(string(view.Fragment))
 	}
 	html := template.HTML(body.String())
-	s.fragments.put(key.String(), html)
-	if entry, ok := s.fragments.entry(key.String()); ok {
+	s.fragments.put(key, html)
+	if entry, ok := s.fragments.entry(key); ok {
 		return entry, nil
 	}
 	return fragmentEntry{html: html, digest: sha256.Sum256([]byte(html))}, nil

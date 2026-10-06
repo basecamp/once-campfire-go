@@ -28,6 +28,10 @@ type responseBuffer struct {
 	status    int
 	exception bool
 	parts     [][]byte
+	// encoded is the single assembled recorded-response body (piece path). It
+	// is sized once from the pieces' total and written in one call; parts
+	// remains the legacy multi-part path.
+	encoded []byte
 }
 
 func (w *responseBuffer) WriteHeader(status int) {
@@ -75,7 +79,9 @@ func (w *responseBuffer) finish(r *http.Request) {
 	if h.Get("Content-Type") == "" && w.status != 204 && w.status != 304 {
 		h.Set("Content-Type", "text/html; charset=utf-8")
 	}
-	if len(w.parts) > 0 && w.status != 204 && w.status != 304 {
+	if len(w.encoded) > 0 && w.status != 204 && w.status != 304 {
+		h.Set("Content-Length", strconv.Itoa(len(w.encoded)))
+	} else if len(w.parts) > 0 && w.status != 204 && w.status != 304 {
 		size := 0
 		for _, part := range w.parts {
 			size += len(part)
@@ -84,7 +90,9 @@ func (w *responseBuffer) finish(r *http.Request) {
 	}
 	w.ResponseWriter.WriteHeader(w.status)
 	if r.Method != "HEAD" && w.status != 204 && w.status != 304 {
-		if len(w.parts) > 0 {
+		if len(w.encoded) > 0 {
+			w.ResponseWriter.Write(w.encoded)
+		} else if len(w.parts) > 0 {
 			for _, part := range w.parts {
 				w.ResponseWriter.Write(part)
 			}

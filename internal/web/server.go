@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/basecamp/once-campfire-go/assets"
@@ -22,6 +23,7 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/integrations"
 	"github.com/basecamp/once-campfire-go/internal/jobs"
+	"github.com/basecamp/once-campfire-go/internal/piececache"
 	"github.com/basecamp/once-campfire-go/internal/rails"
 	"github.com/basecamp/once-campfire-go/internal/richtext"
 	"github.com/basecamp/once-campfire-go/internal/storage"
@@ -33,21 +35,28 @@ const HealthBody = `<!DOCTYPE html><html><body style="background-color: green"><
 const MaxBody = 16 << 20
 
 type Server struct {
-	fragments  *fragmentCache
-	Webhooks   *integrations.WebhookClient
-	Jobs       *jobs.Runner
-	Push       *integrations.PushSender
-	Unfurler   *integrations.Unfurler
-	Storage    *storage.Store
-	Cable      *cable.Hub
-	DB         *database.DB
-	Secrets    *rails.Secrets
-	Secure     bool
-	mux        *router
-	templates  *template.Template
-	attemptsMu sync.Mutex
-	attempts   map[string]attempt
-	dummyHash  []byte
+	fragments *fragmentCache
+	// pieces stores recorded-response pieces (raw + gzip member + digest)
+	// under content-versioned keys, sized by CAMPFIRE_RECORDED_CACHE_MB.
+	pieces         *piececache.Cache
+	recordedPieces bool
+	// recordedAssemblies counts gzip piece-path assemblies so tests can pin
+	// that a 304 never assembles a body.
+	recordedAssemblies atomic.Int64
+	Webhooks           *integrations.WebhookClient
+	Jobs               *jobs.Runner
+	Push               *integrations.PushSender
+	Unfurler           *integrations.Unfurler
+	Storage            *storage.Store
+	Cable              *cable.Hub
+	DB                 *database.DB
+	Secrets            *rails.Secrets
+	Secure             bool
+	mux                *router
+	templates          *template.Template
+	attemptsMu         sync.Mutex
+	attempts           map[string]attempt
+	dummyHash          []byte
 }
 type attempt struct {
 	Count int
@@ -140,7 +149,17 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 			return nil, fmt.Errorf("invalid CAMPFIRE_FRAGMENT_CACHE_MB %q", raw)
 		}
 	}
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	recordedMB := 32
+	if raw, ok := os.LookupEnv("CAMPFIRE_RECORDED_CACHE_MB"); ok {
+		recordedMB, err = strconv.Atoi(raw)
+		if err != nil || recordedMB < 0 || recordedMB > 1<<20 {
+			return nil, fmt.Errorf("invalid CAMPFIRE_RECORDED_CACHE_MB %q", raw)
+		}
+	}
+	// CAMPFIRE_RECORDED_PIECES=off is the A/B and rollback switch for the piece
+	// path; any other value (including unset) keeps it on.
+	recordedPieces := !strings.EqualFold(strings.TrimSpace(os.Getenv("CAMPFIRE_RECORDED_PIECES")), "off")
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -385,16 +404,20 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	if a.CustomStyles != "" {
 		p.CustomStyles = template.HTML("<style>" + a.CustomStyles + "</style>")
 	}
-	var recorded *fragmentEntry
+	var recorded *recordedPayload
+	var raw []database.Message
 	if len(p.Messages) > 0 {
-		raw := make([]database.Message, len(p.Messages))
+		raw = make([]database.Message, len(p.Messages))
 		for i, m := range p.Messages {
 			raw[i] = m.Message
 		}
 		if name == "room" || name == "messages" || name == "search" {
-			var entry fragmentEntry
-			entry, err = s.messageList(r.Context(), raw)
-			recorded = &entry
+			payload, listErr := s.recordedMessageList(r.Context(), raw)
+			if listErr != nil {
+				s.fail(w, listErr)
+				return
+			}
+			recorded = &payload
 			p.MessagesHTML = template.HTML("\x00campfire-" + rand.Text() + "\x00")
 		} else {
 			p.Messages, err = s.messageViews(r.Context(), raw)
@@ -412,6 +435,27 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	if name == "search" {
 		p.ReturnRoom, _ = s.lastRoom(r, p.User.ID)
 	}
+	if s.recordedPieces && recorded != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		handled, renderErr := s.writeRecordedPieces(w, r, status, name, p, *recorded)
+		if renderErr != nil {
+			s.fail(w, renderErr)
+			return
+		}
+		if handled {
+			return
+		}
+		// The shell could not be split into stable pieces (an unexpected
+		// template shape). The piece payload carries no legacy fragment, so
+		// render the list through the legacy path for this request; the next
+		// request repeats the attempt and falls back the same way.
+		fragment, listErr := s.messageList(r.Context(), raw)
+		if listErr != nil {
+			s.fail(w, listErr)
+			return
+		}
+		recorded = &recordedPayload{fragment: fragment}
+	}
 	if name == "room" && recorded != nil {
 		shell, marker, err := s.roomShell(p)
 		if err != nil {
@@ -419,7 +463,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		writeRecorded(w, status, shell, marker, *recorded)
+		writeRecorded(w, status, shell, marker, recorded.fragment)
 		return
 	}
 	sidebarKey := ""
@@ -443,7 +487,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if recorded != nil {
-		writeRecorded(w, status, b.String(), string(p.MessagesHTML), *recorded)
+		writeRecorded(w, status, b.String(), string(p.MessagesHTML), recorded.fragment)
 		return
 	}
 	w.WriteHeader(status)
