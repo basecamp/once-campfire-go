@@ -95,6 +95,27 @@ page and +1.1% on search, within noise. Steps 8 and 9 were checked the same way.
 
 Memory after the HTTP phase is unchanged by steps 5–9: Go 180 MiB, Rust 129 MiB.
 
+The final runs (`final-http-20261006`, `final-20261006`) put the step 4 build (8c953b5) and the
+final one against Rust in the same runs:
+
+| Workload | Step 4 | Final | Rust | Rust / Go |
+|---|---:|---:|---:|---:|
+| Room page | 14,014 | 19,370 | 20,927 | 1.08× |
+| Messages page | 17,066 | 20,780 | 22,494 | 1.08× |
+| Sidebar | 14,106 | 22,268 | 27,055 | 1.21× |
+| Search | 19,925 | 24,522 | 26,047 | 1.06× |
+| Avatar | 32,680 | 35,063 | 35,459 | 1.01× |
+| Static CSS | 198,636 | 198,673 | 247,738 | 1.25× |
+| Post message | 7,342 | 7,421 | 7,315 | 0.99× |
+| Cable, 100 clients | 3,999 | 3,965 | 3,771 | 0.95× |
+| Cable, 1,000 clients | 496 | 509 | 536 | 1.05× |
+| Cable, 1,000, deflate | 208 | 209 | 238 | 1.14× |
+
+HTTP rows are medians of 5 rotating repetitions of an HTTP-only run; Cable rows are from a full run
+of 3. In the full run, Go's HTTP repetitions after its first were 5–10% slower than the first (the
+step 4 build's too, Rust's not), which put its messages page at 1.18×; the HTTP-only run, whose Go
+repetitions agree within 5%, doesn't show that. The application logs are gzipped.
+
 ## What the remaining gap is
 
 Both binaries, as benchmarked and under the same harness, were sampled with Linux `perf`
