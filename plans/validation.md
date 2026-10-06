@@ -190,3 +190,20 @@ c=16, seed `64ecbb80`, CPUs 8-11/12-15. Rust reproduces the published table
 CPU µs/success: room 110 vs 105; search 139 vs 96; messages 123 vs 90;
 post 552 vs 379; sidebar 186 vs 109. Zero HTTP errors. Raw:
 `../once-campfire-elixir/bench/results/engine-official-ckpt/`.
+
+## ENGINE-18 measurement (2026-10-06, fastdb read wiring)
+
+Native A/B (engine17 binary = go-before vs engine18 = go vs Rust), 3 rotating
+reps, c=16, medians. Note: taken while five parallel implementation streams were
+active; Rust medians are tight and the rotating order absorbs shared load.
+
+| Route | engine17 | engine18 | gain | Rust | gap |
+|---|---:|---:|---:|---:|---:|
+| room_show | 24,262 | 27,985 | +15.3% | 30,842 | 1.10× |
+| messages_page | 25,065 | 28,633 | +14.2% | 35,527 | 1.24× |
+| sidebar | 26,072 | 34,161 | +31.0% | 40,557 | 1.19× |
+| search | 26,766 | 27,496 | +2.7% | 32,711 | 1.19× |
+| post_message | 5,271 | 5,271 | 0% | 7,909 | 1.50× |
+
+Sidebar and room confirm the profile's database/sql-glue share; search/post were
+not wired (ENGINE-30/31 own them). Raw: `bench/results/engine18-20261006/`.
