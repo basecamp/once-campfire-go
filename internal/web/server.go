@@ -50,6 +50,10 @@ func parseRecordedPieces(raw string) (enabled, valid bool) {
 
 type Server struct {
 	fragments *fragmentCache
+	// fastRender is the compiled message-fragment renderer (ENGINE-32). nil
+	// when CAMPFIRE_FAST_RENDER=off or the fragment compile failed; messageViews
+	// then falls back to html/template's message-uncached.
+	fastRender *messageRenderer
 	// fastdb is the pooled fast read layer for the hot read paths
 	// (CAMPFIRE_FASTDB=off leaves it nil and the handlers use database/sql).
 	fastdb *fastdb.Pool
@@ -190,7 +194,30 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 		}
 	}
 	slog.Info("recorded response pieces", "enabled", recordedPieces, "cache_mib", recordedMB)
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, fastdb: openFastPool(dbPath), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	// CAMPFIRE_FAST_RENDER compiles the message-uncached fragment once at
+	// startup into literal/field ops (internal/web/fastrender.go). off (or
+	// false/0) reverts messageViews to html/template execution, byte-
+	// identically.
+	fastRender := true
+	if raw, ok := os.LookupEnv("CAMPFIRE_FAST_RENDER"); ok {
+		var valid bool
+		fastRender, valid = parseFastRender(raw)
+		if !valid {
+			slog.Warn("invalid CAMPFIRE_FAST_RENDER; keeping fast render on", "value", raw)
+		}
+	}
+	var renderer *messageRenderer
+	if fastRender {
+		// The compiler parses and escapes its own private template copy so
+		// the serving set stays pre-execution (Clone etc. keep working).
+		renderer, err = compileMessageRenderer(secrets)
+		if err != nil {
+			renderer = nil
+			slog.Warn("fastrender compile failed; message fragments fall back to html/template", "error", err)
+		}
+	}
+	slog.Info("message fragment renderer", "compiled", renderer != nil)
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, fastdb: openFastPool(dbPath), fastRender: renderer, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]

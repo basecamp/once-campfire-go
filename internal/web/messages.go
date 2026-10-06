@@ -130,6 +130,12 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 		key := messageCacheKey(views[i].Message)
 		if html, ok := s.fragments.get(key); ok {
 			views[i].Fragment = html
+		} else if s.fastRender != nil {
+			body, err := s.renderMessageFragment(&views[i])
+			if err != nil {
+				return nil, err
+			}
+			views[i].Fragment = s.fragments.put(key, template.HTML(body))
 		} else {
 			body, err := s.markup("message-uncached", views[i])
 			if err != nil {
@@ -144,6 +150,15 @@ func (s *Server) markup(name string, data any) (string, error) {
 	var b bytes.Buffer
 	err := s.templates.ExecuteTemplate(&b, name, data)
 	return b.String(), err
+}
+
+// renderMessageFragment renders the message-uncached fragment for v with the
+// compiled renderer into a pooled buffer. The returned string is the only
+// allocation: the render itself appends into the caller's buffer.
+func (s *Server) renderMessageFragment(v *messageView) (string, error) {
+	b := borrowBuffer()
+	defer releaseBuffer(b)
+	return string(s.fastRender.render(b.Bytes(), v)), nil
 }
 
 type requestOriginKey struct{}
