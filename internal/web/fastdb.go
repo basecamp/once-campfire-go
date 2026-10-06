@@ -37,10 +37,6 @@ func roomOf(r fastdb.Room) database.Room {
 	return database.Room{ID: r.ID, CreatorID: r.CreatorID, Name: r.Name, Type: r.Type, UpdatedAt: r.UpdatedAt}
 }
 
-func sidebarRoomOf(r fastdb.SidebarRoom) database.SidebarRoom {
-	return database.SidebarRoom{Room: roomOf(r.Room), Involvement: r.Involvement, Unread: r.Unread}
-}
-
 func userOf(u fastdb.User) database.User {
 	return database.User{ID: u.ID, Name: u.Name, Email: u.Email, Password: u.Password, Bio: u.Bio, BotToken: u.BotToken, UpdatedAt: u.UpdatedAt, Role: u.Role, Status: u.Status}
 }
@@ -214,6 +210,40 @@ func (s *Server) sidebarData(r *http.Request, u database.User) ([]sidebarRoom, [
 		return nil, nil, err
 	}
 	return items, placeholders, nil
+}
+
+// sidebarRoomsJoined runs the sidebar room read as one fastdb JOIN (rooms and
+// direct-room members in a single statement) and assembles the sidebar view,
+// replacing the per-room RoomMembers round trips of the legacy reader. The
+// row stream arrives grouped: rooms in SidebarRooms order, each room
+// contiguous, one row per other direct-room member and one member-less row
+// for every other room.
+func (s *Server) sidebarRoomsJoined(c *fastdb.Conn, user database.User) ([]sidebarRoom, error) {
+	rows, err := c.SidebarMembers(nil, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]sidebarRoom, 0, len(rows))
+	for i := 0; i < len(rows); {
+		row := rows[i]
+		room := sidebarRoom{Room: roomOf(row.Room.Room), Involvement: row.Room.Involvement, Unread: row.Room.Unread}
+		end := i + 1
+		for end < len(rows) && rows[end].Room.ID == row.Room.ID {
+			end++
+		}
+		if room.Type == "Rooms::Direct" {
+			members := make([]database.User, 0, end-i)
+			for j := i; j < end; j++ {
+				if rows[j].Member.ID != 0 {
+					members = append(members, userOf(rows[j].Member))
+				}
+			}
+			room.applyMembers(members, user)
+		}
+		result = append(result, room)
+		i = end
+	}
+	return result, nil
 }
 
 // openFastPool opens the fast read pool for the server, honouring
