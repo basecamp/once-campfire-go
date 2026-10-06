@@ -67,9 +67,11 @@ func (k Kind) String() string {
 // IsNull reports whether column i is SQL NULL.
 func (r *Rows) IsNull(i int) bool { return r.stmt.ColumnType(i) == csqlite.TypeNull }
 
-// Int64 returns column i as an integer and refuses the conversions
-// database/sql also refuses: a TEXT, FLOAT or NULL column is an error, not a
-// coerced value.
+// Int64 returns column i as an integer and requires an INTEGER column. It is
+// deliberately stricter than database/sql, which also accepts numeric TEXT or
+// an integral REAL: on the INTEGER-affinity columns this layer reads, any
+// surviving TEXT/REAL is a schema-drift or corruption signal, so it is an
+// error rather than a coerced value.
 func (r *Rows) Int64(i int) (int64, error) {
 	if kind := r.Kind(i); kind != KindInteger {
 		return 0, fmt.Errorf("fastdb: column %d is %s, want INTEGER", i, kind)
