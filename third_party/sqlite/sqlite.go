@@ -51,6 +51,7 @@ package sqlite
 // #include <stdlib.h>
 // #include <string.h>
 // #include "wrappers.h"
+// #include "row.h"
 //
 // // Use a helper function here to avoid the cgo pointer detection
 // // logic treating SQLITE_TRANSIENT as a Go pointer.
@@ -463,6 +464,13 @@ func (conn *Conn) prepare(query string, flags C.uint) (*Stmt, int, error) {
 		return nil, 0, err
 	}
 	trailingBytes := int(C.strlen(ctrailing))
+	if stmt.row = C.campfire_row_new(stmt.stmt); stmt.row == nil {
+		C.sqlite3_finalize(stmt.stmt)
+		return nil, 0, reserr("Conn.Prepare", query, "out of memory", C.SQLITE_NOMEM)
+	}
+	if stmt.stmt != nil {
+		stmt.params = int(C.sqlite3_bind_parameter_count(stmt.stmt))
+	}
 
 	for i, count := 1, stmt.BindParamCount(); i <= count; i++ {
 		cname := C.sqlite3_bind_parameter_name(stmt.stmt, C.int(i))
@@ -552,14 +560,20 @@ type Stmt struct {
 	prepInterrupt bool // set if Prep was interrupted
 	lastHasRow    bool // last bool returned by Step
 	tracerTask    TracerTask
+	params        int             // sqlite3_bind_parameter_count
+	row           *C.campfire_row // the current row's values, read by campfire_step
 }
 
 func (stmt *Stmt) interrupted(loc string) error {
-	loc = "Stmt." + loc
 	if stmt.prepInterrupt {
-		return reserr(loc, stmt.query, "", C.SQLITE_INTERRUPT)
+		return reserr("Stmt."+loc, stmt.query, "", C.SQLITE_INTERRUPT)
 	}
-	return stmt.conn.interrupted(loc, stmt.query)
+	select {
+	case <-stmt.conn.doneCh:
+		return reserr("Stmt."+loc, stmt.query, "", C.SQLITE_INTERRUPT)
+	default:
+		return nil
+	}
 }
 
 // Finalize deletes a prepared statement.
@@ -577,6 +591,8 @@ func (stmt *Stmt) Finalize() error {
 		delete(stmt.conn.stmts, stmt.query)
 	}
 	res := C.sqlite3_finalize(stmt.stmt)
+	C.campfire_row_free(stmt.row)
+	stmt.row = nil
 	stmt.conn = nil
 	return stmt.conn.reserr("Stmt.Finalize", stmt.query, res)
 }
@@ -590,6 +606,9 @@ func (stmt *Stmt) Finalize() error {
 func (stmt *Stmt) Reset() error {
 	stmt.conn.count++
 	stmt.lastHasRow = false
+	if stmt.row != nil {
+		stmt.row.count = 0
+	}
 	var res C.int
 	for {
 		res = C.sqlite3_reset(stmt.stmt)
@@ -683,7 +702,7 @@ func (stmt *Stmt) step() (bool, error) {
 		if err := stmt.interrupted("Step"); err != nil {
 			return false, err
 		}
-		switch res := C.sqlite3_step(stmt.stmt); uint8(res) { // reduce to non-extended error code
+		switch res := C.campfire_step(stmt.stmt, stmt.row); uint8(res) { // reduce to non-extended error code
 		case C.SQLITE_LOCKED:
 			if res != C.SQLITE_LOCKED_SHAREDCACHE {
 				// don't call wait_for_unlock_notify as it might deadlock, see:
@@ -736,6 +755,9 @@ func (stmt *Stmt) DataCount() int {
 //
 // https://sqlite.org/c3ref/column_count.html
 func (stmt *Stmt) ColumnCount() int {
+	if stmt.row != nil {
+		return int(stmt.row.columns)
+	}
 	return int(C.sqlite3_column_count(stmt.stmt))
 }
 
@@ -751,10 +773,7 @@ func (stmt *Stmt) ColumnName(col int) string {
 //
 // https://www.sqlite.org/c3ref/bind_parameter_count.html
 func (stmt *Stmt) BindParamCount() int {
-	if stmt.stmt == nil {
-		return 0
-	}
-	return int(C.sqlite3_bind_parameter_count(stmt.stmt))
+	return stmt.params
 }
 
 // BindInt64 binds value to a numbered stmt parameter.
@@ -954,6 +973,14 @@ func (stmt *Stmt) ColumnInt32(col int) int32 {
 //
 // https://www.sqlite.org/c3ref/column_blob.html
 func (stmt *Stmt) ColumnInt64(col int) int64 {
+	if v := stmt.value(col); v != nil {
+		switch v._type {
+		case C.SQLITE_INTEGER:
+			return int64(v.i)
+		case C.SQLITE_NULL:
+			return 0
+		}
+	}
 	return int64(C.sqlite3_column_int64(stmt.stmt, C.int(col)))
 }
 
@@ -978,6 +1005,17 @@ func (stmt *Stmt) ColumnReader(col int) *bytes.Reader {
 }
 
 func (stmt *Stmt) columnBytes(col int) []byte {
+	if v := stmt.value(col); v != nil {
+		switch v._type {
+		case C.SQLITE_BLOB, C.SQLITE3_TEXT:
+			if v.p == nil {
+				return nil
+			}
+			return unsafe.Slice((*byte)(v.p), int(v.n))
+		case C.SQLITE_NULL:
+			return nil
+		}
+	}
 	p := C.sqlite3_column_blob(stmt.stmt, C.int(col))
 	if p == nil {
 		return nil
@@ -1045,6 +1083,9 @@ func (t ColumnType) String() string {
 //
 // https://www.sqlite.org/c3ref/column_blob.html
 func (stmt *Stmt) ColumnType(col int) ColumnType {
+	if v := stmt.value(col); v != nil {
+		return ColumnType(v._type)
+	}
 	return ColumnType(C.sqlite3_column_type(stmt.stmt, C.int(col)))
 }
 
@@ -1054,6 +1095,14 @@ func (stmt *Stmt) ColumnType(col int) ColumnType {
 //
 // https://www.sqlite.org/c3ref/column_blob.html
 func (stmt *Stmt) ColumnText(col int) string {
+	if v := stmt.value(col); v != nil {
+		switch v._type {
+		case C.SQLITE3_TEXT:
+			return C.GoStringN((*C.char)(v.p), v.n)
+		case C.SQLITE_NULL:
+			return ""
+		}
+	}
 	n := stmt.ColumnLen(col)
 	return C.GoStringN((*C.char)(unsafe.Pointer(C.sqlite3_column_text(stmt.stmt, C.int(col)))), C.int(n))
 }
@@ -1064,6 +1113,14 @@ func (stmt *Stmt) ColumnText(col int) string {
 //
 // https://www.sqlite.org/c3ref/column_blob.html
 func (stmt *Stmt) ColumnFloat(col int) float64 {
+	if v := stmt.value(col); v != nil {
+		switch v._type {
+		case C.SQLITE_FLOAT:
+			return float64(v.f)
+		case C.SQLITE_NULL:
+			return 0
+		}
+	}
 	return float64(C.sqlite3_column_double(stmt.stmt, C.int(col)))
 }
 
@@ -1073,7 +1130,26 @@ func (stmt *Stmt) ColumnFloat(col int) float64 {
 //
 // https://www.sqlite.org/c3ref/column_blob.html
 func (stmt *Stmt) ColumnLen(col int) int {
+	if v := stmt.value(col); v != nil {
+		switch v._type {
+		case C.SQLITE3_TEXT, C.SQLITE_BLOB:
+			return int(v.n)
+		case C.SQLITE_NULL:
+			return 0
+		}
+	}
 	return int(C.sqlite3_column_bytes(stmt.stmt, C.int(col)))
+}
+
+// value is column col of the current row as campfire_step read it, or nil when there's no current
+// row or the column is past those read. The accessors answer from it when the column's type needs
+// no conversion, and otherwise call SQLite, which converts.
+func (stmt *Stmt) value(col int) *C.campfire_value {
+	row := stmt.row
+	if row == nil || col < 0 || col >= int(row.count) {
+		return nil
+	}
+	return (*C.campfire_value)(unsafe.Add(unsafe.Pointer(row.values), uintptr(col)*unsafe.Sizeof(C.campfire_value{})))
 }
 
 func (stmt *Stmt) ColumnDatabaseName(col int) string {

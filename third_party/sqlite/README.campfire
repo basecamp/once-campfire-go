@@ -11,6 +11,10 @@ Changes from upstream:
   SQLITE_ENABLE_UNLOCK_NOTIFY for blocking_step.c, compiled at -O3 as cargo's release profile does.
 - wal.go adds NoteWALPages/TakeWALPages: a C WAL hook that records the WAL size after each
   commit, in place of the auto-checkpoint (internal/database runs checkpoints off the writer).
+- row.c/row.h: Step reads the whole row in the same cgo call (campfire_step), and the column
+  accessors answer from it when the column's type needs no conversion (otherwise they call SQLite,
+  which converts). A room page reads about 750 values; read one cgo call at a time, the calls cost
+  more than the reads. ColumnCount and BindParamCount are cached for the same reason.
 - Removed: the sqlitex package, sessions, snapshots, blob I/O, user-defined functions,
   authorizers, extension loading and the incrementor, which Campfire doesn't use, with their
   C trampolines in wrappers.c, and the upstream tests that depended on them.
