@@ -143,8 +143,9 @@ func parityGet(t *testing.T, server *httptest.Server, path string, cookie *http.
 // bytes, content type and etag. The requests cover room show (plain and at
 // an anchor, so the reduced ref path and the full-message around path both
 // run), the messages page (before, after and empty-page), the session lookup
-// inside auth (every request goes through it), and the sidebar (SidebarRooms,
-// per-direct RoomMembers and DirectPlaceholders).
+// inside auth (every request goes through it), the sidebar (SidebarRooms,
+// per-direct RoomMembers and DirectPlaceholders) and the search FTS scan
+// (hits and an empty result).
 func TestFastDBReadParity(t *testing.T) {
 	_, _, onServer, offServer, cookie, user := testFastPair(t)
 	for i, path := range []string{
@@ -155,6 +156,8 @@ func TestFastDBReadParity(t *testing.T) {
 		"/rooms/1/messages?after=2",
 		fmt.Sprintf("/users/%d/sidebar", user.ID),
 		"/users/me/sidebar",
+		"/searches?q=hello",
+		"/searches?q=absent-term",
 	} {
 		fast, body := parityGet(t, onServer, path, cookie)
 		slow, legacy := parityGet(t, offServer, path, cookie)

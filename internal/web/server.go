@@ -57,6 +57,11 @@ type Server struct {
 	// under content-versioned keys, sized by CAMPFIRE_RECORDED_CACHE_MB.
 	pieces         *piececache.Cache
 	recordedPieces bool
+	// searchCache stores search pages keyed by (user, query, corpus,
+	// membership versions) so hits skip Search, Rooms and RecentSearches
+	// (CAMPFIRE_SEARCH_CACHE=off leaves it nil and the handler keeps the
+	// database/sql reads).
+	searchCache *searchResultCache
 	// recordedAssemblies counts gzip piece-path assemblies so tests can pin
 	// that a 304 never assembles a body. recordedShellFallbacks counts
 	// requests that fell back to the legacy render because the shell could not
@@ -189,8 +194,12 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 			slog.Warn("invalid CAMPFIRE_RECORDED_PIECES; keeping pieces on", "value", raw)
 		}
 	}
+	searchCache, err := openSearchCache()
+	if err != nil {
+		return nil, err
+	}
 	slog.Info("recorded response pieces", "enabled", recordedPieces, "cache_mib", recordedMB)
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, fastdb: openFastPool(dbPath), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, searchCache: searchCache, fastdb: openFastPool(dbPath), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -881,6 +890,12 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 			s.fail(w, err)
 			return
 		}
+		// Recording a search changes the recent list the page renders; the
+		// result cache carries no recent-list version, so the user's entries
+		// are purged and the next GET of any query re-reads.
+		if s.searchCache != nil {
+			s.searchCache.purgeUser(u.ID)
+		}
 		http.Redirect(w, r, "/searches?q="+url.QueryEscape(q), 302)
 		return
 	}
@@ -889,15 +904,30 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 			s.fail(w, err)
 			return
 		}
+		if s.searchCache != nil {
+			s.searchCache.purgeUser(u.ID)
+		}
 		http.Redirect(w, r, "/searches", 302)
 		return
+	}
+	if s.searchCache != nil {
+		if result, ok := s.searchCache.get(u.ID, q, s.DB.CorpusVersion(), s.DB.MembershipVersion()); ok {
+			// Hit: the message fragments come from the recorded piece cache
+			// (keyed by exactly these messages' id/stamp pairs), so no Search,
+			// Rooms or RecentSearches read happens and nothing renders the
+			// fragments again.
+			s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Messages: viewMessages(result.messages), RecentSearches: result.recent})
+			return
+		}
 	}
 	recent, err := s.DB.RecentSearches(r.Context(), u.ID)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	messages, err := s.DB.Search(r.Context(), u.ID, q)
+	fc, release := s.fastConn(r)
+	messages, err := s.searchResults(fc, r.Context(), u.ID, q)
+	release()
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -906,6 +936,16 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	if s.searchCache != nil {
+		// Store only when the versions are still the ones the reads saw: a
+		// write that committed mid-request must not tag fresh rows with a
+		// stale version (or vice versa). A dropped store is just a miss.
+		corpus := s.DB.CorpusVersion()
+		membership := s.DB.MembershipVersion()
+		if s.DB.CorpusVersion() == corpus && s.DB.MembershipVersion() == membership {
+			s.searchCache.put(u.ID, q, corpus, membership, searchResult{recent: recent, messages: messages})
+		}
 	}
 	s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Rooms: rooms, Messages: viewMessages(messages), RecentSearches: recent})
 }

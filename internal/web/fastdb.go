@@ -144,6 +144,25 @@ func (s *Server) directPlaceholders(c *fastdb.Conn, ctx context.Context, user in
 	return usersOf(users), nil
 }
 
+// searchResults runs the FTS query in the same shape database.DB.Search
+// yields (membership-scoped, chronological, up to 100), through fastdb when c
+// is set. The word fold and quoted-token MATCH expression are held byte-equal
+// to the database reader by the differential tests.
+func (s *Server) searchResults(c *fastdb.Conn, ctx context.Context, user int64, query string) ([]database.Message, error) {
+	if c == nil {
+		return s.DB.Search(ctx, user, query)
+	}
+	refs, err := c.Search(nil, user, query)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]database.Message, 0, len(refs))
+	for _, m := range refs {
+		out = append(out, messageOf(m))
+	}
+	return out, nil
+}
+
 // roomData runs the room page's database reads on one borrowed fastdb
 // connection (or the database/sql readers when the fast path is off) and
 // returns the page inputs. The connection is returned before any rendering,

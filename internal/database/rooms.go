@@ -125,6 +125,7 @@ func (d *DB) CreateRoom(ctx context.Context, creator int64, kind, name string, u
 	if err != nil {
 		return room, err
 	}
+	d.membershipVersion.Add(1)
 	err = d.Read.QueryRowContext(ctx, "SELECT id,creator_id,coalesce(name,''),type,updated_at FROM rooms WHERE id=?", room.ID).Scan(&room.ID, &room.CreatorID, &room.Name, &room.Type, timestamp{&room.UpdatedAt})
 	return room, err
 }
@@ -193,6 +194,9 @@ func (d *DB) UpdateRoom(ctx context.Context, id int64, kind, name string, users 
 			d.ResetConnections(user)
 		}
 	}
+	if err == nil {
+		d.membershipVersion.Add(1)
+	}
 	return err
 }
 func (d *DB) DeleteRoom(ctx context.Context, id int64) error {
@@ -219,6 +223,11 @@ func (d *DB) DeleteRoom(ctx context.Context, id int64) error {
 	})
 	if err == nil {
 		d.PurgeDetached(blobs)
+		// The room's index rows and memberships commit together, so one bump
+		// per version is enough; both facts separately invalidate cached
+		// search pages.
+		d.corpusVersion.Add(1)
+		d.membershipVersion.Add(1)
 	}
 	return err
 }
@@ -242,6 +251,7 @@ func (d *DB) SetInvolvement(ctx context.Context, user, room int64, value string)
 	if count == 0 {
 		return sql.ErrNoRows
 	}
+	d.membershipVersion.Add(1)
 	return nil
 }
 func (d *DB) Presence(ctx context.Context, user, room int64, action string) error {

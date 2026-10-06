@@ -66,15 +66,34 @@ from cached compressed pieces: the shell split at its `loadedAt` and message mar
 message ids and updated-at stamps and stored as raw bytes plus a complete gzip member. Setting it
 `off` restores the legacy per-request render, compression and ETag path for A/B and rollback.
 `CAMPFIRE_FASTDB` (default `on`; also accepts `true`/`1` and `off`/`false`/`0`, warning on anything else)
-routes the hot read paths — room pages, message pages, the session lookup in `auth`, and the sidebar
-(rooms, direct-room members, placeholders) — through `internal/fastdb`, a thin SQLite read layer that
-scans with caller-owned buffers and no per-record database/sql decoding, holding one pooled read-only
-connection per application CPU. Setting it `off` restores the `database/sql` readers on the same
-handlers for A/B and rollback; search/FTS and every write (including the hourly `RefreshSession`
-UPDATE) always use `database/sql`. If the pool cannot open (unreadable database, non-WAL file), the
-server logs a warning and falls back to `database/sql` reads for that process instead of failing
-startup. The fast path also does not observe request cancellation mid-query; a cancelled request
-completes its read and renders rather than producing a context error.
+routes the hot read paths — room pages, message pages, the session lookup in `auth`, the sidebar
+(rooms, direct-room members, placeholders) and the search FTS scan — through `internal/fastdb`, a thin
+SQLite read layer that scans with caller-owned buffers and no per-record database/sql decoding,
+holding one pooled read-only connection per application CPU. Setting it `off` restores the
+`database/sql` readers on the same handlers for A/B and rollback; `GET /searches` itself still reads
+recent searches through `database/sql` unless the result cache (below) serves the page, and every
+write (including the hourly `RefreshSession` UPDATE) always uses `database/sql`. If the pool cannot
+open (unreadable database, non-WAL file), the server logs a warning and falls back to `database/sql`
+reads for that process instead of failing startup. The fast path also does not observe request
+cancellation mid-query; a cancelled request completes its read and renders rather than producing a
+context error.
+`CAMPFIRE_SEARCH_CACHE` (default `on`; same value shapes and warning policy as the other switches)
+serves repeated `GET /searches` pages from a bounded in-process result cache keyed by (user,
+normalized query, corpus version, membership version), skipping the FTS scan, the `Rooms` read and
+the `RecentSearches` read on a hit; the message fragments come from the recorded piece cache (same
+content-keyed pieces a miss would produce), so no fragment re-renders. The corpus version is a
+global counter bumped by every committed message create/edit/delete, boost change and room destroy;
+the membership version is bumped by every committed membership grant/revocation, involvement change
+and account create/deactivate. A hit therefore serves the byte-identical page a re-read would
+produce — the differential and poisoning tests hold it that way, including a test that drops the FTS
+index after a fill and requires the cached path to keep serving while `database/sql` fails. POST
+`/searches` and `DELETE /searches/clear` keep their database behavior and also purge the user's
+cached entries, so the rendered recent-searches list stays current. Deliberate trade-offs: on a hit
+the page's "last room" link is still read per request (it depends on the `last_room` cookie), and a
+cached entry can be as stale as the version counters allow — a version bump is the only invalidator,
+so a process whose writers run outside `internal/database` (none today) would serve stale pages.
+`CAMPFIRE_SEARCH_CACHE_MB` sizes it (default 16; `0` disables storage; an entry larger than a
+quarter of the budget is not cached).
 `CAMPFIRE_RECORDED_CACHE_MB` sizes that recorded-response piece cache independently (default 32;
 `0` disables storage while still serving from freshly rendered pieces). Each cached piece charges
 its raw bytes, its gzip member and the key, so one piece costs up to about twice its HTML size;

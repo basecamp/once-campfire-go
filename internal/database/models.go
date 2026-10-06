@@ -116,6 +116,9 @@ func (d *DB) Setup(ctx context.Context, name, email, passwordDigest string, uplo
 		u = User{ID: id, Name: name, Email: email, Role: 1}
 		return err
 	})
+	if err == nil {
+		d.membershipVersion.Add(1)
+	}
 	return u, err
 }
 func (d *DB) Rooms(ctx context.Context, user int64) ([]Room, error) { return d.rooms(ctx, user, true) }
@@ -273,6 +276,11 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 	})
 	if err == nil && staged != nil {
 		staged.Keep()
+	}
+	if err == nil {
+		// The index row committed with the message; bump after the commit so
+		// no reader can see the new corpus version with old rows.
+		d.corpusVersion.Add(1)
 	}
 	return m, err
 }

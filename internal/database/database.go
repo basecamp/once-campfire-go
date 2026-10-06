@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -28,6 +29,11 @@ type DB struct {
 	Read                *readPool
 	Write               *sql.DB
 	Now                 func() time.Time
+	// corpusVersion and membershipVersion are the ENGINE-30 search cache
+	// version counters (see versions.go). Owned by the writers; readers only
+	// load.
+	corpusVersion     atomic.Int64
+	membershipVersion atomic.Int64
 }
 
 func Open(path string, readers int) (*DB, error) {
