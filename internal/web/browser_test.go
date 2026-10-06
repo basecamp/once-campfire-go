@@ -53,9 +53,9 @@ func TestBrowserCompatibilityRunsAfterAuthentication(t *testing.T) {
 	r.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1")
 	w := httptest.NewRecorder()
 	app.ServeHTTP(w, r)
-	// The profile includes pwa/_install_instructions, which renders nothing until it's ported.
+	// The profile includes pwa/_install_instructions, whose iOS branch tells how to install.
 	body := w.Body.String()
-	if w.Code != 200 || strings.Contains(body, "pwa__instructions") && !strings.Contains(body, "Add to Home Screen") {
+	if w.Code != 200 || !strings.Contains(body, "pwa__instructions") || !strings.Contains(body, "Add to Home Screen") {
 		t.Fatal(w.Code, body)
 	}
 }
