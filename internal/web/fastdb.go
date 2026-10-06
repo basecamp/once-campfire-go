@@ -13,6 +13,7 @@ import (
 
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/fastdb"
+	"github.com/basecamp/once-campfire-go/internal/storage"
 )
 
 // parseFastDB maps a CAMPFIRE_FASTDB value to its setting, accepting the same
@@ -63,14 +64,28 @@ func messageOf(m fastdb.Message) database.Message {
 // back to the database/sql readers for that request, which is the same
 // behaviour CAMPFIRE_FASTDB=off selects.
 func (s *Server) fastConn(r *http.Request) (c *fastdb.Conn, release func()) {
+	return s.fastConnCtx(r.Context())
+}
+
+// fastConnCtx is fastConn for call sites that only hold a context (messageViews
+// is called from request handlers and from background webhook delivery).
+func (s *Server) fastConnCtx(ctx context.Context) (c *fastdb.Conn, release func()) {
 	if s.fastdb == nil {
 		return nil, func() {}
 	}
-	c, err := s.fastdb.Borrow(r.Context())
+	c, err := s.fastdb.Borrow(ctx)
 	if err != nil {
 		return nil, func() {}
 	}
 	return c, func() { s.fastdb.Return(c) }
+}
+
+// blobOf maps a fastdb blob record to the storage type the page assembly
+// uses. The bytes and NULL handling are identical to storage.Store's own
+// decode (asserted by the fastdb differential tests); this is a struct
+// assignment, not a re-decode.
+func blobOf(b fastdb.Blob) storage.Blob {
+	return storage.Blob{ID: b.ID, Key: b.Key, Filename: b.Filename, ContentType: b.ContentType, Metadata: b.Metadata, ServiceName: b.ServiceName, ByteSize: b.ByteSize, Checksum: b.Checksum, CreatedAt: b.CreatedAt}
 }
 
 // roomRow returns the room for user,id: through fastdb when c is set (a

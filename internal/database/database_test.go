@@ -20,6 +20,10 @@ func testDB(t *testing.T) *DB {
 	return d
 }
 func TestSchemaAndMessageTransaction(t *testing.T) {
+	// This test pins the direct path's rollback contract end to end, so it
+	// runs with the write queue off; the queued path's after-commit contract
+	// is covered by TestWriteQueueAfterCommitFailure.
+	t.Setenv("CAMPFIRE_WRITE_QUEUE", "off")
 	d := testDB(t)
 	ctx := context.Background()
 	source, err := os.ReadFile("../../reference/crates/db/src/schema.sql")
@@ -59,6 +63,9 @@ func TestSchemaAndMessageTransaction(t *testing.T) {
 		t.Fatalf("private search leaked: %v %v", hits, err)
 	}
 	// An FTS failure must roll back the message and its rich text together.
+	// That is the direct path's contract (CAMPFIRE_WRITE_QUEUE=off); the
+	// queued path commits the message first and reports the index failure
+	// after, covered in TestWriteQueueAfterCommitFailure.
 	if _, err = d.Write.Exec("DROP TABLE message_search_index"); err != nil {
 		t.Fatal(err)
 	}

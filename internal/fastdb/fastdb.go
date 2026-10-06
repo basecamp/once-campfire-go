@@ -56,6 +56,7 @@ package fastdb
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"github.com/basecamp/once-campfire-go/internal/fastdb/csqlite"
@@ -219,6 +220,20 @@ const userColumns = "u.id,u.name,coalesce(u.email_address,''),coalesce(u.passwor
 
 const (
 	queryRoom = "SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=? AND r.id=?"
+
+	// queryRoomByID mirrors database.DB.FindRoom: the room without a
+	// membership join (messageViews calls it for the room of each view).
+	queryRoomByID = "SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at FROM rooms r WHERE r.id=?"
+
+	queryUserByID = "SELECT " + userColumns + " FROM users u WHERE u.id=?"
+
+	// queryBoosts, queryAttachedBlob and blobColumns mirror database.DB.Boosts
+	// and storage.Store.Attached, column for column.
+	queryBoosts = "SELECT b.id,b.message_id,b.booster_id,b.content,u.name,coalesce(u.bio,''),u.updated_at,b.created_at,b.updated_at FROM boosts b JOIN users u ON u.id=b.booster_id WHERE b.message_id=? ORDER BY b.created_at"
+
+	blobColumns = "b.id,b.key,b.filename,b.content_type,b.metadata,b.service_name,b.byte_size,b.checksum,b.created_at"
+
+	queryAttachedBlob = "SELECT " + blobColumns + " FROM active_storage_blobs b JOIN active_storage_attachments a ON a.blob_id=b.id WHERE a.record_type=? AND a.record_id=? AND a.name=? ORDER BY a.id LIMIT 1"
 
 	queryInvolvement = "SELECT involvement FROM memberships WHERE user_id=? AND room_id=?"
 
@@ -385,6 +400,240 @@ func (c *Conn) RoomMembers(dst []User, room int64) ([]User, error) {
 		return out, err
 	}
 	return out, nil
+}
+
+// Boost mirrors the boost row database.DB.Boosts decodes. Title is computed
+// from Name and Bio by the web layer, exactly as database.Boosts computes
+// BoosterTitle from the same two columns.
+type Boost struct {
+	ID, MessageID, BoosterID int64
+	Content, Booster         string
+	Bio                      string
+	CreatedAt, UpdatedAt     time.Time
+	BoosterUpdatedAt         time.Time
+}
+
+// Blob mirrors the active-storage blob row storage.Store.Attached decodes,
+// including its NULL handling: Metadata is "{}" when the column is NULL or
+// not valid JSON, Checksum is "" when NULL.
+type Blob struct {
+	ID            int64
+	Key, Filename string
+	ContentType   *string
+	Metadata      json.RawMessage
+	ServiceName   string
+	ByteSize      int64
+	Checksum      string
+	CreatedAt     string
+}
+
+// RoomByID mirrors database.DB.FindRoom: the room record without a membership
+// join. On error dst holds the same partially decoded value database/sql's
+// Scan leaves behind (zero when the failure precedes scanning).
+func (c *Conn) RoomByID(dst *Room, id int64) error {
+	room, err := c.roomByID(id)
+	*dst = room
+	return err
+}
+
+func (c *Conn) roomByID(id int64) (Room, error) {
+	var room Room
+	h, err := c.acquire(queryRoomByID)
+	if err != nil {
+		return room, err
+	}
+	defer h.release()
+	if err := h.st.ClearBindings(); err != nil {
+		return room, err
+	}
+	if err := h.st.BindInt64(1, id); err != nil {
+		return room, err
+	}
+	rows := Rows{stmt: h.st}
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return room, err
+		}
+		return room, ErrNoRows
+	}
+	if room.ID, err = rows.Int64(0); err != nil {
+		return room, err
+	}
+	if room.CreatorID, err = rows.Int64(1); err != nil {
+		return room, err
+	}
+	if room.Name, err = rows.Text(2); err != nil {
+		return room, err
+	}
+	if room.Type, err = rows.Text(3); err != nil {
+		return room, err
+	}
+	if room.UpdatedAt, err = rows.Stamp(4); err != nil {
+		return room, err
+	}
+	return room, nil
+}
+
+// UserByID mirrors database.DB.User: the user record by id, without the
+// membership or session joins. On error dst holds the same partially decoded
+// value database/sql's Scan leaves behind (zero when the failure precedes
+// scanning).
+func (c *Conn) UserByID(dst *User, id int64) error {
+	var user User
+	h, err := c.acquire(queryUserByID)
+	if err != nil {
+		return err
+	}
+	defer h.release()
+	if err := h.st.ClearBindings(); err != nil {
+		return err
+	}
+	if err := h.st.BindInt64(1, id); err != nil {
+		return err
+	}
+	rows := Rows{stmt: h.st}
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		*dst = User{}
+		return ErrNoRows
+	}
+	user, err = scanUser(&rows)
+	*dst = user
+	return err
+}
+
+// Boosts mirrors database.DB.Boosts: every boost of a message in creation
+// order, appended to dst (pass dst[:0] to reuse a buffer). Like the database
+// reader it returns a non-nil empty slice when nothing matches.
+func (c *Conn) Boosts(dst []Boost, message int64) ([]Boost, error) {
+	h, err := c.acquire(queryBoosts)
+	if err != nil {
+		return nil, err
+	}
+	defer h.release()
+	if err := h.st.ClearBindings(); err != nil {
+		return nil, err
+	}
+	if err := h.st.BindInt64(1, message); err != nil {
+		return nil, err
+	}
+	rows := Rows{stmt: h.st}
+	out := dst
+	if out == nil {
+		out = []Boost{}
+	}
+	for rows.Next() {
+		var boost Boost
+		if boost.ID, err = rows.Int64(0); err != nil {
+			return nil, err
+		}
+		if boost.MessageID, err = rows.Int64(1); err != nil {
+			return nil, err
+		}
+		if boost.BoosterID, err = rows.Int64(2); err != nil {
+			return nil, err
+		}
+		if boost.Content, err = rows.Text(3); err != nil {
+			return nil, err
+		}
+		if boost.Booster, err = rows.Text(4); err != nil {
+			return nil, err
+		}
+		if boost.Bio, err = rows.Text(5); err != nil {
+			return nil, err
+		}
+		if boost.BoosterUpdatedAt, err = rows.Stamp(6); err != nil {
+			return nil, err
+		}
+		if boost.CreatedAt, err = rows.Stamp(7); err != nil {
+			return nil, err
+		}
+		if boost.UpdatedAt, err = rows.Stamp(8); err != nil {
+			return nil, err
+		}
+		out = append(out, boost)
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// AttachedBlob mirrors storage.Store.Attached: the first attachment's blob for
+// (kind, id, name). A missing attachment is ErrNoRows.
+func (c *Conn) AttachedBlob(dst *Blob, kind string, id int64, name string) error {
+	blob := Blob{}
+	h, err := c.acquire(queryAttachedBlob)
+	if err != nil {
+		return err
+	}
+	defer h.release()
+	if err := h.st.ClearBindings(); err != nil {
+		return err
+	}
+	if err := h.st.BindText(1, kind); err != nil {
+		return err
+	}
+	if err := h.st.BindInt64(2, id); err != nil {
+		return err
+	}
+	if err := h.st.BindText(3, name); err != nil {
+		return err
+	}
+	rows := Rows{stmt: h.st}
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		*dst = Blob{}
+		return ErrNoRows
+	}
+	if blob.ID, err = rows.Int64(0); err != nil {
+		return err
+	}
+	if blob.Key, err = rows.Text(1); err != nil {
+		return err
+	}
+	if blob.Filename, err = rows.Text(2); err != nil {
+		return err
+	}
+	if rows.IsNull(3) {
+		blob.ContentType = nil
+	} else if v, err := rows.Text(3); err != nil {
+		return err
+	} else {
+		blob.ContentType = &v
+	}
+	// Mirror scanBlob's NULL handling: Metadata is "{}" for NULL or invalid
+	// JSON, Checksum is "" for NULL.
+	var metadata []byte
+	if !rows.IsNull(4) {
+		if metadata, err = rows.ColumnTextInto(4, metadata[:0]); err != nil {
+			return err
+		}
+	}
+	blob.Metadata = json.RawMessage(metadata)
+	if !json.Valid(blob.Metadata) {
+		blob.Metadata = json.RawMessage("{}")
+	}
+	if blob.ServiceName, err = rows.Text(5); err != nil {
+		return err
+	}
+	if blob.ByteSize, err = rows.Int64(6); err != nil {
+		return err
+	}
+	if !rows.IsNull(7) {
+		if blob.Checksum, err = rows.Text(7); err != nil {
+			return err
+		}
+	}
+	if blob.CreatedAt, err = rows.Text(8); err != nil {
+		return err
+	}
+	*dst = blob
+	return nil
 }
 
 // SessionUser mirrors database.DB.SessionUser: the active user for a session

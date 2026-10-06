@@ -66,8 +66,9 @@ from cached compressed pieces: the shell split at its `loadedAt` and message mar
 message ids and updated-at stamps and stored as raw bytes plus a complete gzip member. Setting it
 `off` restores the legacy per-request render, compression and ETag path for A/B and rollback.
 `CAMPFIRE_FASTDB` (default `on`; also accepts `true`/`1` and `off`/`false`/`0`, warning on anything else)
-routes the hot read paths — room pages, message pages, the session lookup in `auth`, and the sidebar
-(rooms, direct-room members, placeholders) — through `internal/fastdb`, a thin SQLite read layer that
+routes the hot read paths — room pages, message pages, the session lookup in `auth`, the sidebar
+(rooms, direct-room members, placeholders), and message view assembly (room, creator, boosts and
+attachment per view) — through `internal/fastdb`, a thin SQLite read layer that
 scans with caller-owned buffers and no per-record database/sql decoding, holding one pooled read-only
 connection per application CPU. Setting it `off` restores the `database/sql` readers on the same
 handlers for A/B and rollback; search/FTS and every write (including the hourly `RefreshSession`
@@ -75,6 +76,26 @@ UPDATE) always use `database/sql`. If the pool cannot open (unreadable database,
 server logs a warning and falls back to `database/sql` reads for that process instead of failing
 startup. The fast path also does not observe request cancellation mid-query; a cancelled request
 completes its read and renders rather than producing a context error.
+`CAMPFIRE_WRITE_QUEUE` (default `on`; also accepts `true`/`1` and `off`/`false`/`0`, warning on
+anything else) routes message creation through a single writer goroutine that commits everything
+queued at a drain in one `BEGIN IMMEDIATE` transaction (group commit), each job in its own savepoint
+so a failing job rolls back exactly its own statements while the batch commits. Each request learns
+its message only after the shared commit — the response is never sent ahead of persistence — and
+then runs the search-index insert and unread bump itself, after the commit, the way the Rust port's
+`after_commit` hooks shape the same Rails callbacks. The writer connection disables SQLite's
+auto-checkpoint (`PRAGMA wal_autocheckpoint=0`) and a separate connection runs
+`PRAGMA wal_checkpoint(PASSIVE)` every `CAMPFIRE_CHECKPOINT_MS` milliseconds (default 1000), so no
+write ever waits for the checkpoint's WAL and database fsyncs. Durability does not move: the
+database stays WAL mode with `synchronous=NORMAL` and the default `journal_size_limit` (unset,
+-1), commits are never fsynced, and what committed since the last checkpoint can be lost to a power
+failure (never to a process crash); every checkpoint syncs the WAL, as the auto-checkpoint did. Two
+deliberate windows follow from the after-commit shape: a crash (or a failed statement) between the
+shared commit and the search/unread statements leaves the message row without its index row, and a
+request that disconnects after its job started still persists (the job's context is only checked
+before execution). Setting `off` restores the per-request transaction path with the message, index
+and unread bump in one rollback-atomic transaction and the writer's auto-checkpoint, byte-for-byte
+the pre-lane behaviour; the checksum of the response bytes is covered by the write-lane parity
+tests.
 `CAMPFIRE_RECORDED_CACHE_MB` sizes that recorded-response piece cache independently (default 32;
 `0` disables storage while still serving from freshly rendered pieces). Each cached piece charges
 its raw bytes, its gzip member and the key, so one piece costs up to about twice its HTML size;

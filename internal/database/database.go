@@ -7,9 +7,12 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -17,6 +20,11 @@ import (
 
 //go:embed schema.sql
 var schema string
+
+// options is the pragma set every connection to the database file applies
+// (the write DSN adds _txlock and the statement-cache cap; the read DSN adds
+// mode=ro and query_only).
+const options = "?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_cache_size=2000"
 
 var migrations = []string{"20231215043540", "20231220143106", "20240110071740", "20240115124901", "20240130003150", "20240130213001", "20240131105830", "20240209110503", "20250825100957", "20250825100958", "20250825100959", "20251126092013", "20251126115722", "20251126130131", "20251212154340"}
 
@@ -28,6 +36,38 @@ type DB struct {
 	Read                *readPool
 	Write               *sql.DB
 	Now                 func() time.Time
+	writer              *messageWriter
+	checkpoints         *checkpointer
+}
+
+// parseWriteQueue maps a CAMPFIRE_WRITE_QUEUE value to its setting, accepting
+// the same shapes as the web flags. An unrecognised value reports valid=false
+// so the caller can warn while keeping the default on rather than silently
+// changing behaviour.
+func parseWriteQueue(raw string) (enabled, valid bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "on", "true", "1":
+		return true, true
+	case "off", "false", "0":
+		return false, true
+	default:
+		return true, false
+	}
+}
+
+// checkpointIntervalMS reads CAMPFIRE_CHECKPOINT_MS (milliseconds, default
+// 1000): the schedule of the off-writer PASSIVE WAL checkpoint.
+func checkpointIntervalMS() time.Duration {
+	raw := os.Getenv("CAMPFIRE_CHECKPOINT_MS")
+	if raw == "" {
+		return time.Second
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms <= 0 {
+		slog.Warn("invalid CAMPFIRE_CHECKPOINT_MS; using 1000", "value", raw)
+		return time.Second
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 func Open(path string, readers int) (*DB, error) {
@@ -42,7 +82,6 @@ func Open(path string, readers int) (*DB, error) {
 		return nil, err
 	}
 	uri := (&url.URL{Scheme: "file", Path: path}).String()
-	options := "?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_cache_size=2000"
 	// Reuse transaction statements on the single writer connection. The driver
 	// resets bindings on reuse; results and authorization are never cached.
 	w, err := sql.Open("sqlite3", uri+options+"&_txlock=immediate&_stmt_cache_size=64")
@@ -68,6 +107,38 @@ func Open(path string, readers int) (*DB, error) {
 		r.Close()
 		return fail(err)
 	}
+	db := &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w}
+	queue := true
+	if raw, ok := os.LookupEnv("CAMPFIRE_WRITE_QUEUE"); ok {
+		var valid bool
+		queue, valid = parseWriteQueue(raw)
+		if !valid {
+			slog.Warn("invalid CAMPFIRE_WRITE_QUEUE; keeping the write queue on", "value", raw)
+		}
+	}
+	if queue {
+		// The writer connection never auto-checkpoints: the separate
+		// checkpointer pays the checkpoint fsyncs on its own schedule. The
+		// durability contract does not move — WAL mode, synchronous=NORMAL,
+		// journal_size_limit untouched (the default -1), so commits are not
+		// fsynced and what committed since the last checkpoint can be lost to
+		// a power failure, exactly as before.
+		if _, err := w.Exec("PRAGMA wal_autocheckpoint=0"); err != nil {
+			r.Close()
+			return fail(err)
+		}
+		writer := newMessageWriter(w)
+		checkpoints, err := startCheckpointer(uri+options, checkpointIntervalMS())
+		if err != nil {
+			writer.Close()
+			r.Close()
+			return fail(err)
+		}
+		db.writer, db.checkpoints = writer, checkpoints
+		slog.Info("write queue", "enabled", true, "group_commit", true)
+	} else {
+		slog.Info("write queue", "enabled", false)
+	}
 	now := time.Now
 	if raw := os.Getenv("CAMPFIRE_FROZEN_TIME"); raw != "" {
 		frozen, err := time.Parse(time.RFC3339Nano, raw)
@@ -77,9 +148,27 @@ func Open(path string, readers int) (*DB, error) {
 		}
 		now = func() time.Time { return frozen }
 	}
-	return &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, Now: now}, nil
+	db.Now = now
+	return db, nil
 }
-func (d *DB) Close() error     { return errors.Join(d.Read.Close(), d.Write.Close()) }
+func (d *DB) Close() error {
+	// The writer drains queued messages first, then the final checkpoint
+	// moves their frames into the database file; only then do the pools close.
+	var errs []error
+	if d.writer != nil {
+		d.writer.Close()
+	}
+	if d.checkpoints != nil {
+		d.checkpoints.Close()
+	}
+	if err := d.Read.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := d.Write.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
 func Stamp(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05.000000") }
 func (d *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := d.Write.BeginTx(ctx, nil)

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/fastdb"
 	"github.com/basecamp/once-campfire-go/internal/richtext"
 	"github.com/basecamp/once-campfire-go/internal/storage"
 )
@@ -57,20 +58,28 @@ func (s *Server) findMessage(r *http.Request, u database.User, administer bool) 
 	}
 	return m, nil
 }
+
+// messageViews renders messages into views for the Turbo and page paths. The
+// per-view database reads (room, creator, boosts, attachment) go through the
+// fastdb pool when it is available, exactly the same rows database/sql would
+// return (the fastdb differential tests hold the readers to the same
+// decodes); the pool slot is released when the views are done.
 func (s *Server) messageViews(ctx context.Context, messages []database.Message) ([]messageView, error) {
+	c, release := s.fastConnCtx(ctx)
+	defer release()
 	views := viewMessages(messages)
 	roomNames := map[int64]string{}
 	creators := map[int64]database.User{}
 	for i := range views {
 		name, ok := roomNames[views[i].RoomID]
 		if !ok {
-			room, err := s.DB.FindRoom(ctx, views[i].RoomID)
+			room, err := s.viewRoom(c, ctx, views[i].RoomID)
 			if err != nil {
 				return nil, err
 			}
 			name = room.Name
 			if room.Type == "Rooms::Direct" {
-				view, err := s.displayRoom(nil, ctx, room, database.User{})
+				view, err := s.displayRoom(c, ctx, room, database.User{})
 				if err != nil {
 					return nil, err
 				}
@@ -81,7 +90,7 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 		creator, found := creators[views[i].CreatorID]
 		if !found {
 			var err error
-			creator, err = s.DB.User(ctx, views[i].CreatorID)
+			creator, err = s.viewUser(c, ctx, views[i].CreatorID)
 			if errors.Is(err, sql.ErrNoRows) {
 				views[i].Fragment = unrenderableMessage
 				continue
@@ -101,12 +110,12 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 		if sound := soundHTML(result.Plain); sound != "" {
 			views[i].HTML = template.HTML(sound)
 		}
-		boosts, err := s.DB.Boosts(ctx, views[i].ID)
+		boosts, err := s.viewBoosts(c, ctx, views[i].ID)
 		if err != nil {
 			return nil, err
 		}
 		views[i].Boosts = boosts
-		blob, err := s.Storage.Attached(ctx, "Message", views[i].ID, "attachment")
+		blob, err := s.viewBlob(c, ctx, "Message", views[i].ID, "attachment")
 		if err == nil {
 			views[i].Attachment = &blob
 			views[i].BlobURL = s.Storage.BlobURL(blob)
@@ -140,6 +149,62 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 	}
 	return views, nil
 }
+
+// viewRoom returns the room record by id, through fastdb when c is set (a
+// missing room is ErrNoRows, the same sentinel database/sql returns).
+func (s *Server) viewRoom(c *fastdb.Conn, ctx context.Context, id int64) (database.Room, error) {
+	if c == nil {
+		return s.DB.FindRoom(ctx, id)
+	}
+	var r fastdb.Room
+	if err := c.RoomByID(&r, id); err != nil {
+		return database.Room{}, err
+	}
+	return roomOf(r), nil
+}
+
+// viewUser returns the user record by id, through fastdb when c is set.
+func (s *Server) viewUser(c *fastdb.Conn, ctx context.Context, id int64) (database.User, error) {
+	if c == nil {
+		return s.DB.User(ctx, id)
+	}
+	var u fastdb.User
+	if err := c.UserByID(&u, id); err != nil {
+		return database.User{}, err
+	}
+	return userOf(u), nil
+}
+
+// viewBoosts returns the message's boosts, through fastdb when c is set. The
+// fastdb rows carry the booster name and bio raw; the title is computed here
+// exactly as database.DB.Boosts computes it.
+func (s *Server) viewBoosts(c *fastdb.Conn, ctx context.Context, message int64) ([]database.Boost, error) {
+	if c == nil {
+		return s.DB.Boosts(ctx, message)
+	}
+	rows, err := c.Boosts(nil, message)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]database.Boost, 0, len(rows))
+	for _, b := range rows {
+		out = append(out, database.Boost{ID: b.ID, MessageID: b.MessageID, BoosterID: b.BoosterID, Content: b.Content, Booster: b.Booster, CreatedAt: b.CreatedAt, UpdatedAt: b.UpdatedAt, BoosterUpdatedAt: b.BoosterUpdatedAt, BoosterTitle: (database.User{Name: b.Booster, Bio: b.Bio}).Title()})
+	}
+	return out, nil
+}
+
+// viewBlob returns the attachment's blob, through fastdb when c is set.
+func (s *Server) viewBlob(c *fastdb.Conn, ctx context.Context, kind string, id int64, name string) (storage.Blob, error) {
+	if c == nil {
+		return s.Storage.Attached(ctx, kind, id, name)
+	}
+	var b fastdb.Blob
+	if err := c.AttachedBlob(&b, kind, id, name); err != nil {
+		return storage.Blob{}, err
+	}
+	return blobOf(b), nil
+}
+
 func (s *Server) markup(name string, data any) (string, error) {
 	var b bytes.Buffer
 	err := s.templates.ExecuteTemplate(&b, name, data)

@@ -218,63 +218,126 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 	if body != nil {
 		m.Body = *body
 	}
-	err := d.Transaction(ctx, func(tx *sql.Tx) error {
+	// run executes the statements that commit together with the message row:
+	// membership check, creator name, staged blob, the message itself, the
+	// room touch, body and attachment. The search index and unread bump run
+	// around it: inside the same transaction on the direct path, after the
+	// shared commit on the queued path, exactly as the Rust port shapes the
+	// same Rails callbacks.
+	run := func(tx *sql.Tx) (Message, error) {
+		created := m
 		if checkMembership {
 			var n int
 			if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.room_id=? AND m.user_id=? AND u.status=0", room, user).Scan(&n); err != nil {
-				return err
+				return created, err
 			}
 			if n != 1 {
-				return ErrForbidden
+				return created, ErrForbidden
 			}
 		}
-		if err := tx.QueryRowContext(ctx, "SELECT name FROM users WHERE id=?", user).Scan(&m.Creator); err != nil {
-			return err
+		if err := tx.QueryRowContext(ctx, "SELECT name FROM users WHERE id=?", user).Scan(&created.Creator); err != nil {
+			return created, err
 		}
 		if staged != nil {
 			var err error
 			blob, err = staged.Insert(ctx, tx)
 			if err != nil {
-				return err
+				return created, err
 			}
 		}
 		stamp := Stamp(now)
 		r, err := tx.ExecContext(ctx, "INSERT INTO messages(client_message_id,creator_id,room_id,created_at,updated_at) VALUES (?,?,?,?,?)", client, user, room, stamp, stamp)
 		if err != nil {
-			return err
+			return created, err
 		}
-		m.ID, err = r.LastInsertId()
+		created.ID, err = r.LastInsertId()
 		if err != nil {
-			return err
+			return created, err
 		}
-		for _, q := range []struct {
-			sql  string
-			args []any
-		}{
-			{"UPDATE rooms SET updated_at=? WHERE id=?", []any{stamp, room}},
-			{"UPDATE memberships SET unread_at=?,updated_at=? WHERE room_id=? AND user_id!=? AND involvement!='invisible' AND (connected_at IS NULL OR connected_at < ?)", []any{stamp, stamp, room, user, Stamp(now.Add(-60 * time.Second))}},
-			{"INSERT INTO message_search_index(rowid,body) VALUES (?,?)", []any{m.ID, plain}},
-		} {
-			if _, err = tx.ExecContext(ctx, q.sql, q.args...); err != nil {
-				return err
-			}
+		if _, err = tx.ExecContext(ctx, "UPDATE rooms SET updated_at=? WHERE id=?", stamp, room); err != nil {
+			return created, err
 		}
 		if body != nil {
-			if _, err = tx.ExecContext(ctx, "INSERT INTO action_text_rich_texts(name,record_type,record_id,body,created_at,updated_at) VALUES ('body','Message',?,?,?,?)", m.ID, *body, stamp, stamp); err != nil {
-				return err
+			if _, err = tx.ExecContext(ctx, "INSERT INTO action_text_rich_texts(name,record_type,record_id,body,created_at,updated_at) VALUES ('body','Message',?,?,?,?)", created.ID, *body, stamp, stamp); err != nil {
+				return created, err
 			}
 		}
 		if blob != 0 {
-			if _, err = tx.ExecContext(ctx, "INSERT INTO active_storage_attachments(blob_id,record_type,record_id,name,created_at) VALUES (?,'Message',?,'attachment',?)", blob, m.ID, stamp); err != nil {
-				return err
+			if _, err = tx.ExecContext(ctx, "INSERT INTO active_storage_attachments(blob_id,record_type,record_id,name,created_at) VALUES (?,'Message',?,'attachment',?)", blob, created.ID, stamp); err != nil {
+				return created, err
 			}
 		}
-		return nil
-	})
-	if err == nil && staged != nil {
+		return created, nil
+	}
+	if d.writer == nil {
+		err := d.Transaction(ctx, func(tx *sql.Tx) error {
+			var err error
+			if m, err = run(tx); err != nil {
+				return err
+			}
+			stamp := Stamp(now)
+			for _, q := range []struct {
+				sql  string
+				args []any
+			}{
+				{"UPDATE memberships SET unread_at=?,updated_at=? WHERE room_id=? AND user_id!=? AND involvement!='invisible' AND (connected_at IS NULL OR connected_at < ?)", []any{stamp, stamp, room, user, Stamp(now.Add(-60 * time.Second))}},
+				{"INSERT INTO message_search_index(rowid,body) VALUES (?,?)", []any{m.ID, plain}},
+			} {
+				if _, err = tx.ExecContext(ctx, q.sql, q.args...); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err == nil && staged != nil {
+			staged.Keep()
+		}
+		return m, err
+	}
+	// Queued path: group commit. The writer commits the batch transaction
+	// before any job's caller resumes, so the response is never sent ahead of
+	// the message's persistence. The search row and the unread bump run here,
+	// after the shared commit, on a context that survives the request
+	// disconnecting mid-write (the Rust after_commit hooks and Rails'
+	// after_commit callbacks are not request-cancellable either); their error
+	// is reported to the caller the way Rails raises from the save that
+	// committed.
+	job := &messageJob{
+		ctx: ctx,
+		run: run,
+		after: func(ctx context.Context, created Message) error {
+			stamp := Stamp(now)
+			for _, q := range []struct {
+				sql  string
+				args []any
+			}{
+				{"INSERT INTO message_search_index(rowid,body) VALUES (?,?)", []any{created.ID, plain}},
+				{"UPDATE memberships SET unread_at=?,updated_at=? WHERE room_id=? AND user_id!=? AND involvement!='invisible' AND (connected_at IS NULL OR connected_at < ?)", []any{stamp, stamp, room, user, Stamp(now.Add(-60 * time.Second))}},
+			} {
+				if _, err := d.Write.ExecContext(ctx, q.sql, q.args...); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		done: make(chan messageResult, 1),
+	}
+	if err := d.writer.submit(job); err != nil {
+		return Message{}, err
+	}
+	result := <-job.done
+	if result.err != nil {
+		return Message{}, result.err
+	}
+	if staged != nil {
 		staged.Keep()
 	}
-	return m, err
+	afterCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := job.after(afterCtx, result.message); err != nil {
+		return result.message, err
+	}
+	return result.message, nil
 }
 func (d *DB) Search(ctx context.Context, user int64, query string) ([]Message, error) {
 	words := strings.Fields(SearchQuery(query))
