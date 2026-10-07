@@ -246,6 +246,70 @@ func (w *response) finish() {
 	}
 }
 
+// nowDate returns the RFC 1123 formatted current time, formatted at most
+// once per second per connection (ENGINE-49): the bytes are identical to a
+// per-response format within the same second, and the value aliases the
+// per-connection date scratch for the request's synchronous emission.
+func (c *conn) nowDate(now time.Time) []byte {
+	if now.Unix() != c.dateSecond {
+		c.dateSecond = now.Unix()
+		c.dateLine = now.UTC().AppendFormat(c.dateScratch[:0], http.TimeFormat)
+	}
+	return c.dateLine
+}
+
+// WritePrecomposed implements the web layer's precomposed-framing seam
+// (internal/web/framing.go, ENGINE-49): the application hands the loop a
+// fully formed recorded response — status, the header block in the map path's
+// exact sorted order (Content-Length included), and the body parts — and the
+// loop emits status line, Date and block itself, skipping the header-map
+// composition entirely. The emitted bytes are identical to the map path's
+// composeHead output (status + sorted headers + Date extra + CRLF), which the
+// web layer's byte-parity tests pin. The receiver is safe only for responses
+// the handler has fully finished (never streaming): the body length is
+// declared from the parts, written is set to match, and the response is never
+// chunked on this path.
+func (w *response) WritePrecomposed(status int, head []byte, body [][]byte) error {
+	if w.wroteHeader {
+		return nil
+	}
+	w.wroteHeader = true
+	w.cw.wroteHeader = true
+	w.status = status
+	total := 0
+	for _, part := range body {
+		total += len(part)
+	}
+	w.contentLength = int64(total)
+	w.written = int64(total)
+	c := w.c
+	h := c.headBuf[:0]
+	h = append(h, w.statusLine(status)...)
+	h = append(h, head...)
+	h = append(h, "Date: "...)
+	h = append(h, c.nowDate(time.Now())...)
+	// Mirror the map path's close decision: a request that asked for
+	// Connection: close (or wants the connection closed) gets the close
+	// header in the same extras position (after Date).
+	closeConn := w.wantsClose || w.req.Header.Get("Connection") == "close"
+	if closeConn {
+		w.closeAfterReply = true
+		h = append(h, '\r', '\n')
+		h = append(h, "Connection: close"...)
+		h = append(h, '\r', '\n')
+	}
+	h = append(h, '\r', '\n') // the blank line ending the head
+	c.emit(h)
+	if w.req.Method != "HEAD" {
+		for _, part := range body {
+			if len(part) > 0 {
+				c.emit(part)
+			}
+		}
+	}
+	return c.flushOut()
+}
+
 // writeBody emits one body segment. The header block is composed on the
 // first emission, carrying the first body bytes (sniffing, auto Content-
 // Length decisions).
@@ -376,7 +440,7 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 		}
 	}
 	if !headerHas(header, "Date") {
-		set.date = time.Now().UTC().AppendFormat(w.c.dateScratch[:0], http.TimeFormat)
+		set.date = w.c.nowDate(time.Now())
 	}
 
 	// The framing decision, mirroring net/http's TE/CL table.
@@ -423,9 +487,39 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 	w.c.emit(w.c.composeHead(w.statusLine(code), header, exclude, &set))
 }
 
+// statusLineCache holds pre-rendered status lines for HTTP/1.0 and HTTP/1.1
+// (ENGINE-49): the same bytes the per-response formatter produced, formatted
+// once at init so a warm response does no AppendInt work. Only codes with
+// a standard StatusText are pre-rendered; unknown codes keep the
+// per-response fallback in statusLine.
+var statusLineCache [2][600][]byte
+
+func init() {
+	for code := 100; code < 600; code++ {
+		if text := http.StatusText(code); text != "" {
+			statusLineCache[0][code] = []byte("HTTP/1.0 " + strconv.Itoa(code) + " " + text + "\r\n")
+			statusLineCache[1][code] = []byte("HTTP/1.1 " + strconv.Itoa(code) + " " + text + "\r\n")
+		}
+	}
+}
+
 // statusLine renders "HTTP/1.1 200 OK\r\n" (or HTTP/1.0), mirroring
-// net/http's writeStatusLine including the unknown-code spelling.
+// net/http's writeStatusLine including the unknown-code spelling. Standard
+// codes come from the static cache; the fallback keeps the scratch formatter
+// for the codes StatusText does not name.
 func (w *response) statusLine(code int) []byte {
+	if code >= 100 && code < 600 {
+		proto11 := protoAtLeast(w.req.ProtoMajor, w.req.ProtoMinor, 1, 1)
+		var line []byte
+		if proto11 {
+			line = statusLineCache[1][code]
+		} else {
+			line = statusLineCache[0][code]
+		}
+		if line != nil {
+			return line
+		}
+	}
 	s := w.c.statusScratch[:0]
 	if protoAtLeast(w.req.ProtoMajor, w.req.ProtoMinor, 1, 1) {
 		s = append(s, "HTTP/1.1 "...)

@@ -228,7 +228,7 @@ func (s *Server) searchResults(c *fastdb.Conn, ctx context.Context, user int64, 
 func (s *Server) roomData(r *http.Request, u database.User) (room database.Room, messages []database.Message, view sidebarRoom, invitation bool, err error) {
 	c, release := s.fastConn(r)
 	defer release()
-	room, err = s.roomRow(c, r.Context(), u.ID, roomID(r))
+	room, err = s.roomRowCached(c, r.Context(), u.ID, roomID(r))
 	if err != nil {
 		return
 	}
@@ -244,7 +244,7 @@ func (s *Server) roomData(r *http.Request, u database.User) (room database.Room,
 	if err != nil {
 		return
 	}
-	invitation, err = s.invitation(c, r.Context(), room.ID)
+	invitation, err = s.invitationCached(c, r.Context(), room.ID)
 	return
 }
 
@@ -257,7 +257,7 @@ func (s *Server) messageData(r *http.Request, u database.User) (messages []datab
 	c, release := s.fastConn(r)
 	defer release()
 	var room database.Room
-	if room, err = s.roomRow(c, r.Context(), u.ID, roomID(r)); err != nil {
+	if room, err = s.roomRowCached(c, r.Context(), u.ID, roomID(r)); err != nil {
 		return
 	}
 	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)

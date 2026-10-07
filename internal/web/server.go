@@ -76,6 +76,33 @@ type Server struct {
 	// under content-versioned keys, sized by CAMPFIRE_RECORDED_CACHE_MB.
 	pieces         *piececache.Cache
 	recordedPieces bool
+	// zstdPieces enables the zstd member variant of cached pieces
+	// (ENGINE-50, CAMPFIRE_RECORDED_ZSTD=off disables it): fills also store a
+	// complete zstd frame per piece and zstd-accepting clients are served the
+	// smaller multi-frame body.
+	zstdPieces bool
+	// precomposed enables the ENGINE-49 precomposed-framing path
+	// (CAMPFIRE_PRECOMPOSED_FRAMING=off disables it): recorded responses are
+	// emitted as one precomputed head block plus body parts, skipping the
+	// http.Header map and per-request header strings.
+	precomposed bool
+	// arenaOn enables the ENGINE-48 per-request arena
+	// (CAMPFIRE_REQUEST_ARENA=off disables it): response buffers, parts and
+	// the precomposed head and body come from the request's reclaimed block.
+	arenaOn bool
+	// xVersion and xRev are the process-constant header values captured at
+	// startup, so the precomposed head block can embed them without a
+	// per-request env lookup.
+	xVersion, xRev string
+	// readCache holds the ENGINE-43/44 read caches: room+membership rows,
+	// the account row, the invitation probe and the original-room fallback,
+	// keyed by the version counters they depend on
+	// (CAMPFIRE_READ_CACHE=off leaves it nil and every lookup misses).
+	readCache *readCache
+	// logoVersion counts account-logo detachments (DELETE /account/logo),
+	// the one account-visible write that touches neither the accounts row
+	// nor any sidebar-visible table, so the account read cache keys on it.
+	logoVersion atomic.Int64
 	// searchCache stores search pages keyed by (user, query, corpus,
 	// membership versions) so hits skip Search, Rooms and RecentSearches
 	// (CAMPFIRE_SEARCH_CACHE=off leaves it nil and the handler keeps the
@@ -270,7 +297,68 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 		authCache = newVerifiedCookieCache()
 	}
 	slog.Info("auth fast path", "enabled", authFast)
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), refsCache: newMessageRefsCache(refsMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, searchCache: searchCache, fastdb: openFastPool(dbPath), fastRender: renderer, authFast: authFast, authCache: authCache, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	// CAMPFIRE_RECORDED_GZIP_LEVEL (ENGINE-50): the gzip level cached members
+	// are compressed at on fill, 9 by default; 6 is the pre-engine level and
+	// the A/B switch. Compression happens once per piece, so the level is
+	// never on the request path.
+	gzipLevel := 9
+	if raw, ok := os.LookupEnv("CAMPFIRE_RECORDED_GZIP_LEVEL"); ok {
+		level, err := strconv.Atoi(raw)
+		if err != nil || level < 1 || level > 9 {
+			slog.Warn("invalid CAMPFIRE_RECORDED_GZIP_LEVEL; keeping level 9", "value", raw)
+		} else {
+			gzipLevel = level
+		}
+	}
+	setRecordedGzipFillLevel(gzipLevel)
+	slog.Info("recorded gzip fill level", "level", gzipLevel)
+	// CAMPFIRE_RECORDED_ZSTD turns the zstd member variant on (default) or
+	// off; off serves gzip-only, byte-identical to the pre-engine encoding
+	// negotiation.
+	zstdPieces := true
+	if raw, ok := os.LookupEnv("CAMPFIRE_RECORDED_ZSTD"); ok {
+		var valid bool
+		zstdPieces, valid = parseRecordedPieces(raw)
+		if !valid {
+			slog.Warn("invalid CAMPFIRE_RECORDED_ZSTD; keeping zstd on", "value", raw)
+		}
+	}
+	slog.Info("recorded zstd members", "enabled", zstdPieces)
+	// CAMPFIRE_PRECOMPOSED_FRAMING turns the ENGINE-49 head/date framing on
+	// (default) or off; off is the http.Header map path, byte-identical.
+	precomposed := true
+	if raw, ok := os.LookupEnv("CAMPFIRE_PRECOMPOSED_FRAMING"); ok {
+		var valid bool
+		precomposed, valid = parseRecordedPieces(raw)
+		if !valid {
+			slog.Warn("invalid CAMPFIRE_PRECOMPOSED_FRAMING; keeping framing on", "value", raw)
+		}
+	}
+	slog.Info("recorded precomposed framing", "enabled", precomposed)
+	// CAMPFIRE_REQUEST_ARENA turns the ENGINE-48 per-request arena on
+	// (default) or off; off keeps the pooled/fresh allocations, byte-identical.
+	arenaOn := true
+	if raw, ok := os.LookupEnv("CAMPFIRE_REQUEST_ARENA"); ok {
+		var valid bool
+		arenaOn, valid = parseRecordedPieces(raw)
+		if !valid {
+			slog.Warn("invalid CAMPFIRE_REQUEST_ARENA; keeping arena on", "value", raw)
+		}
+	}
+	slog.Info("request arena", "enabled", arenaOn)
+	// CAMPFIRE_READ_CACHE turns the ENGINE-43/44 read caches on (default) or
+	// off; off is the uncached fastdb/database/sql reads, byte-identical.
+	readCache := newReadCache(8 << 20)
+	if raw, ok := os.LookupEnv("CAMPFIRE_READ_CACHE"); ok {
+		var valid bool
+		enabled, valid := parseRecordedPieces(raw)
+		if !valid {
+			slog.Warn("invalid CAMPFIRE_READ_CACHE; keeping read cache on", "value", raw)
+		} else if !enabled {
+			readCache = nil
+		}
+	}
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), refsCache: newMessageRefsCache(refsMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, zstdPieces: zstdPieces, precomposed: precomposed, arenaOn: arenaOn, xVersion: appVersion(), xRev: revision(), readCache: readCache, searchCache: searchCache, fastdb: openFastPool(dbPath), fastRender: renderer, authFast: authFast, authCache: authCache, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -317,11 +405,31 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path != "/cable" && !strings.HasPrefix(r.URL.Path, "/rails/active_storage/") {
-		buffered := &responseBuffer{ResponseWriter: w}
+		// ENGINE-48: the response buffer, its parts and the precomposed head
+		// and body come from one per-request reclaimed block (reset, not
+		// freed). The buffer struct itself is pooled; finish runs first, the
+		// buffer is returned to its pool, and the block is released last, so
+		// no carve is read after release.
+		var arena *requestArena
+		if s.arenaOn {
+			arena = borrowRequestArena()
+		}
+		defer releaseRequestArena(arena)
+		buffered := borrowResponseBuffer(w, arena)
+		// ENGINE-49 writer gate: when the chain ends in a writer that takes
+		// precomposed responses and the flags are on, the fixed security and
+		// recorded headers skip the http.Header map entirely (they live in
+		// the head block); a request that later falls back to the map path
+		// restores them from the captured process constants.
+		buffered.framed = s.precomposed && s.arenaOn && findPrecomposedReceiver(w) != nil
 		w = buffered
+		defer releaseResponseBuffer(buffered)
 		defer func() { buffered.finish(r) }()
 	}
 	w, r = s.withBrowserSession(w, r)
+	state := browserState(r)
+	defer releaseBrowserSession(state)
+	defer releaseSessionWriter(w.(*sessionWriter))
 	defer func() {
 		if sw := w.(*sessionWriter); !sw.written {
 			sw.WriteHeader(200)
@@ -332,18 +440,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !strings.HasPrefix(r.URL.Path, "/rails/active_storage/") {
-		w.Header().Set("X-Version", appVersion())
-		revision := os.Getenv("GIT_REVISION")
-		if revision == "" {
-			revision = "0"
+		// The process-constant version headers are the one ServeHTTP header
+		// pair that varies by env at startup; a framed request carries them
+		// in the head block instead of the map.
+		if buffered, ok := w.(*responseBuffer); !ok || !buffered.framed {
+			w.Header().Set("X-Version", s.xVersion)
+			w.Header().Set("X-Rev", s.xRev)
 		}
-		w.Header().Set("X-Rev", revision)
 	}
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
-	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-	w.Header().Set("X-XSS-Protection", "0")
-	w.Header().Set("X-Permitted-Cross-Domain-Policies", "none")
+	if buffered, ok := w.(*responseBuffer); !ok || !buffered.framed {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("X-XSS-Protection", "0")
+		w.Header().Set("X-Permitted-Cross-Domain-Policies", "none")
+	}
 	if r.Method != "GET" && r.Method != "HEAD" && !strings.HasPrefix(r.URL.Path, "/rails/active_storage/") {
 		banned, err := s.DB.BannedIP(r.Context(), remoteIP(r))
 		if err != nil {
@@ -461,7 +572,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	if name != "incompatible-browser" && respondFormat(w, r, "html") == "" {
 		return
 	}
-	a, err := s.DB.Account(r.Context())
+	a, err := s.accountCached(r.Context())
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.fail(w, err)
 		return
@@ -517,7 +628,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	}
 	var recorded *recordedPayload
 	var raw []database.Message
-	gzipped := false
+	encoding := "identity"
 	if len(p.Messages) > 0 {
 		raw = make([]database.Message, len(p.Messages))
 		for i, m := range p.Messages {
@@ -526,8 +637,8 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 		if name == "room" || name == "messages" || name == "search" {
 			// One negotiation per request: recordedMessageList needs it for
 			// storage, writeRecordedPieces for the response form.
-			gzipped = clientAcceptsGzip(r)
-			payload, listErr := s.recordedMessageList(r.Context(), raw, s.recordedPieces && gzipped)
+			encoding = s.clientEncoding(r)
+			payload, listErr := s.recordedMessageList(r.Context(), raw, encoding == "gzip", s.zstdPieces && encoding == "zstd")
 			if listErr != nil {
 				s.fail(w, listErr)
 				return
@@ -553,8 +664,12 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 		p.ReturnRoom, _ = s.lastRoom(r, p.User.ID)
 	}
 	if s.recordedPieces && recorded != nil {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		handled, renderErr := s.writeRecordedPieces(w, r, status, name, p, *recorded, gzipped)
+		// A framed request carries Content-Type in the head block; the map
+		// path needs it set here as always.
+		if buffered := findResponseBuffer(w); buffered == nil || !buffered.framed {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		}
+		handled, renderErr := s.writeRecordedPieces(w, r, status, name, p, *recorded, encoding)
 		if renderErr != nil {
 			s.fail(w, renderErr)
 			return
@@ -842,7 +957,7 @@ func (s *Server) lastRoom(r *http.Request, user int64) (int64, error) {
 			}
 		}
 	}
-	return s.DB.OriginalRoom(r.Context(), user)
+	return s.originalRoomCached(r.Context(), user)
 }
 func (s *Server) home(w http.ResponseWriter, r *http.Request, u database.User) {
 	id, err := s.lastRoom(r, u.ID)
@@ -1099,4 +1214,13 @@ func appVersion() string {
 		}
 	}
 	return "Go"
+}
+
+// revision is the X-Rev header value, captured once at startup so the
+// precomposed head block can embed it.
+func revision() string {
+	if value := os.Getenv("GIT_REVISION"); value != "" {
+		return value
+	}
+	return "0"
 }
