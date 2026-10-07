@@ -539,3 +539,30 @@ Correctness on this tree: `bin/check` green, browser workflows PASS,
 178/178 applicable screen pixels+a11y, Go↔Rust interop PASS,
 native run 463,937 writes verified in messages+FTS, 0 delivery failures.
 Raw: `../once-campfire-elixir/bench/results/FINAL3-official-20261007/`.
+
+## FINAL4 official acceptance (2026-10-07, public loop + cable wake path)
+
+Elixir harness, production images, 3 rotating reps, c=16 medians, zero HTTP
+errors. Go image `once-campfire-go:final4` (engine `cfdc2e4`; ENGINE-61 cable
+wake path + ENGINE-62 public-loop/replay lane). Rust and Rails on this machine.
+
+| Route c=16 | Rails | Go final4 | Rust | Go vs Rust | CPU/req |
+|---|---:|---:|---:|---:|---:|
+| room_show | 195 | 86,262 | 36,370 | **2.37×** | 43.2 vs 105 µs |
+| messages_page | 414 | 93,404 | 41,553 | **2.25×** | 39.5 vs 90.9 |
+| sidebar | 517 | 55,014 | 35,028 | **1.57×** | 68.1 vs 109 µs |
+| search | 371 | 117,661 | 34,575 | **3.40×** | 31.5 vs 96.6 µs |
+| post_message | 253 | 8,391 | 6,766 | **1.24×** | 299 vs 381 µs |
+| up | 4,151 | 424,345 | 245,305 | **1.73×** | 7.2 vs 15 µs |
+| static_css | 134,939 | 422,232 | 383,734 | **1.10×** | 7.35 vs 7.82 µs |
+| avatar | 97,894 | 377,043 | 382,537 | 0.99× (parity) | 8.35 vs 7.96 µs |
+
+Cable sustained: 100 clients **5,343 vs 4,085 (1.31×)**; 500 clients
+1,121 vs 1,123 (parity 0.998×); 1,000 clients **548 vs 544 (1.007×)**.
+
+Every published row ahead (1.24×–3.40×); cable ahead at 100 and 1000, parity
+at 500; assets at parity or ahead except avatar at 0.99× (one noisy rep in
+the min range; medians within spread). Correctness on `cfdc2e4`: bin/check
+EXIT 0, browser PASS, 178/178 screen pixels+a11y, interop PASS, native run
+463k writes verified, zero delivery failures. Raw:
+`../once-campfire-elixir/bench/results/FINAL4-official-20261007/`.
