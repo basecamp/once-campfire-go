@@ -123,8 +123,8 @@ func (w *recordResponse) WriteHeader(status int) {
 	w.ttl = lifetime(status, w.Header())
 	if w.ttl > 0 {
 		w.Header().Del("Set-Cookie")
+		w.header = w.Header().Clone()
 	}
-	w.header = w.Header().Clone()
 	w.ResponseWriter.WriteHeader(status)
 }
 func (w *recordResponse) Write(b []byte) (int, error) {

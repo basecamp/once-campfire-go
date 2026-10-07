@@ -17,10 +17,11 @@ import (
 )
 
 type Hub struct {
-	db      *database.DB
-	secrets *rails.Secrets
-	mu      sync.RWMutex
-	clients map[*client]struct{}
+	db          *database.DB
+	secrets     *rails.Secrets
+	mu          sync.RWMutex
+	clients     map[*client]struct{}
+	subscribers map[publication][]recipient
 }
 type client struct {
 	disconnect    chan bool
@@ -32,14 +33,77 @@ type client struct {
 }
 
 type subscription struct {
-	Channel string
-	Room    int64
-	Stream  string
-	Present bool
+	Channel  string
+	Room     int64
+	Stream   string
+	Present  bool
+	position int
 }
 
+type publication struct {
+	room   int64
+	stream string
+}
+type recipient struct {
+	client     *client
+	identifier string
+	room       int64
+}
+
+func destination(sub subscription) publication {
+	if sub.Channel == "RoomMessagesChannel" {
+		return publication{room: sub.Room}
+	}
+	return publication{stream: sub.Stream}
+}
 func New(db *database.DB, secrets *rails.Secrets) *Hub {
-	return &Hub{db: db, secrets: secrets, clients: map[*client]struct{}{}}
+	return &Hub{db: db, secrets: secrets, clients: map[*client]struct{}{}, subscribers: make(map[publication][]recipient)}
+}
+
+// Subscription state and its routing index have one owner under h.mu. The index
+// only selects candidates; session and membership checks remain publication-local.
+func (h *Hub) setSubscription(c *client, identifier string, sub subscription) {
+	if old, exists := c.subscriptions[identifier]; exists {
+		if destination(old) == destination(sub) && old.Room == sub.Room {
+			sub.position = old.position
+			c.subscriptions[identifier] = sub
+			return
+		}
+		h.unindex(old)
+	}
+	key := destination(sub)
+	sub.position = -1
+	if key != (publication{}) {
+		bucket := h.subscribers[key]
+		sub.position = len(bucket)
+		h.subscribers[key] = append(bucket, recipient{c, identifier, sub.Room})
+	}
+	c.subscriptions[identifier] = sub
+}
+
+// Dense routing buckets make publication a contiguous O(recipients) copy;
+// each subscription's inverse position makes removal O(1) by swapping the tail.
+func (h *Hub) unindex(sub subscription) {
+	key := destination(sub)
+	if key == (publication{}) {
+		return
+	}
+	bucket := h.subscribers[key]
+	last := len(bucket) - 1
+	moved := bucket[last]
+	bucket[sub.position] = moved
+	bucket[last] = recipient{} // Do not retain disconnected sockets in spare capacity.
+	bucket = bucket[:last]
+	if sub.position != last {
+		other := moved.client.subscriptions[moved.identifier]
+		other.position = sub.position
+		moved.client.subscriptions[moved.identifier] = other
+	}
+	if len(bucket) == 0 {
+		delete(h.subscribers, key)
+	} else {
+		h.subscribers[key] = bucket
+	}
 }
 func (c *client) send(value any) bool {
 	data, err := json.Marshal(value)
@@ -78,6 +142,9 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 		h.mu.Lock()
 		delete(h.clients, c)
 		subs := c.subscriptions
+		for identifier := range subs {
+			h.unindex(subs[identifier])
+		}
 		h.mu.Unlock()
 		for _, sub := range subs {
 			if sub.Present {
@@ -154,7 +221,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 				if valid {
 					h.mu.Lock()
 					if !exists {
-						c.subscriptions[command.Identifier] = sub
+						h.setSubscription(c, command.Identifier, sub)
 					}
 					h.mu.Unlock()
 					c.send(map[string]string{"type": "confirm_subscription", "identifier": command.Identifier})
@@ -168,6 +235,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 		case "unsubscribe":
 			h.mu.Lock()
 			sub := c.subscriptions[command.Identifier]
+			h.unindex(sub)
 			delete(c.subscriptions, command.Identifier)
 			h.mu.Unlock()
 			if sub.Present {
@@ -211,7 +279,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 				if h.db.Presence(ctx, c.user.ID, sub.Room, action) == nil {
 					sub.Present = action != "absent"
 					h.mu.Lock()
-					c.subscriptions[command.Identifier] = sub
+					h.setSubscription(c, command.Identifier, sub)
 					h.mu.Unlock()
 					if payload.Action == "present" {
 						h.PublishStream(ctx, fmt.Sprintf("user_%d_reads", c.user.ID), map[string]any{"room_id": sub.Room})
@@ -245,25 +313,16 @@ func (h *Hub) Close() {
 	}
 }
 func (h *Hub) Publish(ctx context.Context, room int64, markup string) {
-	h.publish(ctx, room, "", markup)
+	h.publish(ctx, publication{room: room}, markup)
 }
 func (h *Hub) PublishStream(ctx context.Context, name string, message any) {
-	h.publish(ctx, 0, name, message)
+	h.publish(ctx, publication{stream: name}, message)
 }
-func (h *Hub) publish(ctx context.Context, room int64, name string, message any) {
-	type recipient struct {
-		client     *client
-		identifier string
-		room       int64
-	}
+func (h *Hub) publish(ctx context.Context, key publication, message any) {
 	var recipients []recipient
 	h.mu.RLock()
-	for c := range h.clients {
-		for identifier, sub := range c.subscriptions {
-			if room != 0 && sub.Room == room && sub.Channel == "RoomMessagesChannel" || name != "" && sub.Stream == name {
-				recipients = append(recipients, recipient{c, identifier, sub.Room})
-			}
-		}
+	if bucket := h.subscribers[key]; key != (publication{}) && len(bucket) != 0 {
+		recipients = append([]recipient(nil), bucket...)
 	}
 	h.mu.RUnlock()
 	// Recheck every publication; batch distinct sessions rather than trusting a

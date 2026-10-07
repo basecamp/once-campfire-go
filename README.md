@@ -99,7 +99,25 @@ Container verification exercises setup, a live SQLite backup, offline restore, a
 
 ## Benchmarks
 
-Measured with 16 concurrent clients on an AMD Ryzen AI MAX+ 395,
+The [matched competing-PR comparison](bench/results/pr-comparison-20261007/README.md) measures
+PRs #2/#4/#5/#6/#7/#8, this implementation and pinned Rust on the same ARM64 Linux VM.
+It separates saturated capacity from scheduled-arrival latency at equal offered request rates.
+The guarded template-derived renderer roughly doubles fragment-disabled read capacity versus
+our preceding optimized build and improves posts; complete Go response bytes remain unchanged.
+Warm reads and Cable are mixed, with regressions disclosed. Workload-matched core and paced
+1,000-client Cable memory stay roughly unchanged. Rust still leads these VM read/write workloads,
+and matched-rate tails include material generator/VM scheduling delays. No universal parity or
+language-wide speedup is claimed; native Intel and published AMD results are separate populations.
+
+Use `--listener public --gzip 1` for the public compressed listener and
+`--fragment-cache-mb 0` to disable fragment retention. For fixed offered rates, build
+`go build -o httprate ./bench/httprate` and pass
+`--rate-loadgen ./httprate --http-rates 1000 --concurrency 16` to `bench/application`.
+Choose a rate each application can sustain and inspect queueing, generator lateness, errors and
+drain time. The report retains exact source/build identities, raw samples, validation and limits.
+Full historical trial logs remain in the linked fork archive rather than being copied here.
+
+The historical published baseline below predates these changes. It was measured with 16 concurrent clients on an AMD Ryzen AI MAX+ 395,
 with four hardware threads allocated to each app.
 
 | HTTP workload (requests/sec) | Rails | [Django](https://github.com/basecamp/once-campfire-django) | [Laravel](https://github.com/basecamp/once-campfire-laravel) | [Express](https://github.com/basecamp/once-campfire-express) | [Elixir](https://github.com/basecamp/once-campfire-elixir) | [Go](https://github.com/basecamp/once-campfire-go) | [Rust](https://github.com/basecamp/once-campfire-rust) |
@@ -119,6 +137,9 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
   therefore still fail in many inventory cells, even when screenshots, accessibility and workflows
   match. These failures remain visible in the validation report. Exact protocol parity for malformed
   parameters and every content-negotiation edge case is not claimed.
+- `GET /users/me/sidebar` returns a bare sidebar frame, while the reference wraps a full layout.
+  Room-ID equality does not establish equal rendering work; cross-port sidebar timing is excluded
+  from the new comparison.
 - WebSockets share serialized and compressed broadcast payloads through a small extension to
   coder/websocket v1.8.15 (see `third_party/websocket/README.campfire`). Outgoing queues hold 256
   frames; slow clients are disconnected. Authorization is checked afresh for each publication,
@@ -128,9 +149,12 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 - The response cache uses least-recently-used eviction instead of Rust's sampled eviction. The Go
   message-fragment cache is also independently implemented. It retains versioned message lists
   and sidebar HTML; current membership and permission data are read before cache lookup.
-  Room pages also cache their surrounding HTML keyed by fresh page data, inserting the current
-  messages and refresh timestamp on every request. Responses assemble cached message bytes with fresh page HTML and derive validators from part
-  lengths and hashes, so ETag values differ from both the original Go implementation and Rust.
+  Room pages also cache their surrounding HTML keyed by fresh page data, inserting freshly selected
+  messages and their queried refresh cursor. Search layouts similarly surround a captured immutable
+  result body; misses rerun the scoped full query. Complete GET gzip representations have a bounded
+  memo keyed by immutable part identities, not by wire ETags. Authorization, sessions and request
+  observations stay fresh. Responses derive validators from part lengths and hashes, so ETag values
+  differ from both the original Go implementation and Rust.
 - The default version label and fallback VAPID subject identify `once-campfire-go`. Explicit version,
   VAPID keys and subject settings remain supported.
 - Native host media output can differ with installed library versions. All byte-golden media tests

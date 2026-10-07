@@ -23,7 +23,7 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/integrations"
 	"github.com/basecamp/once-campfire-go/internal/jobs"
 	"github.com/basecamp/once-campfire-go/internal/rails"
-	"github.com/basecamp/once-campfire-go/internal/richtext"
+	"github.com/basecamp/once-campfire-go/internal/responsebody"
 	"github.com/basecamp/once-campfire-go/internal/storage"
 	"github.com/basecamp/once-campfire-go/internal/useragent"
 	"golang.org/x/crypto/bcrypt"
@@ -33,21 +33,22 @@ const HealthBody = `<!DOCTYPE html><html><body style="background-color: green"><
 const MaxBody = 16 << 20
 
 type Server struct {
-	fragments  *fragmentCache
-	Webhooks   *integrations.WebhookClient
-	Jobs       *jobs.Runner
-	Push       *integrations.PushSender
-	Unfurler   *integrations.Unfurler
-	Storage    *storage.Store
-	Cable      *cable.Hub
-	DB         *database.DB
-	Secrets    *rails.Secrets
-	Secure     bool
-	mux        *router
-	templates  *template.Template
-	attemptsMu sync.Mutex
-	attempts   map[string]attempt
-	dummyHash  []byte
+	fragments      *fragmentCache
+	Webhooks       *integrations.WebhookClient
+	Jobs           *jobs.Runner
+	Push           *integrations.PushSender
+	Unfurler       *integrations.Unfurler
+	Storage        *storage.Store
+	Cable          *cable.Hub
+	DB             *database.DB
+	Secrets        *rails.Secrets
+	Secure         bool
+	mux            *router
+	templates      *template.Template
+	messageLayouts messageLayouts
+	attemptsMu     sync.Mutex
+	attempts       map[string]attempt
+	dummyHash      []byte
 }
 type attempt struct {
 	Count int
@@ -62,6 +63,10 @@ type botView struct {
 	Rooms []database.Room
 }
 type page struct {
+	// Controller input: records or an already prepared immutable message list.
+	messageRecords []database.Message
+	messageBody    *responsebody.Part
+
 	MessagesHTML                 template.HTML
 	Version                      string
 	UserDivider                  int
@@ -108,6 +113,7 @@ type page struct {
 	Messages                     []messageView
 	Setup                        bool
 	Query                        string
+	SearchResultCount            int
 }
 type messageView struct {
 	AllEmoji                         bool
@@ -129,7 +135,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 	// Same cost-12 dummy digest as reference/crates/db/src/models/user.rs.
 	// Unknown-user login still pays bcrypt; startup need not create a new hash.
 	hash := []byte("$2a$12$FiKmSp4UhLvSB4Sd/ZUjQunyKP6.NjDRHdr5LnKUVk.BUn4Mq12WS")
-	t, err := parseTemplates(secrets)
+	t, layouts, err := parseTemplates(secrets)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +146,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 			return nil, fmt.Errorf("invalid CAMPFIRE_FRAGMENT_CACHE_MB %q", raw)
 		}
 	}
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, messageLayouts: layouts, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -181,8 +187,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 	return s, nil
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r = r.WithContext(context.WithValue(r.Context(), requestHostKey{}, r.Host))
-	r = r.WithContext(context.WithValue(r.Context(), requestOriginKey{}, s.origin(r)))
+	r = r.WithContext(context.WithValue(r.Context(), requestInfoKey{}, &requestInfo{host: r.Host, origin: s.origin(r)}))
 	if assets.Serve(w, r) {
 		return
 	}
@@ -364,13 +369,15 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	if r.Header.Get("Turbo-Frame") != "" && name != "edit-message" && name != "show-message" && name != "incompatible-browser" && name != "room-not-found" {
 		p.Frame = true
 	}
-	p.Platform = useragent.Parse(r.UserAgent()).View()
+	p.Platform = requestAgent(r).View()
 	p.Screen = name
 	p.Chat = name == "room" && p.Room.ID != 0
 	if s.Push.VAPID != nil {
 		p.VAPIDPublicKey = s.Push.VAPID.PublicKey()
 	}
-	p.LoadedAt = strconv.FormatInt(s.DB.Now().UnixMilli(), 10)
+	// Keep the refresh cursor at the room version read before the message query.
+	// A render-time clock could skip a message committed between query and render.
+	p.LoadedAt = strconv.FormatInt(p.Room.UpdatedAt.UnixMilli(), 10)
 	p.Origin = s.origin(r)
 	p.CanCreateRooms = p.User.Role == 1 || !a.RestrictRooms()
 	if p.Chat || name == "search" || name == "welcome" {
@@ -385,24 +392,17 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	if a.CustomStyles != "" {
 		p.CustomStyles = template.HTML("<style>" + a.CustomStyles + "</style>")
 	}
-	var recorded *fragmentEntry
-	if len(p.Messages) > 0 {
-		raw := make([]database.Message, len(p.Messages))
-		for i, m := range p.Messages {
-			raw[i] = m.Message
-		}
+	raw := p.messageRecords
+	p.messageRecords = nil
+	recorded := p.messageBody
+	p.messageBody = nil
+	if len(raw) > 0 {
 		if name == "room" || name == "messages" || name == "search" {
-			var entry fragmentEntry
+			var entry responsebody.Part
 			entry, err = s.messageList(r.Context(), raw)
 			recorded = &entry
-			p.MessagesHTML = template.HTML("\x00campfire-" + rand.Text() + "\x00")
 		} else {
-			p.Messages, err = s.messageViews(r.Context(), raw)
-			if err == nil && name == "edit-message" {
-				for i := range p.Messages {
-					p.Messages[i].Editable, _ = richtext.Editable(p.Messages[i].Body, s.richContext(r.Context()))
-				}
-			}
+			p.Messages, err = s.messagePageViews(r.Context(), name, raw)
 		}
 		if err != nil {
 			s.fail(w, err)
@@ -412,15 +412,24 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	if name == "search" {
 		p.ReturnRoom, _ = s.lastRoom(r, p.User.ID)
 	}
-	if name == "room" && recorded != nil {
-		shell, marker, err := s.roomShell(p)
+	if (name == "room" || (name == "search" && s.fragments.limit > 0)) && recorded != nil {
+		var parts []responsebody.Part
+		var err error
+		if name == "room" {
+			parts, err = s.roomParts(p, *recorded)
+		} else {
+			parts, err = s.searchParts(p, *recorded)
+		}
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		writeRecorded(w, status, shell, marker, *recorded)
+		writeParts(w, status, parts)
 		return
+	}
+	if recorded != nil {
+		p.MessagesHTML = template.HTML("\x00campfire-" + rand.Text() + "\x00")
 	}
 	sidebarKey := ""
 	if name == "sidebar" {
@@ -722,7 +731,7 @@ func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
 		return
 	}
 	s.rememberRoom(w, r, strconv.FormatInt(room.ID, 10))
-	s.render(w, r, "room", 200, page{Invitation: invitation, Stream: s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)), Title: room.Name, User: u, Room: room, Messages: viewMessages(messages)})
+	s.render(w, r, "room", 200, page{Invitation: invitation, Stream: s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)), Title: room.Name, User: u, Room: room, messageRecords: messages})
 }
 func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.User) {
 	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
@@ -748,7 +757,7 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.Use
 	if messageFreshness(w, r, messages) {
 		return
 	}
-	s.render(w, r, "messages", 200, page{Messages: viewMessages(messages)})
+	s.render(w, r, "messages", 200, page{messageRecords: messages})
 }
 func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u database.User) {
 	if !requireMessage(w, r) {
@@ -848,17 +857,27 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 		s.fail(w, err)
 		return
 	}
-	messages, err := s.DB.Search(r.Context(), u.ID, q)
+	p := page{Title: "Search", Query: q, User: u, RecentSearches: recent}
+	if s.fragments.limit <= 0 {
+		// With no retention, a reference lookup cannot avoid the full query.
+		p.messageRecords, err = s.DB.Search(r.Context(), u.ID, q)
+		p.SearchResultCount = len(p.messageRecords)
+	} else {
+		var refs []database.Message
+		refs, err = s.DB.SearchReferences(r.Context(), u.ID, q)
+		if err == nil {
+			var part responsebody.Part
+			part, p.SearchResultCount, err = s.searchMessageList(r.Context(), u.ID, q, refs)
+			if p.SearchResultCount > 0 {
+				p.messageBody = &part
+			}
+		}
+	}
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	rooms, err := s.DB.Rooms(r.Context(), u.ID)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Rooms: rooms, Messages: viewMessages(messages), RecentSearches: recent})
+	s.render(w, r, "search", 200, p)
 }
 
 func (s *Server) serveCable(w http.ResponseWriter, r *http.Request, u database.User) {

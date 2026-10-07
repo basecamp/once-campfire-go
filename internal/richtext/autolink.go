@@ -81,11 +81,37 @@ func sanitizeString(s string) (string, error) {
 	sanitizeDOM(n, "default")
 	return serialize(n), nil
 }
+
+// Every URL match contains :// or an ASCII-case-insensitive www. prefix.
+// Avoid regexp matching and tag indexing for ordinary message text.
+func urlCandidate(text string) bool {
+	if strings.Contains(text, "://") {
+		return true
+	}
+	for len(text) >= 4 {
+		i := strings.IndexAny(text, "wW")
+		if i < 0 || i+4 > len(text) {
+			return false
+		}
+		if strings.EqualFold(text[i:i+4], "www.") {
+			return true
+		}
+		text = text[i+1:]
+	}
+	return false
+}
 func autoLink(text string) (string, error) {
+	if !urlCandidate(text) {
+		return autoLinkEmails(text)
+	}
+	matches := urlPattern.FindAllStringIndex(text, -1)
+	if len(matches) == 0 {
+		return autoLinkEmails(text)
+	}
 	var out strings.Builder
 	last := 0
 	tags := indexTags(text)
-	for _, m := range urlPattern.FindAllStringIndex(text, -1) {
+	for _, m := range matches {
 		out.WriteString(text[last:m[0]])
 		last = m[1]
 		whole := text[m[0]:m[1]]
@@ -124,13 +150,18 @@ func autoLink(text string) (string, error) {
 		if strings.HasPrefix(strings.ToLower(destination), "www.") {
 			destination = "http://" + destination
 		}
+		same := destination == display
 		display, e := sanitizeString(display)
 		if e != nil {
 			return "", e
 		}
-		destination, e = sanitizeString(destination)
-		if e != nil {
-			return "", e
+		if same {
+			destination = display
+		} else {
+			destination, e = sanitizeString(destination)
+			if e != nil {
+				return "", e
+			}
 		}
 		out.WriteString(`<a target="_blank" href="` + strings.ReplaceAll(destination, `"`, "&quot;") + `">` + display + `</a>`)
 		for i := len(punctuation) - 1; i >= 0; i-- {
@@ -145,6 +176,9 @@ func emailLocal(c rune) bool {
 	return c < 128 && (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("_.!#$%&'*/=?^`{|}~+-", c))
 }
 func autoLinkEmails(text string) (string, error) {
+	if !strings.Contains(text, "@") {
+		return text, nil
+	}
 	var out strings.Builder
 	copied, position := 0, 0
 	tags := indexTags(text)

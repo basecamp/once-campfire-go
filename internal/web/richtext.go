@@ -15,8 +15,6 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/richtext"
 )
 
-type requestHostKey struct{}
-
 func (s *Server) mention(u database.User) richtext.Mention {
 	title := u.Name
 	if strings.TrimSpace(u.Bio) != "" {
@@ -25,7 +23,10 @@ func (s *Server) mention(u database.User) richtext.Mention {
 	return richtext.Mention{ID: u.ID, Name: u.Name, Title: title, SGID: s.Secrets.SGID(fmt.Sprintf("gid://campfire/User/%d?expires_in", u.ID), "attachable", time.Time{}), Path: fmt.Sprintf("/users/%d", u.ID), Avatar: "/users/" + s.Secrets.SignedID("User", u.ID, "avatar", time.Time{}) + "/avatar?v=" + u.UpdatedAt.UTC().Format("20060102150405")}
 }
 func (s *Server) richContext(ctx context.Context) richtext.Context {
-	host, _ := ctx.Value(requestHostKey{}).(string)
+	var host string
+	if info := requestMetadata(ctx); info != nil {
+		host = info.host
+	}
 	if name, _, err := net.SplitHostPort(host); err == nil {
 		host = name
 	}

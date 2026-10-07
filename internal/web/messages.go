@@ -59,20 +59,73 @@ func (s *Server) findMessage(r *http.Request, u database.User, administer bool) 
 }
 func (s *Server) messageViews(ctx context.Context, messages []database.Message) ([]messageView, error) {
 	views := viewMessages(messages)
+	if err := s.hydrateMessageViews(ctx, views); err != nil {
+		return nil, err
+	}
+	return views, nil
+}
+
+// Single-message forms consume different data from a displayed message. Keep
+// their reads fresh without rendering and retaining an unused message fragment.
+func (s *Server) messagePageViews(ctx context.Context, name string, records []database.Message) ([]messageView, error) {
+	if name != "edit-message" && name != "boosts-index" && name != "new-boost" {
+		return s.messageViews(ctx, records)
+	}
+	views := viewMessages(records)
+	for i := range views {
+		if name == "new-boost" {
+			continue
+		}
+		// Missing creators suppress attachment/boost presentation in the
+		// reference. This observation is required even by these narrow views.
+		_, err := s.DB.User(ctx, views[i].CreatorID)
+		missingCreator := errors.Is(err, sql.ErrNoRows)
+		if err != nil && !missingCreator {
+			return nil, err
+		}
+		switch name {
+		case "edit-message":
+			if !missingCreator {
+				if err := s.messageAttachment(ctx, &views[i]); err != nil {
+					return nil, err
+				}
+			}
+			if views[i].Attachment == nil {
+				views[i].Editable, _ = richtext.Editable(views[i].Body, s.richContext(ctx))
+			}
+		case "boosts-index":
+			if missingCreator {
+				continue
+			}
+			var err error
+			views[i].Boosts, err = s.DB.Boosts(ctx, views[i].ID)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return views, nil
+}
+
+// Hydrate only uncached views in place, sharing room/creator reads across misses.
+func (s *Server) hydrateMessageViews(ctx context.Context, views []messageView) error {
 	roomNames := map[int64]string{}
 	creators := map[int64]database.User{}
 	for i := range views {
+		if views[i].Fragment != "" {
+			continue
+		}
 		name, ok := roomNames[views[i].RoomID]
 		if !ok {
 			room, err := s.DB.FindRoom(ctx, views[i].RoomID)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			name = room.Name
 			if room.Type == "Rooms::Direct" {
 				view, err := s.displayRoom(ctx, room, database.User{})
 				if err != nil {
-					return nil, err
+					return err
 				}
 				name = view.Name
 			}
@@ -87,7 +140,7 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 				continue
 			}
 			if err != nil {
-				return nil, err
+				return err
 			}
 			creators[creator.ID] = creator
 		}
@@ -103,53 +156,62 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 		}
 		boosts, err := s.DB.Boosts(ctx, views[i].ID)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		views[i].Boosts = boosts
-		blob, err := s.Storage.Attached(ctx, "Message", views[i].ID, "attachment")
-		if err == nil {
-			views[i].Attachment = &blob
-			views[i].BlobURL = s.Storage.BlobURL(blob)
-			views[i].DownloadURL = views[i].BlobURL + "?disposition=attachment"
-			views[i].Image = storage.Variable(blob.Type())
-			if views[i].Image || storage.Previewable(blob.Type()) {
-				variation := storage.Resize(1200, 800, "")
-				if storage.Previewable(blob.Type()) {
-					variation = storage.Variation{{Key: "format", Value: storage.Symbol("webp")}, {Key: "resize_to_limit", Value: []any{int64(1200), int64(800)}}}
-				}
-				views[i].PreviewURL, err = s.Storage.RepresentationURL(blob, variation)
-				if err != nil {
-					return nil, err
-				}
-			}
-
-			views[i].HTML = template.HTML(attachmentHTML(blob, views[i].BlobURL, views[i].DownloadURL, views[i].PreviewURL))
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
+		if err := s.messageAttachment(ctx, &views[i]); err != nil {
+			return err
 		}
 		key := messageCacheKey(views[i].Message)
 		if html, ok := s.fragments.get(key); ok {
 			views[i].Fragment = html
 		} else {
-			body, err := s.markup("message-uncached", views[i])
+			body, err := s.messageMarkup(views[i])
 			if err != nil {
-				return nil, err
+				return err
 			}
 			views[i].Fragment = s.fragments.put(key, template.HTML(body))
 		}
 	}
-	return views, nil
+	return nil
 }
+func (s *Server) messageAttachment(ctx context.Context, view *messageView) error {
+	blob, err := s.Storage.Attached(ctx, "Message", view.ID, "attachment")
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	view.Attachment = &blob
+	view.BlobURL = s.Storage.BlobURL(blob)
+	view.DownloadURL = view.BlobURL + "?disposition=attachment"
+	view.Image = storage.Variable(blob.Type())
+	if view.Image || storage.Previewable(blob.Type()) {
+		variation := storage.Resize(1200, 800, "")
+		if storage.Previewable(blob.Type()) {
+			variation = storage.Variation{{Key: "format", Value: storage.Symbol("webp")}, {Key: "resize_to_limit", Value: []any{int64(1200), int64(800)}}}
+		}
+		view.PreviewURL, err = s.Storage.RepresentationURL(blob, variation)
+		if err != nil {
+			return err
+		}
+	}
+	view.HTML = template.HTML(attachmentHTML(blob, view.BlobURL, view.DownloadURL, view.PreviewURL))
+	return nil
+}
+
 func (s *Server) markup(name string, data any) (string, error) {
 	var b bytes.Buffer
 	err := s.templates.ExecuteTemplate(&b, name, data)
 	return b.String(), err
 }
 
-type requestOriginKey struct{}
-
 func messagePermalink(ctx context.Context, room, message int64) string {
-	origin, _ := ctx.Value(requestOriginKey{}).(string)
+	var origin string
+	if info := requestMetadata(ctx); info != nil {
+		origin = info.origin
+	}
 	if origin == "" {
 		origin = "http://example.org"
 	}
@@ -180,12 +242,7 @@ func (s *Server) showMessage(w http.ResponseWriter, r *http.Request, u database.
 		s.fail(w, err)
 		return
 	}
-	views, err := s.messageItems(r.Context(), []database.Message{m})
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	s.render(w, r, "show-message", 200, page{User: u, Messages: views})
+	s.render(w, r, "show-message", 200, page{User: u, messageRecords: []database.Message{m}})
 }
 func (s *Server) editMessage(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, true)
@@ -193,7 +250,7 @@ func (s *Server) editMessage(w http.ResponseWriter, r *http.Request, u database.
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "edit-message", 200, page{User: u, Messages: viewMessages([]database.Message{m})})
+	s.render(w, r, "edit-message", 200, page{User: u, messageRecords: []database.Message{m}})
 }
 func (s *Server) updateMessage(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, true)
@@ -252,12 +309,7 @@ func (s *Server) boosts(w http.ResponseWriter, r *http.Request, u database.User)
 		s.fail(w, err)
 		return
 	}
-	views, err := s.messageViews(r.Context(), []database.Message{m})
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	s.render(w, r, "boosts-index", 200, page{User: u, Messages: views})
+	s.render(w, r, "boosts-index", 200, page{User: u, messageRecords: []database.Message{m}})
 }
 func (s *Server) newBoost(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, false)
@@ -265,7 +317,7 @@ func (s *Server) newBoost(w http.ResponseWriter, r *http.Request, u database.Use
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "new-boost", 200, page{User: u, Messages: viewMessages([]database.Message{m})})
+	s.render(w, r, "new-boost", 200, page{User: u, messageRecords: []database.Message{m}})
 }
 func (s *Server) createBoost(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, false)
