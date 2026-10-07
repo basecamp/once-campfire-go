@@ -70,7 +70,7 @@ func TestSearchShellKeepsNavigationFresh(t *testing.T) {
 func TestSearchShellPreservesBytesIdentityAndOwnership(t *testing.T) {
 	app, _, _, user := testApp(t)
 	base := page{User: user, Screen: "search", Title: "Search", BodyClass: "sidebar searches", Query: "coffee & <tea>", SearchResultCount: 2, RecentSearches: []string{"coffee", "<tea>"}, ReturnRoom: 12, MessagesHTML: "<div>one &amp; two</div>"}
-	check := func(p page) []responsebody.Part {
+	check := func(t *testing.T, p page) []responsebody.Part {
 		t.Helper()
 		var expected, actual bytes.Buffer
 		if err := app.templates.ExecuteTemplate(&expected, "search", p); err != nil {
@@ -104,8 +104,20 @@ func TestSearchShellPreservesBytesIdentityAndOwnership(t *testing.T) {
 		}
 		return parts
 	}
-	first := check(base)
-	check(base)
+	first := check(t, base)
+	check(t, base)
+	t.Run("non-rendered user state reuses shell", func(t *testing.T) {
+		entries, size := len(app.fragments.entries), app.fragments.bytes
+		p := base
+		p.User.Email = "changed@example.test"
+		p.User.Password = "changed password digest"
+		p.User.BotToken = "changed bot token"
+		p.User.Status = 2
+		check(t, p)
+		if len(app.fragments.entries) != entries || app.fragments.bytes != size {
+			t.Fatal("non-rendered user state retained another copy of unchanged shell HTML")
+		}
+	})
 	changes := map[string]func(*page){
 		"query":            func(p *page) { p.Query = "other <query>" },
 		"count and body":   func(p *page) { p.SearchResultCount = 1; p.MessagesHTML = "<p>new result</p>" },
@@ -120,7 +132,7 @@ func TestSearchShellPreservesBytesIdentityAndOwnership(t *testing.T) {
 		"reload and vapid": func(p *page) { p.Reload = true; p.VAPIDPublicKey = "new-public-key" },
 	}
 	for name, change := range changes {
-		t.Run(name, func(t *testing.T) { p := base; change(&p); check(p); check(base) })
+		t.Run(name, func(t *testing.T) { p := base; change(&p); check(t, p); check(t, base) })
 	}
 	var want bytes.Buffer
 	for _, part := range first {
@@ -140,8 +152,8 @@ func TestSearchShellPreservesBytesIdentityAndOwnership(t *testing.T) {
 	}
 	for _, limit := range []int{0, 1, 32 << 20} {
 		app.fragments = newFragmentCache(limit)
-		check(base)
-		check(base)
+		check(t, base)
+		check(t, base)
 		if limit <= 1 && app.fragments.bytes != 0 {
 			t.Fatal("disabled/oversized shell was retained")
 		}

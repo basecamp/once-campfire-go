@@ -14,7 +14,7 @@ import (
 func TestRoomShellPreservesBytesAndRequestData(t *testing.T) {
 	app, _, _, user := testApp(t)
 	base := page{User: user, Room: database.Room{ID: 1, Name: "Room & <name>", Type: "Rooms::Open"}, Chat: true, Screen: "room", Origin: "https://example.test", LoadedAt: "1234567890", MessagesHTML: template.HTML("<div>message one</div>")}
-	check := func(p page) {
+	check := func(t *testing.T, p page) {
 		t.Helper()
 		var expected bytes.Buffer
 		if err := app.templates.ExecuteTemplate(&expected, "room", p); err != nil {
@@ -34,15 +34,27 @@ func TestRoomShellPreservesBytesAndRequestData(t *testing.T) {
 			t.Fatal("cached room shell differs from uncached template")
 		}
 	}
-	check(base)
-	check(base)
+	check(t, base)
+	check(t, base)
+	t.Run("non-rendered user state reuses shell", func(t *testing.T) {
+		entries, size := len(app.fragments.entries), app.fragments.bytes
+		p := base
+		p.User.Email = "changed@example.test"
+		p.User.Password = "changed password digest"
+		p.User.BotToken = "changed bot token"
+		p.User.Status = 2
+		check(t, p)
+		if len(app.fragments.entries) != entries || app.fragments.bytes != size {
+			t.Fatal("non-rendered user state retained another copy of unchanged shell HTML")
+		}
+	})
 	t.Run("room activity reuses shell", func(t *testing.T) {
 		entries, size := len(app.fragments.entries), app.fragments.bytes
 		p := base
 		p.Room.UpdatedAt = time.Unix(1700000000, 0)
 		p.LoadedAt = "1234567999"
 		p.MessagesHTML = "<p>new message</p>"
-		check(p)
+		check(t, p)
 		if len(app.fragments.entries) != entries || app.fragments.bytes != size {
 			t.Fatal("room activity retained another copy of unchanged shell HTML")
 		}
@@ -72,9 +84,9 @@ func TestRoomShellPreservesBytesAndRequestData(t *testing.T) {
 		"stream": func(p *page) { p.Stream = "new-stream" },
 	}
 	for name, change := range changes {
-		t.Run(name, func(t *testing.T) { p := base; change(&p); check(p); check(base) })
+		t.Run(name, func(t *testing.T) { p := base; change(&p); check(t, p); check(t, base) })
 	}
 	// Oversized entries bypass the bounded cache but must still render correctly.
 	app.fragments = newFragmentCache(1)
-	check(base)
+	check(t, base)
 }
