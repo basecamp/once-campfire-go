@@ -306,3 +306,58 @@ paced all-clients p50 2.16 vs 2.05 ms, sustained 3,354 vs 4,061 msgs/s (0.83×).
 151→225 MiB Go vs 119→126 MiB Rust (5–10× below Rails).
 
 Raw: `../once-campfire-elixir/bench/results/merged-official-20261007/`.
+## ENGINE-40b record (2026-10-07, versioned authorization cache and lock-free fan-out)
+
+The remaining cable gap vs Rust (def late ~14%, theirs ~22%) was the publish/delivery
+path: per-publish SQL authorization and per-recipient allocation. Shipped behind the same
+`CAMPFIRE_CABLE_FAST` gate (`off` = legacy per-publish `AuthorizedSessions` query, byte-
+identical fan-out). Three pieces:
+
+- Versioned authorization cache: `(room, token) -> authorized user` on the hub, keyed
+  additionally by three in-process generations — `SessionVersion` (sessions-table
+  inserts/deletes: login, logout, ban, deactivation), `MembershipVersion` (existing
+  ENGINE-30 counter; membership grant/revocation and room-visibility writes) and
+  `UserVersion` (users.status writes: ban/unban/deactivate). An entry stores the triple it
+  was queried under and a lookup serves it only while the triple still matches, so no
+  authorization result outlives its generations; a store on the result of a newer query is
+  impossible by construction. Cache bound 2^16 entries, FIFO ring eviction. Steady-state
+  publishes run zero SQL; only misses (after a bump or on a fresh token) run one batched
+  `AuthorizedSessions` query per room. Query errors cancel but store nothing, so a
+  transient read failure cannot poison the cache. Cache entries survive revocation only
+  via generation bumps — the poisoning contract ("a revoked/banned/removed client is never
+  served from cache") is pinned in tests. Bumps are all post-commit, in the audited write
+  helpers; `DeleteSession` was added (and web logout routed through it) so the logout
+  write bumps too. Out-of-band SQL is not visible until a bump or restart (documented
+  single-process limit, same as the sidebar/search caches).
+- Forward fan-out: recipients are snapshotted under the hub read lock into a slice
+  pre-sized to the client count (one allocation, no growth), then authorized and delivered
+  with no hub lock held. All authorization lookups for one publish happen under a single
+  cache lock acquisition; per-recipient cost is one map lookup plus one channel send.
+- Subscribe/connect stays bounded at 1000 clients: the subscribe path performs O(1)
+  per-connection work on the hub lock (map ops) plus one or two DB reads; no O(n) shared
+  work was introduced or found.
+
+Micro-benchmark (BenchmarkPublishFanout, N clients each with a distinct session, drained
+queues, warm cache, `taskset -c 16-31 nice -n 19 env GOMAXPROCS=4`, min of 5):
+
+| N | path | ns/op | B/op | allocs/op |
+|---|---:|---:|---:|---:|
+| 100 | before | 110,001 | 49,452 | 446 |
+| 100 | after | 11,085 | 6,896 | 7 |
+| 1000 | before | 1,156,725 | 519,061 | 4,063 |
+| 1000 | after | 110,655 | 58,116 | 7 |
+
+9.9× / 10.5× faster; the before-allocs are dominated by the per-publish
+`AuthorizedSessions` batch (JSON encode of N tokens plus a per-row scan); the cache removes
+the whole query from the steady state, leaving the recipients snapshot (one pre-sized
+slice), the frames map and the frame-cache bookkeeping.
+
+Full suite (mandated command): pass with -race, -p 2, sqlite_fts5; nested
+`third_party/websocket` module suite: pass; `go vet -tags sqlite_fts5 ./...`: clean;
+`gofmt -l .`: empty. Coverage: poisoning tests for ban/logout/membership-removal (fill,
+revoke, assert next publication excludes, stayer unaffected, unban+relogin restores),
+generation-lifetime test, write-helper audit enumeration in
+`internal/database/versions_test.go` (+ quiet cases for refresh-session, user rename/role,
+message writes, presence, push subscriptions), concurrent publish (every recipient gets
+every payload) and concurrent publish+revocation storm under -race, existing frame byte
+parity fast-vs-legacy and 100/1000 simulated delivery tests unchanged.

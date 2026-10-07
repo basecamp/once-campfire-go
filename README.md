@@ -60,8 +60,22 @@ disables caching), which holds per-message fragments, the sidebar and the legacy
 when the piece path is off; the engine piece cache reads the same key when routes migrate to it, so
 with both full the worst case is 2× the configured MiB (64 MiB by default), kept intentionally
 during the strangler migration. `CAMPFIRE_CABLE_FAST` (default `on`) gates the Action Cable
-fan-out fast paths (ENGINE-40): per-wake batched/vectored writes and the exact-payload frame
-cache; `off` selects the legacy one-write-per-frame path for A/B. Sidebar fragments are keyed by a version, not by their content: an
+fan-out fast paths: per-wake batched/vectored writes (ENGINE-40), the exact-payload frame
+cache (ENGINE-40), and the versioned publication authorization cache with lock-free fan-out
+(ENGINE-40b); `off` selects the legacy one-write-per-frame path with a per-publish
+auth-query for A/B. Under the fast path the hub authorizes a broadcast against an in-memory
+cache keyed by (room, session token) plus the (session, membership, user-status)
+generations from `internal/database/versions.go`, so a steady-state publish runs no
+authorization SQL at all; a cached result never outlives its generations — session writes
+(login/logout/ban/deactivation), membership and room-visibility writes, and bans all bump a
+generation after commit, and the next publication re-queries and excludes the revoked
+client. Recipients are snapshotted under the hub read lock into a pre-sized slice and
+authorized/delivered without the lock. Deliberate difference, the same single-process limit
+as the sidebar/search caches: authorization changed by SQL outside the audited write
+helpers (other processes, direct writes) is picked up on restart or at the next generation
+bump, not live. The write-helper audit is pinned in `internal/database/versions_test.go`.
+Logout goes through `DB.DeleteSession` so the session deletion bumps the generation before
+the caller touches the hub. Sidebar fragments are keyed by a version, not by their content: an
 in-process registry (seeded once from the database on first use; bumped after every sidebar-visible
 write — room create/rename/delete, membership join/leave/removal, unread changes via message
 create and presence, user rename/avatar/role, direct-placeholder transitions, account room

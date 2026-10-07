@@ -242,11 +242,14 @@ func (d *DB) DeactivateUser(ctx context.Context, id int64) error {
 		return err
 	})
 	if err == nil {
-		// Deactivation revokes the user's non-direct memberships and changes
-		// the users row: both the sidebar and the search membership scope
-		// change.
+		// Deactivation revokes the user's non-direct memberships, deletes
+		// their sessions and flips status to 1: the sidebar, the search
+		// membership scope and every cached publication authorization for
+		// the user's tokens all change.
 		d.bumpSidebarVersion()
 		d.membershipVersion.Add(1)
+		d.bumpSessionVersion()
+		d.bumpUserVersion()
 	}
 	return err
 }
@@ -275,6 +278,13 @@ func (d *DB) BanUser(ctx context.Context, id int64, ban bool) error {
 	}
 	if err == nil {
 		d.bumpSidebarVersion()
+		// The status flip and (on ban) the session deletions both change the
+		// authorization query's answer for the user's tokens: every cached
+		// publication authorization for them is invalidated.
+		d.bumpUserVersion()
+		if ban {
+			d.bumpSessionVersion()
+		}
 	}
 	return err
 }

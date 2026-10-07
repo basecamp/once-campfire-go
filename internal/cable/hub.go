@@ -208,6 +208,7 @@ type Hub struct {
 	mu      sync.RWMutex
 	clients map[*client]struct{}
 	cache   *frameCache
+	authz   *authzCache
 }
 type client struct {
 	disconnect    chan bool
@@ -226,7 +227,7 @@ type subscription struct {
 }
 
 func New(db *database.DB, secrets *rails.Secrets) *Hub {
-	return &Hub{db: db, secrets: secrets, fast: fastFromEnv(), clients: map[*client]struct{}{}, cache: newFrameCache()}
+	return &Hub{db: db, secrets: secrets, fast: fastFromEnv(), clients: map[*client]struct{}{}, cache: newFrameCache(), authz: newAuthzCache()}
 }
 func (c *client) send(value any) bool {
 	data, err := json.Marshal(value)
@@ -462,19 +463,168 @@ func (h *Hub) Publish(ctx context.Context, room int64, markup string) {
 func (h *Hub) PublishStream(ctx context.Context, name string, message any) {
 	h.publish(ctx, 0, name, message)
 }
-func (h *Hub) publish(ctx context.Context, room int64, name string, message any) {
-	type recipient struct {
-		client     *client
-		identifier string
-		room       int64
-		scope      string
+
+// recipient is one delivery target of a publish: the client, the subscription
+// identifier of the matching subscription, and the authorization scope. user
+// is the authorized session user for the (room, token) pair, filled by the
+// authorization pass; 0 means unauthorized (the client is cancelled).
+type recipient struct {
+	client     *client
+	identifier string
+	room       int64
+	scope      string
+	user       int64
+}
+
+// authzKey identifies one publication authorization: a session token in a
+// room (room 0 = stream-only publishes, which skip the membership check).
+type authzKey struct {
+	room  int64
+	token string
+}
+
+// authzEntry caches the result of AuthorizedSessions for one (room, token)
+// pair plus the (session, membership, user-status) generations it was
+// computed under. An entry never outlives its generations: a lookup serves
+// it only while all three counters still equal the stored values, so a
+// revoked, banned or removed client is excluded from the next publication
+// after the audited write helper returns (each helper bumps after commit).
+type authzEntry struct {
+	userID      int64 // authorized session user; 0 = cached negative result
+	sess        int64
+	member      int64
+	userVersion int64
+}
+
+const (
+	// authzCacheMax bounds the authorization cache. Generation mismatch
+	// ordinarily invalidates entries before this matters; the bound only
+	// caps growth from many distinct rooms per session.
+	authzCacheMax = 1 << 16
+	// authzCompactHead compacts the FIFO ring once its consumed prefix is
+	// at least this long, keeping the ring's memory proportional to live
+	// entries plus a bounded stale prefix.
+	authzCompactHead = 4096
+)
+
+// authzCache is the hub's publication authorization cache: a token -> user
+// map with FIFO eviction, guarded by one mutex. The publish path touches it
+// once per publish (all lookups under a single acquisition), never per
+// recipient, so concurrent publishers serialize only on the short lookup
+// pass.
+type authzCache struct {
+	mu   sync.Mutex
+	m    map[authzKey]*authzEntry
+	ring []authzKey // FIFO insertion order; eviction consumes ring[head]
+	head int
+}
+
+func newAuthzCache() *authzCache {
+	return &authzCache{m: make(map[authzKey]*authzEntry)}
+}
+
+// store records the query result for key under the given generations,
+// updating an existing entry in place (its FIFO slot stays put). The store
+// must only be used with the generations the query ran under; a later lookup
+// with moved generations misses and re-queries.
+func (c *authzCache) store(key authzKey, userID, sess, member, userVersion int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e := c.m[key]; e != nil {
+		e.userID = userID
+		e.sess, e.member, e.userVersion = sess, member, userVersion
+		return
 	}
-	var recipients []recipient
+	if len(c.ring)-c.head >= authzCacheMax {
+		old := c.ring[c.head]
+		c.head++
+		delete(c.m, old)
+		if c.head >= authzCompactHead && c.head*2 >= len(c.ring) {
+			copy(c.ring, c.ring[c.head:])
+			c.ring = c.ring[:len(c.ring)-c.head]
+			c.head = 0
+		}
+	}
+	c.m[key] = &authzEntry{userID: userID, sess: sess, member: member, userVersion: userVersion}
+	c.ring = append(c.ring, key)
+}
+
+// authorize resolves every recipient's authorized session user. Cache hits
+// are read under one lock acquisition; misses run one AuthorizedSessions
+// query per distinct room (the same snapshot query as the legacy path) and
+// are stored back under the generations they were queried with. A recipient
+// left at user 0 is unauthorized and cancelled by the caller. Query errors
+// resolve every pending recipient of that room as unauthorized but store
+// nothing, so a transient read failure cannot poison the cache.
+func (h *Hub) authorize(ctx context.Context, recipients []recipient) {
+	sess := h.db.SessionVersion()
+	member := h.db.MembershipVersion()
+	userVersion := h.db.UserVersion()
+	type miss struct {
+		index int
+		key   authzKey
+	}
+	var misses []miss
+	h.authz.mu.Lock()
+	for i := range recipients {
+		r := &recipients[i]
+		key := authzKey{room: r.room, token: r.client.token}
+		if e := h.authz.m[key]; e != nil && e.sess == sess && e.member == member && e.userVersion == userVersion {
+			r.user = e.userID
+			continue
+		}
+		misses = append(misses, miss{i, key})
+	}
+	h.authz.mu.Unlock()
+	if len(misses) == 0 {
+		return
+	}
+	// Batch one query per distinct room for the missing tokens.
+	type roomQuery struct {
+		tokens  []string
+		allowed map[string]int64
+	}
+	rooms := make(map[int64]*roomQuery, 1)
+	for _, m := range misses {
+		q := rooms[m.key.room]
+		if q == nil {
+			q = &roomQuery{}
+			rooms[m.key.room] = q
+		}
+		q.tokens = append(q.tokens, m.key.token)
+	}
+	for room, q := range rooms {
+		allowed, err := h.db.AuthorizedSessions(ctx, q.tokens, room)
+		if err != nil {
+			allowed = nil
+		}
+		q.allowed = allowed
+	}
+	// Resolve every miss from the fresh query results and store them back
+	// under the generations the queries ran with. The cache lock is taken
+	// per store, not across the pass: a store on a revoked result can never
+	// be served, because its generations are the pre-revocation ones and a
+	// lookup requires all three to match. Query errors store nothing, so a
+	// transient read failure cannot poison the cache with negatives.
+	for _, m := range misses {
+		allowed := rooms[m.key.room].allowed
+		recipients[m.index].user = allowed[m.key.token]
+		if allowed != nil {
+			h.authz.store(m.key, allowed[m.key.token], sess, member, userVersion)
+		}
+	}
+}
+
+func (h *Hub) publish(ctx context.Context, room int64, name string, message any) {
 	roomScope := ""
 	if room != 0 {
 		roomScope = fmt.Sprintf("room:%d", room)
 	}
+	// Snapshot the recipients under the hub lock only; authorization and
+	// delivery run without it (ENGINE-40b). The slice is pre-sized to the
+	// client count, so the snapshot is one allocation with no growth.
 	h.mu.RLock()
+	recipients := make([]recipient, 0, len(h.clients))
 	for c := range h.clients {
 		for identifier, sub := range c.subscriptions {
 			if room != 0 && sub.Room == room && sub.Channel == "RoomMessagesChannel" || name != "" && sub.Stream == name {
@@ -482,42 +632,52 @@ func (h *Hub) publish(ctx context.Context, room int64, name string, message any)
 				if sub.Channel == "RoomMessagesChannel" {
 					scope = roomScope
 				}
-				recipients = append(recipients, recipient{c, identifier, sub.Room, scope})
+				recipients = append(recipients, recipient{c, identifier, sub.Room, scope, 0})
 			}
 		}
 	}
 	h.mu.RUnlock()
-	// Recheck every publication; batch distinct sessions rather than trusting a
-	// long-lived authorization cache or querying once for every receiving socket.
-	groups := make(map[int64]map[string]struct{})
-	for _, recipient := range recipients {
-		if groups[recipient.room] == nil {
-			groups[recipient.room] = make(map[string]struct{})
-		}
-		groups[recipient.room][recipient.client.token] = struct{}{}
+	if len(recipients) == 0 {
+		return
 	}
-	allowed := make(map[int64]map[string]int64, len(groups))
-	for room, tokens := range groups {
-		keys := make([]string, 0, len(tokens))
-		for token := range tokens {
-			keys = append(keys, token)
+	if h.fast {
+		h.authorize(ctx, recipients)
+	} else {
+		// Legacy: recheck every publication, batching distinct sessions per
+		// room (the pre-ENGINE-40b behavior, unchanged).
+		groups := make(map[int64]map[string]struct{})
+		for _, r := range recipients {
+			if groups[r.room] == nil {
+				groups[r.room] = make(map[string]struct{})
+			}
+			groups[r.room][r.client.token] = struct{}{}
 		}
-		var err error
-		allowed[room], err = h.db.AuthorizedSessions(ctx, keys, room)
-		if err != nil {
-			allowed[room] = nil
+		allowed := make(map[int64]map[string]int64, len(groups))
+		for groupRoom, tokens := range groups {
+			keys := make([]string, 0, len(tokens))
+			for token := range tokens {
+				keys = append(keys, token)
+			}
+			var err error
+			allowed[groupRoom], err = h.db.AuthorizedSessions(ctx, keys, groupRoom)
+			if err != nil {
+				allowed[groupRoom] = nil
+			}
+		}
+		for i := range recipients {
+			recipients[i].user = allowed[recipients[i].room][recipients[i].client.token]
 		}
 	}
 
 	// Reuse frames per identifier within this publish; the frame cache
 	// extends the reuse across publishes of identical payloads (ENGINE-40).
 	frames := make(map[string]*websocket.PreparedMessage)
-	for _, r := range recipients {
-		if allowed[r.room][r.client.token] != r.client.user.ID {
+	for i := range recipients {
+		r := &recipients[i]
+		if r.user != r.client.user.ID {
 			r.client.cancel()
 			continue
 		}
-
 		frame, exists := frames[r.identifier]
 		if !exists {
 			data, err := json.Marshal(struct {

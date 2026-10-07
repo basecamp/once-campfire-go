@@ -77,7 +77,31 @@ func (d *DB) SessionUser(ctx context.Context, token string) (User, error) {
 func (d *DB) StartSession(ctx context.Context, user int64, agent, ip string) (string, error) {
 	token, now := Token(), Stamp(d.Now())
 	_, err := d.Write.ExecContext(ctx, "INSERT INTO sessions(token,user_id,user_agent,ip_address,last_active_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?)", token, user, agent, ip, now, now, now)
+	if err == nil {
+		// A sessions-table write moves the authorization generation, keeping
+		// the ENGINE-40b audit contract "every session insert/delete bumps".
+		d.bumpSessionVersion()
+	}
 	return token, err
+}
+
+// DeleteSession removes one session row (logout). It bumps the session
+// generation so no cached publication authorization for the token can
+// outlive the deletion; callers that revoke a session must go through this
+// helper rather than writing the sessions table directly.
+func (d *DB) DeleteSession(ctx context.Context, token string, user int64) error {
+	r, err := d.Write.ExecContext(ctx, "DELETE FROM sessions WHERE token=? AND user_id=?", token, user)
+	if err != nil {
+		return err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		d.bumpSessionVersion()
+	}
+	return nil
 }
 func (d *DB) Setup(ctx context.Context, name, email, passwordDigest string, uploads ...BlobStager) (User, error) {
 	var u User

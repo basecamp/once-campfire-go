@@ -46,8 +46,13 @@ type DB struct {
 	// load.
 	corpusVersion     atomic.Int64
 	membershipVersion atomic.Int64
-	writer            *messageWriter
-	checkpoints       *checkpointer
+	// sessionVersion and userVersion are the ENGINE-40b publication
+	// authorization generations (see versions.go): sessions-table writes and
+	// users.status writes respectively.
+	sessionVersion atomic.Int64
+	userVersion    atomic.Int64
+	writer         *messageWriter
+	checkpoints    *checkpointer
 	// afterMu/afterN/afterCV count callers still inside the write lane's
 	// after-commit work (search index insert + unread bump), which runs in
 	// the request goroutine on d.Write after the shared commit. DB.Close
