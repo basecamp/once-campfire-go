@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 )
@@ -8,9 +9,15 @@ import (
 // Latest message windows and content generations live in memory. A room page
 // reads the same forty ids on every hit; search and sidebar HTML stay valid
 // until a write bumps the generation. Readers fall back to SQLite on a miss.
+// Commits from another connection move the watcher's data_version and drop
+// these caches even when this process did not write.
 type readState struct {
 	mu       sync.Mutex
+	watchMu  sync.Mutex
 	gen      atomic.Uint64
+	epoch    uint64
+	seen     uint32
+	have     bool
 	roomGen  map[int64]uint64
 	rooms    map[int64][]Message
 	userGen  map[int64]uint64
@@ -32,8 +39,10 @@ func (d *DB) state() *readState {
 }
 
 // ContentGeneration changes when message, room, membership or account data
-// that search and sidebar HTML depend on is committed.
+// that search and sidebar HTML depend on is committed, including commits
+// from another connection to the same file.
 func (d *DB) ContentGeneration() uint64 {
+	d.syncExternal(context.Background())
 	if s := d.state(); s != nil {
 		return s.gen.Load()
 	}
@@ -43,6 +52,7 @@ func (d *DB) ContentGeneration() uint64 {
 // UserGeneration is the per-user revision (presence, involvement) plus the
 // shared content generation.
 func (d *DB) UserGeneration(user int64) (userGen, content uint64) {
+	d.syncExternal(context.Background())
 	s := d.state()
 	if s == nil {
 		return 0, 0
@@ -51,6 +61,76 @@ func (d *DB) UserGeneration(user int64) (userGen, content uint64) {
 	userGen = s.userGen[user]
 	s.mu.Unlock()
 	return userGen, s.gen.Load()
+}
+
+func (d *DB) dataVersion(ctx context.Context) (uint32, error) {
+	s := d.state()
+	if d == nil || d.watch == nil || s == nil {
+		return 0, nil
+	}
+	s.watchMu.Lock()
+	defer s.watchMu.Unlock()
+	var version int64
+	err := d.watch.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version)
+	return uint32(version), err
+}
+
+// syncExternal drops in-memory reads when another connection has committed
+// since the last sample. The first sample only records the baseline.
+func (d *DB) syncExternal(ctx context.Context) {
+	version, err := d.dataVersion(ctx)
+	s := d.state()
+	if s == nil {
+		return
+	}
+	if err != nil {
+		s.mu.Lock()
+		s.dropLocked()
+		s.have = false
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.have {
+		s.seen = version
+		s.have = true
+		return
+	}
+	if version == s.seen {
+		return
+	}
+	s.dropLocked()
+	s.seen = version
+}
+
+// advanceExternal records the watcher's version after our own commit so the
+// next read does not treat that commit as a foreign write.
+func (d *DB) advanceExternal(ctx context.Context) {
+	version, err := d.dataVersion(ctx)
+	s := d.state()
+	if s == nil {
+		return
+	}
+	if err != nil {
+		s.mu.Lock()
+		s.dropLocked()
+		s.have = false
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Lock()
+	s.seen = version
+	s.have = true
+	s.mu.Unlock()
+}
+
+func (s *readState) dropLocked() {
+	s.gen.Add(1)
+	s.epoch++
+	s.rooms = map[int64][]Message{}
+	s.hasAcct = false
+	s.account = Account{}
 }
 
 func (d *DB) changed() {
@@ -140,24 +220,24 @@ func (d *DB) countPage(hit bool) {
 	s.pageMiss.Add(1)
 }
 
-func (d *DB) beginRoom(room int64) uint64 {
+func (d *DB) beginRoom(room int64) (uint64, uint64) {
 	s := d.state()
 	if s == nil {
-		return 0
+		return 0, 0
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.roomGen[room]
+	return s.epoch, s.roomGen[room]
 }
 
-func (d *DB) storeLatest(room int64, seen uint64, msgs []Message) {
+func (d *DB) storeLatest(room int64, epoch, seen uint64, msgs []Message) {
 	s := d.state()
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.roomGen[room] != seen {
+	if s.epoch != epoch || s.roomGen[room] != seen {
 		return
 	}
 	if _, ok := s.rooms[room]; ok {

@@ -345,17 +345,18 @@ func (d *DB) MessagePageReferences(ctx context.Context, room, anchor int64, dire
 		return d.MessagePage(ctx, room, anchor, direction)
 	}
 	if anchor == 0 {
+		d.syncExternal(ctx)
 		if messages, ok := d.cachedLatest(room); ok {
 			d.countPage(true)
 			return messages, nil
 		}
 		d.countPage(false)
-		seen := d.beginRoom(room)
+		epoch, seen := d.beginRoom(room)
 		messages, err := d.queryMessageWindow(ctx, room, 0)
 		if err != nil {
 			return nil, err
 		}
-		d.storeLatest(room, seen, messages)
+		d.storeLatest(room, epoch, seen, messages)
 		return messages, nil
 	}
 	return d.queryMessageWindow(ctx, room, anchor)

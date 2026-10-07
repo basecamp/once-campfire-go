@@ -28,6 +28,9 @@ type DB struct {
 	Read                *readPool
 	Write               *sql.DB
 	Now                 func() time.Time
+	path                string
+	watch               *sql.Conn
+	watchDB             *sql.DB
 	reads               *readState
 }
 
@@ -69,20 +72,66 @@ func Open(path string, readers int) (*DB, error) {
 		r.Close()
 		return fail(err)
 	}
+	// A pinned read connection observes commits from other connections.
+	// PRAGMA data_version on the writer would ignore this process's own commits.
+	watchDB, err := sql.Open("sqlite3", uri+options+"&mode=ro")
+	if err != nil {
+		r.Close()
+		return fail(err)
+	}
+	watchDB.SetMaxOpenConns(1)
+	watchDB.SetMaxIdleConns(1)
+	watch, err := watchDB.Conn(context.Background())
+	if err != nil {
+		watchDB.Close()
+		r.Close()
+		return fail(err)
+	}
 	now := time.Now
 	if raw := os.Getenv("CAMPFIRE_FROZEN_TIME"); raw != "" {
 		frozen, err := time.Parse(time.RFC3339Nano, raw)
 		if err != nil {
+			watch.Close()
+			watchDB.Close()
 			r.Close()
 			return fail(err)
 		}
 		now = func() time.Time { return frozen }
 	}
-	return &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, Now: now, reads: newReadState()}, nil
+	return &DB{
+		Read:    &readPool{DB: r, statements: make(map[string]*sql.Stmt)},
+		Write:   w,
+		Now:     now,
+		path:    path,
+		watch:   watch,
+		watchDB: watchDB,
+		reads:   newReadState(),
+	}, nil
 }
-func (d *DB) Close() error     { return errors.Join(d.Read.Close(), d.Write.Close()) }
+
+// FilePath is the SQLite file shared with other Campfire processes.
+func (d *DB) FilePath() string {
+	if d == nil {
+		return ""
+	}
+	return d.path
+}
+
+func (d *DB) Close() error {
+	var watchErr error
+	if d.watch != nil {
+		watchErr = d.watch.Close()
+	}
+	if d.watchDB != nil {
+		watchErr = errors.Join(watchErr, d.watchDB.Close())
+	}
+	return errors.Join(watchErr, d.Read.Close(), d.Write.Close())
+}
 func Stamp(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05.000000") }
 func (d *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {
+	// Drop anything another connection committed before this write publishes
+	// its own cache update. Advancing afterwards keeps that update.
+	d.syncExternal(ctx)
 	tx, err := d.Write.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -91,7 +140,11 @@ func (d *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {
 	if err = fn(tx); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	d.advanceExternal(ctx)
+	return nil
 }
 func prepare(db *sql.DB) error {
 	tx, err := db.Begin()

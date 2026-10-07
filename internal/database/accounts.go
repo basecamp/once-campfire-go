@@ -19,6 +19,7 @@ type Account struct {
 }
 
 func (d *DB) Account(ctx context.Context) (Account, error) {
+	d.syncExternal(ctx)
 	if a, ok := d.cachedAccount(); ok {
 		return a, nil
 	}
