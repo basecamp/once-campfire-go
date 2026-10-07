@@ -25,7 +25,7 @@ import (
 )
 
 // hubFixture opens a real database and hub wired like hub_test.go.
-func hubFixture(t *testing.T) (*Hub, *database.DB, database.User, int64, *rails.Secrets) {
+func hubFixture(t testing.TB) (*Hub, *database.DB, database.User, int64, *rails.Secrets) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -55,7 +55,7 @@ func hubFixture(t *testing.T) (*Hub, *database.DB, database.User, int64, *rails.
 }
 
 // simulateClient is a client with a real per-connection queue but no socket.
-func simulateClient(t *testing.T, user database.User, token string, identifier string, sub subscription) *client {
+func simulateClient(t testing.TB, user database.User, token string, identifier string, sub subscription) *client {
 	t.Helper()
 	_, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

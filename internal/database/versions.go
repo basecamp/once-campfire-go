@@ -18,6 +18,12 @@ import (
 //     cache versions: global counters bumped by FTS-affecting and
 //     membership-affecting writes respectively, keying cached search pages
 //     (user, normalized query, corpusVersion, membershipVersion).
+//   - SessionVersion and UserVersion (ENGINE-40b) are the cable publication
+//     authorization generations: sessions-table writes and users.status writes
+//     respectively. Together with MembershipVersion they key the hub's
+//     versioned authorization cache ((room, token) -> authorized user), so a
+//     publication never serves an authorization result that outlived a
+//     session deletion, a ban or a membership revocation.
 //
 // All counters are bumped only after the write transaction commits, and only
 // on success: a reader can never observe a new version with old data. Version
@@ -131,3 +137,38 @@ func (d *DB) bumpSidebarVersion() {
 // its store cannot tag fresh rows with an old version either.
 func (d *DB) CorpusVersion() int64     { return d.corpusVersion.Load() }
 func (d *DB) MembershipVersion() int64 { return d.membershipVersion.Load() }
+
+// Publication authorization generations (ENGINE-40b). The cable hub keys its
+// authorization cache ((room, token) -> authorized user) on the triple
+// (SessionVersion, MembershipVersion, UserVersion), and each entry stores the
+// triple it was computed under: a lookup serves an entry only while all three
+// counters still match, so no authorization result outlives its generations.
+//
+//   - SessionVersion counts sessions-table writes that insert or delete rows
+//     (login, logout, ban, deactivation), never updates of non-authorization
+//     columns (RefreshSession only refreshes last_active_at and friends).
+//   - UserVersion counts users.status writes: ban, unban and deactivation.
+//   - MembershipVersion (ENGINE-30) counts membership grant/revocation writes,
+//     which are also the room-visibility writes (open/closed conversion and
+//     room destruction rewrite the membership set).
+//
+// The cache is keyed per (room, token), so inserting a new session row can
+// only add results for a token that was never cached; the bumps exist to keep
+// the audit contract "every authorization-relevant write moves a generation"
+// simple and complete, and their cost is one re-warm of the hub's cache on a
+// cold path (a login or an admin write), never the publish path.
+//
+// Like the other counters, every bump runs after the write transaction
+// commits and only on success, and the same caveat applies: the invalidation
+// covers the audited write helpers in this package. Authorization state
+// changed by out-of-band SQL (other processes, tests writing rows directly)
+// is not visible to the cable layer until a generation moves — the documented
+// single-process limit of the other versioned caches.
+func (d *DB) SessionVersion() int64 { return d.sessionVersion.Load() }
+func (d *DB) UserVersion() int64    { return d.userVersion.Load() }
+
+// bumpSessionVersion records one sessions-table insert/delete.
+func (d *DB) bumpSessionVersion() { d.sessionVersion.Add(1) }
+
+// bumpUserVersion records one users.status write.
+func (d *DB) bumpUserVersion() { d.userVersion.Add(1) }

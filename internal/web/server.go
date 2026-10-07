@@ -814,7 +814,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, u database.User)
 		s.fail(w, err)
 		return
 	}
-	if _, err = s.DB.Write.ExecContext(r.Context(), "DELETE FROM sessions WHERE token=? AND user_id=?", token, u.ID); err != nil {
+	if err := s.DB.DeleteSession(r.Context(), token, u.ID); err != nil {
 		s.fail(w, err)
 		return
 	}

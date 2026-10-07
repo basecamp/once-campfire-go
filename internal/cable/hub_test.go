@@ -118,7 +118,10 @@ func TestRoomAuthorizationAndDelivery(t *testing.T) {
 	if err = wsjson.Read(ctx, duplicate, &frame); err != nil || frame["message"] != expected {
 		t.Fatal("shared recipient did not receive frame", err)
 	}
-	if _, err = db.Write.ExecContext(ctx, "DELETE FROM memberships WHERE room_id=? AND user_id=?", room.ID, user.ID); err != nil {
+	// Revoke the owner's membership through the audited helper: the bump it
+	// performs must invalidate the publication authorization cache so the
+	// next publish excludes both sockets (the ENGINE-40b poisoning contract).
+	if err = db.UpdateRoom(ctx, room.ID, "Rooms::Closed", "Private", []int64{stranger}); err != nil {
 		t.Fatal(err)
 	}
 	hub.Publish(ctx, room.ID, "private after revocation")
