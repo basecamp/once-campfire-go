@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/textproto"
 	"net/url"
@@ -161,6 +162,17 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (_ *Con
 		err = fmt.Errorf("failed to hijack connection: %w", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return nil, err
+	}
+
+	// Campfire ENGINE-54: net/http's hijacked connection keeps Go's default
+	// TCP_NODELAY (newTCPConn sets it on accept and net/http never touches
+	// it again), yet the property is set explicitly here so it is this
+	// library's contract rather than the runtime's implicit default, and
+	// matches the Rust reference (tokio sets TCP_NODELAY on accepted
+	// streams). One setsockopt per accepted connection; connections that are
+	// not TCP (test doubles, pipes) are left untouched.
+	if tcp, ok := netConn.(*net.TCPConn); ok {
+		_ = tcp.SetNoDelay(true)
 	}
 
 	// Campfire ENGINE-40: header-first reads. net/http's hijacked buffered

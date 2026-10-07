@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 )
 
 // PreparedMessage is an immutable server broadcast. Its compressed form is
@@ -93,7 +94,35 @@ func (c *Conn) WritePreparedBatch(ctx context.Context, msgs []*PreparedMessage) 
 		}
 		return nil
 	}
+	return c.writePreparedBatchCore(ctx, time.Time{}, msgs)
+}
 
+// WritePreparedBatchDeadline writes a batch exactly like WritePreparedBatch
+// but bounds the write with an absolute socket write deadline instead of a
+// context. The deadline is installed before the vectored write and cleared
+// after it, so a stalled socket is still reaped at the deadline while a
+// flowing socket pays two deadline stores per wake and no timers or
+// allocations (ENGINE-54: the hub's per-wake context armed and stopped two
+// runtime timers and allocated per wake, which at 1000 clients was the
+// dominant socket-level cost). The connection is not closed on expiry; the
+// write returns an i/o timeout error and the caller is expected to tear the
+// connection down, as the hub does.
+func (c *Conn) WritePreparedBatchDeadline(deadline time.Time, msgs []*PreparedMessage) (err error) {
+	if len(msgs) == 0 {
+		return nil
+	}
+	if c.client || c.flate() && !c.copts.serverNoContextTakeover {
+		for _, m := range msgs {
+			if err := c.WritePrepared(context.Background(), m); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return c.writePreparedBatchCore(nil, deadline, msgs)
+}
+
+func (c *Conn) writePreparedBatchCore(ctx context.Context, deadline time.Time, msgs []*PreparedMessage) (err error) {
 	// Resolve payloads (the compressed forms are shared and computed once)
 	// before taking the frame lock.
 	if cap(c.batchData) < len(msgs) {
@@ -116,7 +145,11 @@ func (c *Conn) WritePreparedBatch(ctx context.Context, msgs []*PreparedMessage) 
 		c.batchData[i] = data
 	}
 
-	err = c.writeFrameMu.lock(ctx)
+	var lockCtx context.Context = ctx
+	if lockCtx == nil {
+		lockCtx = context.Background()
+	}
+	err = c.writeFrameMu.lock(lockCtx)
 	if err != nil {
 		return err
 	}
@@ -124,7 +157,7 @@ func (c *Conn) WritePreparedBatch(ctx context.Context, msgs []*PreparedMessage) 
 
 	defer func() {
 		if err != nil {
-			if ctx.Err() != nil {
+			if ctx != nil && ctx.Err() != nil {
 				err = ctx.Err()
 			} else if c.isClosed() {
 				err = net.ErrClosed
@@ -145,8 +178,18 @@ func (c *Conn) WritePreparedBatch(ctx context.Context, msgs []*PreparedMessage) 
 		return net.ErrClosed
 	default:
 	}
-	if c.setupWriteTimeout(ctx) {
-		defer c.clearWriteTimeout()
+	if ctx != nil {
+		if c.setupWriteTimeout(ctx) {
+			defer c.clearWriteTimeout()
+		}
+	} else if !deadline.IsZero() {
+		// rwc is typed io.ReadWriteCloser for upstream compatibility; the
+		// accepted/dialed values are always net.Conns (the hub's hijacked
+		// TCP socket), which accept a write deadline.
+		if nc, ok := c.rwc.(net.Conn); ok {
+			nc.SetWriteDeadline(deadline)
+			defer nc.SetWriteDeadline(time.Time{})
+		}
 	}
 
 	// Assemble frame headers + payload references into one vectored write.
