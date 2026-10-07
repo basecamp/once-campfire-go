@@ -3,6 +3,7 @@ package fastserve
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -27,6 +28,10 @@ type conn struct {
 	// head accumulates the current request head; parsed.Header aliases it.
 	head        []byte
 	readScratch [4096]byte
+	// drainScratch serves the post-handler request-body drain; the 8 KiB
+	// array lives on the connection because an interface call would push a
+	// stack copy to the heap once per drain.
+	drainScratch [8 << 10]byte
 
 	// parse state, reused across requests (http1.Parse resets it).
 	req        http1.Request
@@ -125,12 +130,15 @@ func (c *conn) serve() {
 			c.skipLeadingCRLF()
 		}
 		// Header deadline covers the whole head; the body deadline takes
-		// over after the head is parsed.
+		// over after the head is parsed. reqStart is net/http's whole-request
+		// clock: ReadTimeout covers head and body together, so a head that
+		// consumes the budget leaves the body only the remainder.
 		if d := c.srv.readHeaderTimeout(); d > 0 {
 			c.rwc.SetReadDeadline(time.Now().Add(d))
 		} else {
 			c.rwc.SetReadDeadline(time.Time{})
 		}
+		reqStart := time.Now()
 		consumed, err := c.readHead()
 		if err != nil {
 			if c.rejectHead(err) {
@@ -139,7 +147,7 @@ func (c *conn) serve() {
 			continue // a preface fragment: keep reading
 		}
 		if c.srv.ReadTimeout > 0 {
-			c.rwc.SetReadDeadline(time.Now().Add(c.srv.ReadTimeout))
+			c.rwc.SetReadDeadline(reqStart.Add(c.srv.ReadTimeout))
 		} else {
 			c.rwc.SetReadDeadline(time.Time{})
 		}
@@ -316,7 +324,15 @@ func (c *conn) handoffNeeded() bool {
 func (c *conn) serveRequest() bool {
 	c.busy.Store(true)
 	defer c.busy.Store(false)
-	req, err := c.newRequest(&c.req, c.br)
+	// The per-request cancellable context mirrors net/http's
+	// conn.readRequest (ctx, cancelCtx := context.WithCancel(ctx); the
+	// request sees it through req.ctx): handlers that watch
+	// r.Context().Done() must wake when their request is over. The deferred
+	// cancel also covers the early-return paths below, so a malformed
+	// request never leaves an uncancelled child on the background context.
+	reqCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := c.newRequest(&c.req, c.br, reqCtx)
 	if err != nil {
 		c.reject("HTTP/1.1 400 Bad Request", "400 Bad Request")
 		return false
@@ -343,14 +359,25 @@ func (c *conn) serveRequest() bool {
 		res.Header().Set("Connection", "close")
 		res.WriteHeader(http.StatusExpectationFailed)
 		c.resp = nil
+		cancel()
 		res.finish()
 		return false
 	}
 
 	c.srv.serveHandler(res, req)
+	cancel() // net/http cancels the request context right after ServeHTTP
 	c.resp = nil
 	res.finish()
-	return res.shouldKeepAlive()
+	// net/http clears the write deadline after finishRequest; a keep-alive
+	// connection must not carry the previous request's deadline.
+	c.rwc.SetWriteDeadline(time.Time{})
+	keep := res.shouldKeepAlive()
+	if !keep && res.requestBodyLimitHit {
+		// net/http finishes a connection whose body hit the limit (or was
+		// left unread past the drain budget) with the RST-avoidance close.
+		c.closeWriteAndWait()
+	}
+	return keep
 }
 
 // maybeWriteContinue implements the 100-continue rule at the body's first
@@ -378,14 +405,18 @@ func (c *conn) emit(b []byte) {
 }
 
 // flushOut writes all pending segments with one writev (net.Buffers) and
-// clears the list, keeping the backing array for the next response.
+// clears the list. The receiver is the conn's own field, so the writev
+// dispatch takes no per-flush address-of-local (no extra allocation per
+// flush); WriteTo consumes the list front to back, so the origin header is
+// kept alongside and the list resets to it with full capacity for the next
+// response.
 func (c *conn) flushOut() error {
 	if len(c.segs) == 0 {
 		return nil
 	}
-	segs := c.segs
-	c.segs = c.segs[:0]
-	_, err := segs.WriteTo(c.rwc)
+	origin := c.segs
+	_, err := c.segs.WriteTo(c.rwc)
+	c.segs = origin[:0]
 	return err
 }
 

@@ -25,15 +25,25 @@ func protoAtLeast(protoMajor, protoMinor, major, minor int) bool {
 // served by an http1.BodyReader over the connection's persistent buffered
 // reader (so pipelined bytes stay inside the reader for the next request).
 //
+// ctx is the request's context; the caller owns its cancellation, exactly as
+// conn.readRequest owns the per-request WithCancel context in net/http.
+//
 // The body framing follows http1.FramingOf, the single framing decision, so a
 // head this parser accepted frames exactly the way net/http would.
-func (c *conn) newRequest(parsed *http1.Request, br *bufio.Reader) (*http.Request, error) {
-	// One allocation for the Request, context included: net/http sets its
-	// unexported ctx in place; WithContext would clone the struct again.
-	req := (&http.Request{}).WithContext(context.Background())
+func (c *conn) newRequest(parsed *http1.Request, br *bufio.Reader, ctx context.Context) (*http.Request, error) {
+	// One allocation for the Request: WithContext copies the zero struct, so
+	// the ctx is set without a second clone.
+	req := (&http.Request{}).WithContext(ctx)
 	req.Method = string(parsed.Method)
 	req.RequestURI = string(parsed.Target)
-	req.Proto = string(parsed.Proto)
+	// The parser admits only HTTP/1.0 and HTTP/1.1 heads (anything else is
+	// malformed), and net/http's req.Proto for an accepted request is the
+	// wire text — exactly one of these two constants, so no copy is needed.
+	if parsed.Proto[7] == '0' {
+		req.Proto = "HTTP/1.0"
+	} else {
+		req.Proto = "HTTP/1.1"
+	}
 	req.ProtoMajor, req.ProtoMinor = 1, int(parsed.Proto[7]-'0')
 
 	// The request-target forms net/http accepts: origin-form, asterisk-form,

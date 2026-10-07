@@ -92,6 +92,11 @@ type response struct {
 	wantsClose       bool
 	wants10KeepAlive bool
 
+	// requestBodyLimitHit mirrors net/http's flag of the same name: set by
+	// requestTooLarge (http.MaxBytesReader's limit), it forces Connection:
+	// close and the RST-avoidance close after the reply.
+	requestBodyLimitHit bool
+
 	// canWriteContinue mirrors net/http's atomic: 100-continue is sent by
 	// the first body read unless a response started first.
 	canWriteContinue bool
@@ -101,8 +106,12 @@ type response struct {
 	aborted bool
 
 	// body accumulates writes; the head is composed on the first emission.
-	body []byte
-	cw   chunkWriter
+	// emitted is how much of body already reached the wire: emissions slice
+	// body[emitted:] and advance the window instead of reslicing body, so
+	// the array origin (and its full capacity) survives to the next request.
+	body    []byte
+	emitted int
+	cw      chunkWriter
 }
 
 // chunkWriter composes the status line and header block once (mirroring
@@ -175,24 +184,56 @@ func (w *response) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// WriteString keeps io.WriteString callers on the direct path.
+// WriteString keeps io.WriteString callers on the direct path: the string
+// appends straight into the body buffer, where net/http's bufio layer would
+// absorb it the same way (no intermediate []byte conversion).
 func (w *response) WriteString(s string) (int, error) {
-	return w.Write([]byte(s))
+	if w.canWriteContinue {
+		w.canWriteContinue = false
+	}
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if len(s) == 0 {
+		return 0, nil
+	}
+	if !bodyAllowedForStatus(w.status) {
+		return 0, errBodyNotAllowed
+	}
+	w.written += int64(len(s))
+	if w.contentLength != -1 && w.written > w.contentLength {
+		w.brokeConn = true
+		return 0, errContentLength
+	}
+	w.body = append(w.body, s...)
+	w.emitIfFull()
+	return len(s), nil
 }
 
 // emitIfFull mirrors the 2048-body budget: once the accumulation crosses it,
-// the response is on the wire and, absent a declared Content-Length, chunked.
+// the response is on the wire and, absent a declared Content-Length, in
+// chunked framing. With a declared length the body coalesces into ~32 KiB
+// wire segments (bytes identical at any size); chunked responses emit the
+// whole pending window as one chunk, net/http's write-level granularity, so
+// a small response costs one chunk flush plus the zero chunk.
 func (w *response) emitIfFull() {
-	for len(w.body) >= bufferBeforeChunkingSize {
-		n := bufferBeforeChunkingSize
+	for len(w.body)-w.emitted >= bufferBeforeChunkingSize {
+		n := len(w.body) - w.emitted
 		if w.contentLength != -1 {
-			n = min(emissionSize, len(w.body))
+			n = min(emissionSize, n)
 		}
-		if err := w.cw.writeBody(w.body[:n]); err != nil {
+		if err := w.cw.writeBody(w.body[w.emitted : w.emitted+n]); err != nil {
 			w.brokeConn = true
 			return
 		}
-		w.body = w.body[n:]
+		w.emitted += n
+		if w.emitted == len(w.body) {
+			// The flush consumed everything; reset to the array origin so
+			// the next append (and the connection, after the response)
+			// keeps the full backing array rather than a tail subslice.
+			w.body = w.body[:0]
+			w.emitted = 0
+		}
 	}
 }
 
@@ -202,17 +243,20 @@ func (w *response) Flush() {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
-	for len(w.body) > 0 {
-		n := len(w.body)
-		if !w.cw.chunking {
-			n = min(emissionSize, n) // the header is composed on this emission
-		}
-		if err := w.cw.writeBody(w.body[:n]); err != nil {
+	for len(w.body)-w.emitted > 0 {
+		n := min(emissionSize, len(w.body)-w.emitted) // the header is composed on this emission
+		if err := w.cw.writeBody(w.body[w.emitted : w.emitted+n]); err != nil {
 			w.brokeConn = true
 			return
 		}
-		w.body = nil
+		w.emitted += n
 	}
+	// Everything pending reached the wire synchronously; reset to the array
+	// origin so later writes (and the connection, after the response) keep
+	// the full backing array, with the window aligned to the fresh body.
+	w.c.bodyBuf = w.body
+	w.body = w.body[:0]
+	w.emitted = 0
 	w.c.flushOut()
 }
 
@@ -231,12 +275,13 @@ func (w *response) finish() {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
-	if len(w.body) > 0 && !w.brokeConn {
-		if err := w.cw.writeBody(w.body); err != nil {
+	if len(w.body)-w.emitted > 0 && !w.brokeConn {
+		if err := w.cw.writeBody(w.body[w.emitted:]); err != nil {
 			w.brokeConn = true
 		}
-		w.body = nil
 	}
+	w.c.bodyBuf = w.body // the origin slice: full backing array for the next request
+	w.body = nil
 	w.cw.close()
 	w.c.flushOut()
 	// Close the request body regardless of reuse (net/http parity); the
@@ -307,7 +352,10 @@ func (w *response) WritePrecomposed(status int, head []byte, body [][]byte) erro
 			}
 		}
 	}
-	return c.flushOut()
+	err := c.flushOut()
+	// The emission consumed h; keep its backing array for the next response.
+	c.headBuf = h[:0]
+	return err
 }
 
 // writeBody emits one body segment. The header block is composed on the
@@ -368,6 +416,10 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 	cw.wroteHeader = true
 	w := cw.res
 
+	// keepAlives mirrors net/http's server.doKeepAlives: once Shutdown has
+	// started, every response is emitted with Connection: close.
+	keepAlives := !w.c.srv.shuttingDown()
+
 	header := w.wireHeader()
 	var set eheader
 	// delHeader removes from the snapshot (owned) or excludes from the live
@@ -391,13 +443,16 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 	hasTE := te != ""
 
 	// Automatic Content-Length: the handler finished, the status allows a
-	// body, no CL was declared, and this is not an empty HEAD write.
-	if w.handlerDone && bodyAllowedForStatus(w.status) && !headerHas(header, "Content-Length") && (w.req.Method != "HEAD" || len(p) > 0) {
+	// body, no CL was declared and no Transfer-Encoding was set (net/http's
+	// !trailers && !hasTE: a TE-carrying response must not also declare a
+	// length; trailer support is a documented delta), and this is not an
+	// empty HEAD write.
+	if w.handlerDone && bodyAllowedForStatus(w.status) && !hasTE && !headerHas(header, "Content-Length") && (w.req.Method != "HEAD" || len(p) > 0) {
 		w.contentLength = int64(len(p))
 		set.contentLength = strconv.AppendInt(w.c.lenScratch[:0], int64(len(p)), 10)
 	}
 
-	if w.wants10KeepAlive && headerHas(header, "Content-Length") && header.Get("Connection") == "keep-alive" {
+	if w.wants10KeepAlive && keepAlives && headerHas(header, "Content-Length") && header.Get("Connection") == "keep-alive" {
 		w.closeAfterReply = false
 	}
 	hasCL := w.contentLength != -1
@@ -408,7 +463,7 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 	} else if !protoAtLeast(w.req.ProtoMajor, w.req.ProtoMinor, 1, 1) || w.wantsClose {
 		w.closeAfterReply = true
 	}
-	if header.Get("Connection") == "close" {
+	if header.Get("Connection") == "close" || !keepAlives {
 		w.closeAfterReply = true
 	}
 
@@ -421,11 +476,33 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 	// Drain the unread request body before the first response byte: this is
 	// what lets a connection survive a handler that did not read the body,
 	// and a body past the budget forces the close with a Connection: close
-	// header, exactly as net/http writes it.
-	if w.req.ContentLength != 0 && !w.closeAfterReply && w.drainRequestBody() {
-		w.closeAfterReply = true
-		delHeader("Connection")
-		set.connection = []byte("close")
+	// header, exactly as net/http writes it. requestTooLarge also marks the
+	// limit hit so the loop finishes the connection with the RST-avoidance
+	// close (net/http's closeWriteAndWait).
+	if w.req.ContentLength != 0 && !w.closeAfterReply {
+		switch w.drainRequestBody() {
+		case drainTooBig:
+			// net/http's budget overflow: requestTooLarge at drain time
+			// (the header is implicitly written by now, so no map Set),
+			// then the Connection is rewritten as a server extra header.
+			w.requestTooLarge()
+			delHeader("Connection")
+			set.connection = []byte("close")
+		case drainErr:
+			// The body reader failed mid-drain: usually the app's
+			// http.MaxBytesReader tripping on the remaining bytes. net/http
+			// learns the same overflow from its maxBytesReader's direct
+			// requestTooLarge call (an unexported-method interface this
+			// loop cannot receive across the package boundary), whose
+			// Connection: close lands in the header map when the overflow
+			// preceded the first header write — the shape the app's
+			// read-then-respond handlers produce. Place it there so the
+			// sorted block matches net/http's bytes.
+			w.requestTooLarge()
+			if !headerHas(header, "Connection") {
+				header.Set("Connection", "close")
+			}
+		}
 	}
 
 	code := w.status
@@ -554,32 +631,53 @@ func headerHas(h http.Header, key string) bool {
 	return ok
 }
 
+// requestTooLarge is what http.MaxBytesReader calls when the request body
+// passes its limit (net/http's method of the same name): the connection never
+// comes back, and the header, if not yet written, carries Connection: close
+// so the client sees the verdict before the reset.
+func (w *response) requestTooLarge() {
+	w.closeAfterReply = true
+	w.requestBodyLimitHit = true
+	if !w.wroteHeader {
+		w.handlerHeader.Set("Connection", "close")
+	}
+}
+
 // drainRequestBody consumes an unread request body up to the net/http budget,
-// reporting whether the body exceeded it (the connection then closes). The
-// 100-continue wrapper is bypassed, exactly as net/http's drain reads the raw
-// body: draining must not trigger the interim response.
-func (w *response) drainRequestBody() (tooBig bool) {
-	var scratch [8 << 10]byte
+// reporting why the connection must close: drainTooBig when the body exceeded
+// the post-handler budget and drainErr when the body reader itself failed (a
+// mid-body protocol error, or http.MaxBytesReader tripping during the drain).
+// The 100-continue wrapper is bypassed, exactly as net/http's drain reads the
+// raw body: draining must not trigger the interim response.
+type drainVerdict int
+
+const (
+	drainOK drainVerdict = iota
+	drainTooBig
+	drainErr
+)
+
+func (w *response) drainRequestBody() drainVerdict {
+	scratch := w.c.drainScratch[:]
 	body := w.req.Body
 	if cw, ok := body.(*continueReader); ok {
 		body = cw.ReadCloser
 	}
 	var read int64
 	for {
-		n, err := body.Read(scratch[:])
+		n, err := body.Read(scratch)
 		read += int64(n)
 		if read > maxPostHandlerReadBytes {
-			return true
+			return drainTooBig
 		}
 		if err == io.EOF {
 			if closer, ok := body.(io.Closer); ok {
 				closer.Close()
 			}
-			return false
+			return drainOK
 		}
 		if err != nil {
-			w.closeAfterReply = true
-			return true
+			return drainErr
 		}
 	}
 }
@@ -655,6 +753,11 @@ func (c *conn) composeHead(status []byte, h http.Header, exclude map[string]bool
 		}
 	}
 	head = append(head, '\r', '\n')
+	// Keep the grown backing arrays on the connection for the next response.
+	// The returned head is consumed by the flush that follows, and the key
+	// scratch only by this composition, so both can be reused next request.
+	c.headBuf = head[:0]
+	c.sortKeys = keys[:0]
 	return head
 }
 

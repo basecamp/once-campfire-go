@@ -13,6 +13,14 @@ import (
 	"time"
 )
 
+// fmtErr renders an error for the differential corpus, stable across runs.
+func fmtErr(err error) string {
+	if err == nil {
+		return "nil"
+	}
+	return err.Error()
+}
+
 // The differential corpus: the exact same raw request bytes are sent to a
 // stock net/http server and to this loop (same handler, same limits), and the
 // full response bytes must match after masking the Date header, which differs
@@ -202,6 +210,18 @@ func corpusHandler() http.Handler {
 			io.Copy(w, r.Body)
 		case "/notread":
 			w.Write([]byte("ok")) // leaves the request body unread (drain path)
+		case "/te":
+			// A handler-set Transfer-Encoding must not also get an
+			// automatic Content-Length (net/http's !hasTE gate).
+			w.Header().Set("Transfer-Encoding", "chunked")
+			io.WriteString(w, "te-body")
+		case "/limit":
+			// An http.MaxBytesReader overflow mid-read marks the response
+			// requestTooLarge: Connection: close and no reuse.
+			r.Body = http.MaxBytesReader(w, r.Body, 8)
+			n, err := io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			io.WriteString(w, "read "+strconv.Itoa(len(n))+" err "+fmtErr(err))
 		default:
 			http.Error(w, "no such route", http.StatusNotFound)
 		}
@@ -237,6 +257,8 @@ var parityCorpus = []parityCase{
 	{"POST chunked body", "POST /readall HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n0\r\n\r\n"},
 	{"POST body unread", "POST /notread HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello"},
 	{"POST body unread big", "POST /notread HTTP/1.1\r\nHost: h\r\nContent-Length: 300000\r\nConnection: close\r\n\r\n" + strings.Repeat("x", 300000)},
+	{"response TE no auto CL", "GET /te HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n"},
+	{"maxbytes overflow mid-read", "POST /limit HTTP/1.1\r\nHost: h\r\nContent-Length: 40\r\n\r\n" + strings.Repeat("x", 40)},
 	{"echo chunked", "POST /echo HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"},
 	{"100-continue", "POST /readall HTTP/1.1\r\nHost: h\r\nExpect: 100-continue\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello"},
 	{"100-continue body unread", "POST /notread HTTP/1.1\r\nHost: h\r\nExpect: 100-continue\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello"},
