@@ -361,3 +361,28 @@ generation-lifetime test, write-helper audit enumeration in
 message writes, presence, push subscriptions), concurrent publish (every recipient gets
 every payload) and concurrent publish+revocation storm under -race, existing frame byte
 parity fast-vs-legacy and 100/1000 simulated delivery tests unchanged.
+
+## Impeccable-correctness matrix (2026-10-07, pre-final)
+
+Nothing is claimed or PRed until every applicable box is green with evidence.
+
+| # | Check | Status |
+|---|---|---|
+| 1 | Single-member gzip fix (`engine-fix-gzip`, browser-safe splicing) | running |
+| 2 | Playwright proof: room/messages/search render full message lists in Chromium | pending 1 |
+| 3 | Full `-race -tags sqlite_fts5 ./...` on the merged tree | pending merge |
+| 4 | `bin/check` (gofmt/assets/vet/race) + `bin/check-assets` | pending merge |
+| 5 | `bin/check-upgrade --rust-root ../once-campfire-rust` (Go↔Rust interop) | pending merge |
+| 6 | `bin/check-browser.mjs` full workflow flow | pending 1 |
+| 7 | `bin/check-screens` pixels+aria equality (DOM/network deltas are pre-existing, documented) | pending 1 |
+| 8 | Native harness write verification (messages + FTS) and delivery completeness | pending merge |
+| 9 | Official acceptance: Rails + Rust (both revisions, built here) + Go, 3 reps, HTTP c=1/16/64, cable 100/500/1000; loadgen/server CPU recorded | pending 8 |
+| 10 | Merged-version profile | pending 9 |
+| 11 | `bin/check-container` + backup/restore | release item |
+| 12 | Fresh canonical seed shared by all apps; raw artifacts retained | with 9 |
+
+Known, documented limits carried into the record: strict DOM/network parity
+differences vs Rails (pre-existing upstream); single-process cache coherence;
+write-lane crash windows; frozen-time test artifacts. The engine's behaviour
+preservation is proven separately by on/off byte-parity, poisoning and
+invalidation-audit tests.
