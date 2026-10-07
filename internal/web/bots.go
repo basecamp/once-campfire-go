@@ -176,8 +176,9 @@ func (s *Server) botRequest(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		s.publish(room.ID, stream("append", room.DOM("messages"), markup))
-		s.messageCreated(message, room)
-		s.enqueueWebhooks(message, room)
+		s.messageCreated(message, room, nil)
+
+		s.enqueueWebhooks(message, room, nil)
 		w.Header().Set("Location", fmt.Sprintf("%s/messages/%d", s.origin(r), message.ID))
 		w.WriteHeader(201)
 	case "PATCH", "PUT":

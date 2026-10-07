@@ -6,7 +6,6 @@ import (
 	"math"
 	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -66,8 +65,69 @@ func expand(value string) []string {
 	return out
 }
 
-var qSeparator = regexp.MustCompile(`;\s*q="?`)
 var numberPrefix = regexp.MustCompile(`^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?`)
+
+// qParam returns the index range of the next q parameter at or after from —
+// `;` followed by optional whitespace, `q`, `=` and the reference
+// `;\s*q="?` match's optional quote — as (start of ';', end after the
+// quote), or ok=false when there is none.
+func qParam(item string, from int) (start, end int, ok bool) {
+	space := func(c byte) bool {
+		return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f'
+	}
+	for i := from; i < len(item); i++ {
+		if item[i] != ';' {
+			continue
+		}
+		j := i + 1
+		for j < len(item) && space(item[j]) {
+			j++
+		}
+		if j+1 >= len(item) || item[j] != 'q' || item[j+1] != '=' {
+			continue
+		}
+		end := j + 2
+		if end < len(item) && item[end] == '"' {
+			end++
+		}
+		return i, end, true
+	}
+	return 0, 0, false
+}
+
+// cutQuality splits an accept item at its first q parameter, returning the
+// media range and the first q value (cut at the item's next q parameter,
+// i.e. the reference's fields[1]). found reports whether any q value is
+// present after the reference's trailing-empty-field trim: an empty first
+// value under a later non-empty field is present (rubyFloat turns it into
+// 0), while an item whose q fields are all empty had them all trimmed and
+// carries no q.
+func cutQuality(item string) (name, q string, found bool) {
+	firstStart, firstEnd, ok := qParam(item, 0)
+	if !ok {
+		return item, "", false
+	}
+	next, _, hasNext := qParam(item, firstEnd)
+	if !hasNext {
+		next = len(item)
+	}
+	q = item[firstEnd:next]
+	// found: any non-empty field after the name (all-empty runs and a
+	// trailing empty field are trimmed, exactly like the reference's loop).
+	for cur := firstEnd; ; {
+		start, end, ok := qParam(item, cur)
+		if !ok {
+			found = cur < len(item)
+			break
+		}
+		if start > cur {
+			found = true
+			break
+		}
+		cur = end // empty field between adjacent parameters; keep walking
+	}
+	return item[:firstStart], q, found
+}
 
 func acceptItems(value string) []string {
 	var items []string
@@ -95,8 +155,8 @@ func acceptItems(value string) []string {
 }
 func ParseAccept(value string) ([]string, error) {
 	if !strings.Contains(value, ",") {
-		if loc := qSeparator.FindStringIndex(value); loc != nil {
-			value = value[:loc[0]]
+		if name, _, found := cutQuality(value); found {
+			value = name
 		}
 		if strings.TrimSpace(value) == "" {
 			return nil, nil
@@ -121,14 +181,8 @@ func ParseAccept(value string) ([]string, error) {
 	}
 	var items []item
 	for _, value := range acceptItems(value) {
-		fields := qSeparator.Split(value, -1)
-		for len(fields) > 0 && fields[len(fields)-1] == "" {
-			fields = fields[:len(fields)-1]
-		}
-		if len(fields) == 0 {
-			continue
-		}
-		name := strings.TrimSpace(fields[0])
+		name, qfield, found := cutQuality(value)
+		name = strings.TrimSpace(name)
 		if name == "" {
 			continue
 		}
@@ -138,15 +192,22 @@ func ParseAccept(value string) ([]string, error) {
 		}
 		for _, name := range names {
 			q := 1.0
-			if len(fields) > 1 {
-				q = rubyFloat(fields[1])
+			if found {
+				q = rubyFloat(qfield)
 			} else if name == "*/*" {
 				q = 0
 			}
 			items = append(items, item{name, math.Trunc(q * 100)})
 		}
 	}
-	sort.SliceStable(items, func(i, j int) bool { return items[i].q > items[j].q })
+	// Stable sort by q descending; an insertion sort matches
+	// sort.SliceStable's ordering for the few items an Accept header can
+	// carry and avoids the reflect machinery.
+	for i := 1; i < len(items); i++ {
+		for j := i; j > 0 && items[j-1].q < items[j].q; j-- {
+			items[j-1], items[j] = items[j], items[j-1]
+		}
+	}
 	find := func(name string) int {
 		for i, x := range items {
 			if x.name == name {

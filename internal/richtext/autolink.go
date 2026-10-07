@@ -81,7 +81,35 @@ func sanitizeString(s string) (string, error) {
 	sanitizeDOM(n, "default")
 	return serialize(n), nil
 }
+
+// maybeLinkable reports whether text contains any byte pattern the autoLink
+// passes could match: a scheme followed by :// (the URL pattern's first
+// branch), www. in either case (its second branch), or an @ (mandatory in
+// the email pattern). The passes cannot match without one of these, so a
+// negative scan lets autoLink return its input unchanged, which is exactly
+// what the passes would produce (their no-match outputs are the input).
+func maybeLinkable(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case ':':
+			if i+2 < len(s) && s[i+1] == '/' && s[i+2] == '/' {
+				return true
+			}
+		case '@':
+			return true
+		case 'w', 'W':
+			if i+3 < len(s) && (s[i+1] == 'w' || s[i+1] == 'W') && (s[i+2] == 'w' || s[i+2] == 'W') && s[i+3] == '.' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func autoLink(text string) (string, error) {
+	if !maybeLinkable(text) {
+		return text, nil
+	}
 	var out strings.Builder
 	last := 0
 	tags := indexTags(text)
@@ -145,6 +173,9 @@ func emailLocal(c rune) bool {
 	return c < 128 && (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("_.!#$%&'*/=?^`{|}~+-", c))
 }
 func autoLinkEmails(text string) (string, error) {
+	if !strings.ContainsRune(text, '@') {
+		return text, nil
+	}
 	var out strings.Builder
 	copied, position := 0, 0
 	tags := indexTags(text)

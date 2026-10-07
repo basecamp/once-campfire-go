@@ -190,22 +190,32 @@ func (s *Server) testPushNotification(w http.ResponseWriter, r *http.Request, u 
 	}
 	http.Redirect(w, r, s.origin(r)+pushPath, 302)
 }
-func (s *Server) messageCreated(message database.Message, room database.Room) {
+
+// messageCreated broadcasts the unread bumps and schedules push deliveries
+// for a created message. mentioned carries the mentioned user ids the create
+// path already derived from the body's single parse (ENGINE-45b); nil means
+// "derive here", which the bot and webhook callers rely on.
+func (s *Server) messageCreated(message database.Message, room database.Room, mentioned []int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	members, err := s.DB.RoomMemberIDs(ctx, room.ID)
 	if err != nil {
 		slog.Error("unread notification failed", "error", err)
 	} else {
+		// The payload is shared across members: json.Marshal and the frame
+		// cache only read it, so one map serves the whole loop.
+		payload := map[string]any{"roomId": room.ID}
 		for _, id := range members {
-			s.Cable.PublishStream(ctx, fmt.Sprintf("user_%d_unreads", id), map[string]any{"roomId": room.ID})
+			s.Cable.PublishStream(ctx, fmt.Sprintf("user_%d_unreads", id), payload)
 		}
 	}
 	if s.Push.VAPID == nil {
 		return
 	}
-	mentions := s.mentionedIDs(ctx, message.Body)
-	subscriptions, err := s.DB.PushRecipients(ctx, room.ID, message.CreatorID, mentions)
+	if mentioned == nil {
+		mentioned = s.mentionedIDs(ctx, message.Body)
+	}
+	subscriptions, err := s.DB.PushRecipients(ctx, room.ID, message.CreatorID, mentioned)
 	if err != nil {
 		slog.Error("push recipients failed", "error", err)
 		return

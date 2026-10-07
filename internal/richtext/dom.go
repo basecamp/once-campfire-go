@@ -95,11 +95,28 @@ func inner(n *xhtml.Node, markup string) error {
 
 var voidTags = words("area base br col embed hr img input link meta param source track wbr")
 
+// The escape replacers are immutable and goroutine-safe, so one instance
+// serves every call; the ContainsAny guard skips the copy entirely for the
+// overwhelmingly common node and attribute values that hold none of the
+// escaped bytes. Output bytes are identical to the per-call NewReplacer the
+// previous code built on every invocation.
+var (
+	escapeTextReplacer  = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\u00a0", "&nbsp;")
+	escapeAttrReplacer  = strings.NewReplacer("&", "&amp;", "\"", "&quot;", "\u00a0", "&nbsp;")
+	escapeAngleReplacer = strings.NewReplacer("<", "&lt;", ">", "&gt;")
+)
+
 func escapeText(s string) string {
-	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\u00a0", "&nbsp;").Replace(s)
+	if !strings.ContainsAny(s, "&<>\u00a0") {
+		return s
+	}
+	return escapeTextReplacer.Replace(s)
 }
 func escapeAttr(s string) string {
-	return strings.NewReplacer("&", "&amp;", "\"", "&quot;", "\u00a0", "&nbsp;").Replace(s)
+	if !strings.ContainsAny(s, "&\"\u00a0") {
+		return s
+	}
+	return escapeAttrReplacer.Replace(s)
 }
 func serialize(n *xhtml.Node) string {
 	var b strings.Builder
@@ -129,8 +146,8 @@ func serializeTo(b *strings.Builder, n *xhtml.Node, raw, attributeAngles bool) {
 			b.WriteString(a.Key)
 			b.WriteString(`="`)
 			value := escapeAttr(a.Val)
-			if attributeAngles {
-				value = strings.NewReplacer("<", "&lt;", ">", "&gt;").Replace(value)
+			if attributeAngles && strings.ContainsAny(value, "<>") {
+				value = escapeAngleReplacer.Replace(value)
 			}
 			b.WriteString(value)
 			b.WriteByte('"')

@@ -25,7 +25,7 @@ var reactions = []reaction{{"👍", "Thumbs up"}, {"👏", "Clapping"}, {"👋",
 // signedAvatar signs the avatar URL for a user, appending a deterministic
 // version stamp when updated is non-zero. Shared by the template funcs (with
 // a variadic adapter) and the compiled fragment renderer, so both paths
-// produce identical URLs.
+// produce identical URLs. The hot call sites go through avatarURL's cache.
 func signedAvatar(secrets *rails.Secrets, id int64, updated time.Time) string {
 	token := secrets.SignedID("User", id, "avatar", time.Time{})
 	path := fmt.Sprintf("/users/%s/avatar", token)
@@ -35,7 +35,7 @@ func signedAvatar(secrets *rails.Secrets, id int64, updated time.Time) string {
 	return path
 }
 
-func templateFuncs(secrets *rails.Secrets) template.FuncMap {
+func templateFuncs(secrets *rails.Secrets, avatars *avatarCache) template.FuncMap {
 	return template.FuncMap{
 		"helpMailto": func(user database.User) template.HTMLAttr {
 			value := "mailto:" + (&mail.Address{Name: user.Name, Address: user.Email}).String()
@@ -83,7 +83,7 @@ func templateFuncs(secrets *rails.Secrets) template.FuncMap {
 			if len(updated) > 0 {
 				t = updated[0]
 			}
-			return signedAvatar(secrets, id, t)
+			return avatarURL(avatars, secrets, id, t)
 		},
 		"versionTime": func(t time.Time) string { return t.UTC().Format("20060102150405") },
 		"epoch":       func(t time.Time) string { return fmt.Sprintf("%d", t.UnixMilli()) },
@@ -92,7 +92,7 @@ func templateFuncs(secrets *rails.Secrets) template.FuncMap {
 	}
 }
 
-func parseTemplates(secrets *rails.Secrets) (*template.Template, error) {
-	t, err := template.New("pages").Funcs(templateFuncs(secrets)).ParseFS(templateFiles, "templates/*.html")
+func parseTemplates(secrets *rails.Secrets, avatars *avatarCache) (*template.Template, error) {
+	t, err := template.New("pages").Funcs(templateFuncs(secrets, avatars)).ParseFS(templateFiles, "templates/*.html")
 	return t, err
 }

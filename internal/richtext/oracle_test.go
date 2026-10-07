@@ -107,6 +107,16 @@ func TestRustOracle(t *testing.T) {
 		if !reflect.DeepEqual(ids, result.Mentioned) {
 			t.Fatalf("%s: focused mentions differ", c.Name)
 		}
+		// ENGINE-45b: the create path derives display, plain text and
+		// mentions from ProcessMessage's single parse; its outputs must be
+		// exactly the focused calls' outputs, field for field.
+		message, messageErr := ProcessMessage(c.Body, Context{Host: c.Host, Resolve: resolve})
+		if message.Presentation != display.Presentation || message.Plain != display.Plain {
+			t.Fatalf("%s: ProcessMessage display differs: %v", c.Name, messageErr)
+		}
+		if !reflect.DeepEqual(message.Mentioned, ids) {
+			t.Fatalf("%s: ProcessMessage mentions differ", c.Name)
+		}
 		edited, _ := Editable(c.Body, Context{Host: c.Host, Resolve: resolve})
 		if edited != result.Editable {
 			t.Fatalf("%s: focused editor differs", c.Name)
