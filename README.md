@@ -59,7 +59,9 @@ handler as fallback, `off` disables ownership for A/B and rollback, and `force` 
 disables caching), which holds per-message fragments, the sidebar and the legacy recorded shells
 when the piece path is off; the engine piece cache reads the same key when routes migrate to it, so
 with both full the worst case is 2× the configured MiB (64 MiB by default), kept intentionally
-during the strangler migration. Sidebar fragments are keyed by a version, not by their content: an
+during the strangler migration. `CAMPFIRE_CABLE_FAST` (default `on`) gates the Action Cable
+fan-out fast paths (ENGINE-40): per-wake batched/vectored writes and the exact-payload frame
+cache; `off` selects the legacy one-write-per-frame path for A/B. Sidebar fragments are keyed by a version, not by their content: an
 in-process registry (seeded once from the database on first use; bumped after every sidebar-visible
 write — room create/rename/delete, membership join/leave/removal, unread changes via message
 create and presence, user rename/avatar/role, direct-placeholder transitions, account room

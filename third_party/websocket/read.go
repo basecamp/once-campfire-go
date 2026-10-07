@@ -38,15 +38,79 @@ func (c *Conn) Reader(ctx context.Context) (MessageType, io.Reader, error) {
 
 // Read is a convenience method around Reader to read a single message
 // from the connection.
+//
+// Campfire ENGINE-40: a single, unfragmented, uncompressed message is read
+// header-first into one exact-length buffer (one allocation, one payload
+// syscall) instead of being grown by io.ReadAll. Fragmented and compressed
+// messages fall back to the streaming path; wire behavior is unchanged.
 func (c *Conn) Read(ctx context.Context) (MessageType, []byte, error) {
-	typ, r, err := c.Reader(ctx)
+	typ, b, err := c.readMessageExact(ctx)
 	if err != nil {
 		return 0, nil, err
 	}
-
-	b, err := io.ReadAll(r)
-	return typ, b, err
+	return typ, b, nil
 }
+
+// readMessageExact reads one complete data message. It mirrors the locking
+// and error semantics of reader() (including the "failed to get reader"
+// wrap) so callers cannot distinguish it from the streaming path.
+func (c *Conn) readMessageExact(ctx context.Context) (typ MessageType, b []byte, err error) {
+	if err := c.readMu.lock(ctx); err != nil {
+		return 0, nil, fmt.Errorf("failed to get reader: %w", err)
+	}
+	unlocked := false
+	unlock := func() {
+		if !unlocked {
+			c.readMu.unlock()
+			unlocked = true
+		}
+	}
+	defer unlock()
+
+	if !c.msgReader.fin {
+		return 0, nil, fmt.Errorf("failed to get reader: %w", errors.New("previous message not read to completion"))
+	}
+
+	h, err := c.readLoop(ctx)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to get reader: %w", err)
+	}
+
+	if h.opcode == opContinuation {
+		err := errors.New("received continuation frame without text or binary frame")
+		c.writeError(StatusProtocolError, err)
+		return 0, nil, fmt.Errorf("failed to get reader: %w", err)
+	}
+
+	// Fragmented, compressed or unaddressably large messages go through the
+	// streaming reader, seeded with the header already consumed above.
+	// readMu must be released first: msgReader.Read re-locks it per call.
+	if !h.fin || h.rsv1 || h.payloadLength > int64(maxInt) {
+		c.msgReader.reset(ctx, h)
+		unlock()
+		b, err := io.ReadAll(c.msgReader)
+		return MessageType(h.opcode), b, err
+	}
+
+	limit := c.msgReader.limitReader.limit.Load()
+	if limit >= 0 && h.payloadLength > limit {
+		reason := fmt.Errorf("read limited at %d bytes", limit)
+		c.writeError(StatusMessageTooBig, reason)
+		return 0, nil, fmt.Errorf("%w: %v", ErrMessageTooBig, reason)
+	}
+
+	b = make([]byte, int(h.payloadLength))
+	if _, err := c.readFramePayload(ctx, b); err != nil {
+		return 0, nil, err
+	}
+	if !c.client {
+		mask(b, h.maskKey)
+	}
+	c.msgReader.fin = true
+	return MessageType(h.opcode), b, nil
+}
+
+const maxInt = int(^uint(0) >> 1)
 
 // CloseRead starts a goroutine to read from the connection until it is closed
 // or a data message is received.
@@ -264,13 +328,33 @@ func (c *Conn) readFrameHeader(ctx context.Context) (_ header, err error) {
 	}
 	defer c.finishRead(ctx, &err, timeoutSet)
 
-	h, err := readFrameHeader(c.br, c.readHeaderBuf[:])
+	h, err := readFrameHeader(c.readSource(), c.readHeaderBuf[:])
 	if err != nil {
 		return header{}, err
 	}
 
 	return h, nil
 }
+
+// readSource returns the connection's byte source. Server connections
+// (readSrc set) lazily allocate a small scratch reader over the
+// header-first source on their first read: a freshly accepted socket holds
+// nothing, and after activity the connection holds at most readScratchSize
+// bytes instead of net/http's 4KiB buffer. Payload reads at or above the
+// scratch size bypass the buffer entirely (bufio passes them straight to
+// the underlying reader), so large payloads are still read exactly, in one
+// syscall, into the caller's buffer.
+func (c *Conn) readSource() *bufio.Reader {
+	if c.readSrc != nil && c.br == nil {
+		c.br = bufio.NewReaderSize(c.readSrc, readScratchSize)
+	}
+	return c.br
+}
+
+// readScratchSize bounds the lazy read scratch for header-first server
+// connections. Small enough that an active socket's buffer is not "large";
+// large enough that a burst of small frames rides one fill.
+const readScratchSize = 512
 
 func (c *Conn) readFramePayload(ctx context.Context, p []byte) (_ int, err error) {
 	timeoutSet, err := c.prepareRead(ctx)
@@ -279,12 +363,18 @@ func (c *Conn) readFramePayload(ctx context.Context, p []byte) (_ int, err error
 	}
 	defer c.finishRead(ctx, &err, timeoutSet)
 
-	n, err := io.ReadFull(c.br, p)
+	n, err := io.ReadFull(c.readSource(), p)
 	if err != nil {
 		return n, fmt.Errorf("failed to read frame payload: %w", err)
 	}
 
 	return n, nil
+}
+
+// readByte reads a single byte from the connection's read source.
+// Used by the close-handshake discard loop.
+func (c *Conn) readByte() (byte, error) {
+	return c.readSource().ReadByte()
 }
 
 func (c *Conn) handleControl(ctx context.Context, h header) (err error) {

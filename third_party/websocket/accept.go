@@ -163,9 +163,20 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (_ *Con
 		return nil, err
 	}
 
+	// Campfire ENGINE-40: header-first reads. net/http's hijacked buffered
+	// reader (4KiB) is discarded instead of being retained for the
+	// connection's life, so an idle socket holds no large read buffer and
+	// nothing is ever zeroed while idle. Any bytes net/http already buffered
+	// (usually none: the first client frame occasionally coalesces with the
+	// handshake) are copied exactly and replayed ahead of the raw connection.
+	// The raw connection stays the write target so batched writes can use
+	// writev.
 	// https://github.com/golang/go/issues/32314
 	b, _ := brw.Reader.Peek(brw.Reader.Buffered())
-	brw.Reader.Reset(io.MultiReader(bytes.NewReader(b), netConn))
+	var readSrc io.Reader = netConn
+	if len(b) > 0 {
+		readSrc = io.MultiReader(bytes.NewReader(append([]byte(nil), b...)), netConn)
+	}
 
 	return newConn(connConfig{
 		subprotocol:    w.Header().Get("Sec-WebSocket-Protocol"),
@@ -176,8 +187,8 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (_ *Con
 		onPingReceived: opts.OnPingReceived,
 		onPongReceived: opts.OnPongReceived,
 
-		br: brw.Reader,
-		bw: brw.Writer,
+		readSrc: readSrc,
+		bw:      brw.Writer,
 	}), nil
 }
 
