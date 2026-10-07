@@ -7,20 +7,23 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-func parse(body string) (*xhtml.Node, error) {
-	return parseIn(body, nil)
+// parse runs the arena-backed fragment parse: every node and string of the
+// returned tree lives in a, valid until a's next Reset. Nothing on the tree
+// may outlive the call that owns a.
+func parse(a *xhtml.Arena, body string) (*xhtml.Node, error) {
+	return parseIn(a, body, nil)
 }
-func parseIn(body string, context *xhtml.Node) (*xhtml.Node, error) {
+func parseIn(a *xhtml.Arena, body string, context *xhtml.Node) (*xhtml.Node, error) {
 	if context == nil || context.Type != xhtml.ElementNode {
-		context = &xhtml.Node{Type: xhtml.ElementNode, Data: "body", DataAtom: atom.Body}
+		context = a.AllocNode(xhtml.ElementNode, atom.Body, "body", "", nil)
 	} else {
-		context = &xhtml.Node{Type: xhtml.ElementNode, Data: context.Data, DataAtom: context.DataAtom, Namespace: context.Namespace}
+		context = a.AllocNode(xhtml.ElementNode, context.DataAtom, context.Data, context.Namespace, nil)
 	}
-	nodes, err := xhtml.ParseFragmentWithOptions(strings.NewReader(strings.TrimPrefix(body, "\ufeff")), context, xhtml.ParseOptionEnableScripting(false))
+	nodes, err := a.ParseFragment(body, context, xhtml.ParseOptionEnableScripting(false))
 	if err != nil {
 		return nil, err
 	}
-	root := &xhtml.Node{Type: xhtml.DocumentNode}
+	root := a.AllocNode(xhtml.DocumentNode, 0, "", "", nil)
 	for _, node := range nodes {
 		root.AppendChild(node)
 	}
@@ -34,59 +37,71 @@ func attr(n *xhtml.Node, key string) string {
 	}
 	return ""
 }
-func setAttr(n *xhtml.Node, key, value string) {
-	for i, a := range n.Attr {
-		if a.Key == key {
+func setAttr(a *xhtml.Arena, n *xhtml.Node, key, value string) {
+	for i, at := range n.Attr {
+		if at.Key == key {
 			n.Attr[i].Val = value
 			return
 		}
 	}
-	n.Attr = append(n.Attr, xhtml.Attribute{Key: key, Val: value})
+	n.Attr = a.AttrAppend(n.Attr, xhtml.Attribute{Key: key, Val: value})
 }
-func children(n *xhtml.Node) []*xhtml.Node {
-	var out []*xhtml.Node
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		out = append(out, c)
-	}
-	return out
-}
+
+// walk visits n post-order. The child iteration captures each successor
+// before recursion because fn may mutate the tree (replace/remove children of
+// the node being visited) — the snapshot semantics of the previous
+// children() slice, without the per-node allocation.
 func walk(n *xhtml.Node, fn func(*xhtml.Node)) {
-	for _, c := range children(n) {
+	for c := n.FirstChild; c != nil; {
+		next := c.NextSibling
 		walk(c, fn)
+		c = next
 	}
 	fn(n)
 }
-func clone(n *xhtml.Node) *xhtml.Node {
-	out := &xhtml.Node{Type: n.Type, Data: n.Data, DataAtom: n.DataAtom, Namespace: n.Namespace, Attr: append([]xhtml.Attribute(nil), n.Attr...)}
+func clone(a *xhtml.Arena, n *xhtml.Node) *xhtml.Node {
+	out := a.CloneNode(n)
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		out.AppendChild(clone(c))
+		out.AppendChild(clone(a, c))
 	}
 	return out
 }
-func replace(n *xhtml.Node, markup string) error {
-	root, err := parseIn(markup, n.Parent)
+func replace(a *xhtml.Arena, n *xhtml.Node, markup string) error {
+	root, err := parseIn(a, markup, n.Parent)
 	if err != nil {
 		return err
 	}
 	if n.Parent == nil {
 		return nil
 	}
-	for _, c := range children(root) {
+	for {
+		c := root.FirstChild
+		if c == nil {
+			break
+		}
 		root.RemoveChild(c)
 		n.Parent.InsertBefore(c, n)
 	}
 	n.Parent.RemoveChild(n)
 	return nil
 }
-func inner(n *xhtml.Node, markup string) error {
-	root, err := parseIn(markup, n)
+func inner(a *xhtml.Arena, n *xhtml.Node, markup string) error {
+	root, err := parseIn(a, markup, n)
 	if err != nil {
 		return err
 	}
-	for _, c := range children(n) {
-		n.RemoveChild(c)
+	for {
+		if c := n.FirstChild; c != nil {
+			n.RemoveChild(c)
+		} else {
+			break
+		}
 	}
-	for _, c := range children(root) {
+	for {
+		c := root.FirstChild
+		if c == nil {
+			break
+		}
 		root.RemoveChild(c)
 		n.AppendChild(c)
 	}
@@ -96,63 +111,64 @@ func inner(n *xhtml.Node, markup string) error {
 var voidTags = words("area base br col embed hr img input link meta param source track wbr")
 
 // The escape replacers are immutable and goroutine-safe, so one instance
-// serves every call; the ContainsAny guard skips the copy entirely for the
-// overwhelmingly common node and attribute values that hold none of the
-// escaped bytes. Output bytes are identical to the per-call NewReplacer the
-// previous code built on every invocation.
+// serves every call; the ContainsAny guard returns strings without special
+// bytes unchanged, which is what the replacer would produce. Output bytes are
+// identical to the per-call NewReplacer the previous code built on every
+// invocation.
 var (
-	escapeTextReplacer  = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\u00a0", "&nbsp;")
-	escapeAttrReplacer  = strings.NewReplacer("&", "&amp;", "\"", "&quot;", "\u00a0", "&nbsp;")
-	escapeAngleReplacer = strings.NewReplacer("<", "&lt;", ">", "&gt;")
+	escapeTextReplacer = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\u00a0", "&nbsp;")
 )
 
+// escapeText is the context-free text escaper used by StripTags; the
+// pipeline's own serializers write escapes straight into the arena.
 func escapeText(s string) string {
 	if !strings.ContainsAny(s, "&<>\u00a0") {
 		return s
 	}
 	return escapeTextReplacer.Replace(s)
 }
-func escapeAttr(s string) string {
-	if !strings.ContainsAny(s, "&\"\u00a0") {
-		return s
-	}
-	return escapeAttrReplacer.Replace(s)
-}
-func serialize(n *xhtml.Node) string {
-	var b strings.Builder
+
+// serialize renders n into the arena and returns the view. The result is
+// valid until the owning arena's next Reset; output-level strings must be
+// copied (strings.Clone) before the arena is released.
+func serialize(a *xhtml.Arena, n *xhtml.Node) string {
+	b := a.NewBuilder()
 	serializeTo(&b, n, false, false)
 	return b.String()
 }
-func serializeTo(b *strings.Builder, n *xhtml.Node, raw, attributeAngles bool) {
+func serializeTo(b *xhtml.Builder, n *xhtml.Node, raw, attributeAngles bool) {
 	switch n.Type {
 	case xhtml.TextNode:
 		if raw {
 			b.WriteString(n.Data)
 		} else {
-			b.WriteString(escapeText(n.Data))
+			escapeTextTo(b, n.Data)
 		}
 		return
 	case xhtml.CommentNode:
-		b.WriteString("<!--" + n.Data + "-->")
+		b.WriteString("<!--")
+		b.WriteString(n.Data)
+		b.WriteString("-->")
 		return
 	case xhtml.ElementNode:
-		b.WriteByte('<')
+		b.PutByte('<')
 		b.WriteString(n.Data)
 		for _, a := range n.Attr {
-			b.WriteByte(' ')
+			b.PutByte(' ')
 			if a.Namespace != "" {
-				b.WriteString(a.Namespace + ":")
+				b.WriteString(a.Namespace)
+				b.PutByte(':')
 			}
 			b.WriteString(a.Key)
 			b.WriteString(`="`)
-			value := escapeAttr(a.Val)
-			if attributeAngles && strings.ContainsAny(value, "<>") {
-				value = escapeAngleReplacer.Replace(value)
+			if attributeAngles {
+				escapeAttrAnglesTo(b, a.Val)
+			} else {
+				escapeAttrTo(b, a.Val)
 			}
-			b.WriteString(value)
-			b.WriteByte('"')
+			b.PutByte('"')
 		}
-		b.WriteByte('>')
+		b.PutByte('>')
 		if n.Namespace == "" && voidTags[n.Data] {
 			return
 		}
@@ -161,8 +177,106 @@ func serializeTo(b *strings.Builder, n *xhtml.Node, raw, attributeAngles bool) {
 		serializeTo(b, c, n.Namespace == "" && rawTags[n.Data], attributeAngles)
 	}
 	if n.Type == xhtml.ElementNode {
-		b.WriteString("</" + n.Data + ">")
+		b.WriteString("</")
+		b.WriteString(n.Data)
+		b.PutByte('>')
 	}
+}
+
+// escapeTextTo appends the escapeText escaping of s (text-node rules).
+func escapeTextTo(b *xhtml.Builder, s string) {
+	last := 0
+	for i := 0; i < len(s); i++ {
+		var esc string
+		switch s[i] {
+		case '&':
+			esc = "&amp;"
+		case '<':
+			esc = "&lt;"
+		case '>':
+			esc = "&gt;"
+		case 0xc2: // \u00a0 in UTF-8 is c2 a0
+			if i+1 < len(s) && s[i+1] == 0xa0 {
+				b.WriteString(s[last:i])
+				b.WriteString("&nbsp;")
+				i++
+				last = i + 1
+			}
+		default:
+			continue
+		}
+		if esc != "" {
+			b.WriteString(s[last:i])
+			b.WriteString(esc)
+			last = i + 1
+		}
+	}
+	b.WriteString(s[last:])
+}
+
+// escapeAttrTo appends the escapeAttr escaping of s (attribute rules: &, ",
+// nbsp).
+func escapeAttrTo(b *xhtml.Builder, s string) {
+	last := 0
+	for i := 0; i < len(s); i++ {
+		var esc string
+		switch s[i] {
+		case '&':
+			esc = "&amp;"
+		case '"':
+			esc = "&quot;"
+		case 0xc2:
+			if i+1 < len(s) && s[i+1] == 0xa0 {
+				b.WriteString(s[last:i])
+				b.WriteString("&nbsp;")
+				i++
+				last = i + 1
+			}
+		default:
+			continue
+		}
+		if esc != "" {
+			b.WriteString(s[last:i])
+			b.WriteString(esc)
+			last = i + 1
+		}
+	}
+	b.WriteString(s[last:])
+}
+
+// escapeAttrAnglesTo is serializePresentation's attribute escaping: the
+// attribute rules, then the angle-bracket pass the presentation serializer
+// applies on top (a literal < becomes &amp;lt; — the two replacers compose).
+func escapeAttrAnglesTo(b *xhtml.Builder, s string) {
+	last := 0
+	for i := 0; i < len(s); i++ {
+		var esc string
+		switch s[i] {
+		case '&':
+			esc = "&amp;"
+		case '"':
+			esc = "&quot;"
+		case '<':
+			esc = "&lt;"
+		case '>':
+			esc = "&gt;"
+		case 0xc2:
+			if i+1 < len(s) && s[i+1] == 0xa0 {
+				b.WriteString(s[last:i])
+				b.WriteString("&nbsp;")
+				i++
+				last = i + 1
+			}
+		default:
+			continue
+		}
+		if esc != "" {
+			b.WriteString(s[last:i])
+			b.WriteString(esc)
+			last = i + 1
+		}
+	}
+	b.WriteString(s[last:])
 }
 func words(s string) map[string]bool {
 	m := map[string]bool{}
@@ -172,8 +286,8 @@ func words(s string) map[string]bool {
 	return m
 }
 
-func serializePresentation(n *xhtml.Node) string {
-	var b strings.Builder
+func serializePresentation(a *xhtml.Arena, n *xhtml.Node) string {
+	b := a.NewBuilder()
 	serializeTo(&b, n, false, true)
 	return b.String()
 }

@@ -153,6 +153,18 @@ func TestRustOracle(t *testing.T) {
 			failures = append(failures, mismatch{c.Name, check.name, actual, want, errorText})
 		}
 	}
+	// ENGINE-56: the arena-backed pipeline must reach its steady state on
+	// typical bodies with no allocations beyond the output buffers (the
+	// Result strings and mention slice). High-water is far below the
+	// per-node allocation count of the pre-arena implementation.
+	if n := testing.AllocsPerRun(100, func() {
+		_, err := ProcessMessage("First post!", Context{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}); int(n) > 8 {
+		t.Fatalf("ProcessMessage steady-state allocations: %d/op, want <= 8", int(n))
+	}
 	report, _ := json.MarshalIndent(failures, "", "  ")
 	if len(failures) > 0 {
 		if err = os.WriteFile(filepath.Join(t.TempDir(), "richtext-differences.json"), report, 0644); err != nil {
