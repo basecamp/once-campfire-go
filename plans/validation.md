@@ -404,3 +404,30 @@ Validation: 9 runs, 394,573 acknowledged writes verified in messages+FTS,
 
 Room p99 1.99 ms vs Rust 0.94; sidebar p99 0.56 vs 0.71 (faster). Raw:
 `bench/results/final-native-20261007/`.
+
+## FINAL official run (2026-10-07, fresh seed, gzip-fix tree, 3 reps)
+
+Elixir harness, production images, fresh seed `9f6241dc`, 3 rotating reps,
+c=16 medians, zero HTTP errors for all apps. Go image `once-campfire-go:final`
+(1f9fb2be, merged browser-safe gzip fix). Pre-ENGINE-45b/52/53/54.
+
+| Route c=16 | Rails | Go final | Rust | Go vs Rust | Go CPU µs | Rust CPU µs |
+|---|---:|---:|---:|---:|---:|---:|
+| room_show | 218 | 77,456 | 36,805 | **2.10×** | 48.2 | 103 |
+| messages_page | 408 | 81,412 | 41,923 | **1.94×** | 45.0 | 90.1 |
+| sidebar | 535 | 55,904 | 35,295 | **1.58×** | 69.0 | 108 |
+| search | 387 | 101,513 | 34,442 | **2.95×** | 36.3 | 97.6 |
+| post_message | 274 | 5,290 | 6,747 | 0.78× | 422 | 380 |
+| up | 4,199 | 181,792 | 242,700 | 0.75× | — | — |
+| avatar | 98,072 | 214,121 | 401,286 | 0.53× | — | — |
+| static_css | 135,488 | 307,544 | 423,514 | 0.73× | — | — |
+
+Cable sustained (delivered to all): 100 clients Go 3,523 vs Rust 4,010 (0.88×);
+500 clients 1,016 vs 1,122 (0.91×); 1000 clients 483 vs 540 (0.89×).
+Saturated post→all p50: Go faster at 500 (6.63 vs 7.97 ms) and 1000
+(14.1 vs 16.0 ms). Connect+subscribe tied/slightly behind (0.15 vs 0.13 s at
+1000). Memory: Go 158–225 MiB vs Rust 122–124 (both far below Rails 872–1399).
+
+Raw: `../once-campfire-elixir/bench/results/FINAL-official-20261007/`.
+This is the result of record for the gzip-fix tree; ENGINE-45b/52/53/54 are in
+flight and will be followed by one more official run for the complete set.
