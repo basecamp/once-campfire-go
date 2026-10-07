@@ -22,8 +22,21 @@ type reaction struct{ Character, Title string }
 
 var reactions = []reaction{{"👍", "Thumbs up"}, {"👏", "Clapping"}, {"👋", "Waving hand"}, {"💪", "Muscle"}, {"❤️", "Red heart"}, {"😂", "Face with tears of joy"}, {"🎉", "Party popper"}, {"🔥", "Fire"}}
 
-func parseTemplates(secrets *rails.Secrets) (*template.Template, error) {
-	return template.New("pages").Funcs(template.FuncMap{
+// signedAvatar signs the avatar URL for a user, appending a deterministic
+// version stamp when updated is non-zero. Shared by the template funcs (with
+// a variadic adapter) and the compiled fragment renderer, so both paths
+// produce identical URLs.
+func signedAvatar(secrets *rails.Secrets, id int64, updated time.Time) string {
+	token := secrets.SignedID("User", id, "avatar", time.Time{})
+	path := fmt.Sprintf("/users/%s/avatar", token)
+	if !updated.IsZero() {
+		path += "?v=" + updated.UTC().Format("20060102150405")
+	}
+	return path
+}
+
+func templateFuncs(secrets *rails.Secrets) template.FuncMap {
+	return template.FuncMap{
 		"helpMailto": func(user database.User) template.HTMLAttr {
 			value := "mailto:" + (&mail.Address{Name: user.Name, Address: user.Email}).String()
 			return template.HTMLAttr(`href="` + template.HTMLEscapeString(value) + `"`)
@@ -66,16 +79,20 @@ func parseTemplates(secrets *rails.Secrets) (*template.Template, error) {
 		"stylesheets": func() template.HTML { return assets.Stylesheets },
 		"importmap":   func() template.HTML { return assets.Importmap },
 		"avatar": func(id int64, updated ...time.Time) string {
-			token := secrets.SignedID("User", id, "avatar", time.Time{})
-			path := fmt.Sprintf("/users/%s/avatar", token)
-			if len(updated) > 0 && !updated[0].IsZero() {
-				path += "?v=" + updated[0].UTC().Format("20060102150405")
+			var t time.Time
+			if len(updated) > 0 {
+				t = updated[0]
 			}
-			return path
+			return signedAvatar(secrets, id, t)
 		},
 		"versionTime": func(t time.Time) string { return t.UTC().Format("20060102150405") },
 		"epoch":       func(t time.Time) string { return fmt.Sprintf("%d", t.UnixMilli()) },
 		"iso":         func(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000Z") },
 		"reactions":   func() []reaction { return reactions },
-	}).ParseFS(templateFiles, "templates/*.html")
+	}
+}
+
+func parseTemplates(secrets *rails.Secrets) (*template.Template, error) {
+	t, err := template.New("pages").Funcs(templateFuncs(secrets)).ParseFS(templateFiles, "templates/*.html")
+	return t, err
 }

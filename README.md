@@ -149,7 +149,16 @@ text, author, boosts) hydrate exactly where they always did, on a per-message fr
 which also keeps the around/after pages on the same hydration path the before pages always used.
 The cache is bounded by bytes and by 4096 entries, pruned oldest-first to 75% of the budget like
 the fragment cache; a single window never exceeds a quarter of the budget.
-`campfire db:prepare` initializes an empty database and checks
+`CAMPFIRE_FAST_RENDER` (default `on`; also accepts `true`/`1` and `off`/`false`/`0`, warning on anything else) compiles the `message-uncached` fragment — with
+its `message-actions`, `presentation`, `boosts` and `boost` partials — once at startup into a flat
+program of literal and field ops (`internal/web/fastrender.go`): the compiled renderer appends the
+same bytes `html/template` would produce (it is compiled from the templates' own escaped
+pipelines and re-implements exactly those escapers) into a caller-supplied buffer with zero
+allocations of its own, and `messageViews` shares that fragment with the cable broadcast and the
+Turbo response without re-rendering. Setting it `off` reverts to executing the fragment through
+`html/template`, byte-identically, for A/B and rollback. If the fragment compile fails (a template
+edit introduced a construct it does not know), the server logs a warning and keeps serving via
+`html/template` rather than failing startup. `campfire db:prepare` initializes an empty database and checks
 migration versions; existing databases missing migrations are rejected.
 
 The Go runtime's garbage collector is exposed through `CAMPFIRE_GOGC` (the GOGC target percentage,
