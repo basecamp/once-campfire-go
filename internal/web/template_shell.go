@@ -1,10 +1,12 @@
 package web
 
 import (
+	"html/template"
+	"time"
+
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/responsebody"
 	"github.com/basecamp/once-campfire-go/internal/useragent"
-	"html/template"
 )
 
 // Only immutable surrounding template bytes are retained. Eviction cannot change
@@ -30,8 +32,12 @@ type layoutShellPage struct {
 }
 
 func shellPage(p page) layoutShellPage {
+	room := p.Room
+	// Message activity touches the room, but surrounding HTML does not render
+	// that timestamp. The fresh refresh cursor is inserted by roomParts.
+	room.UpdatedAt = time.Time{}
 	return layoutShellPage{
-		User: p.User, Room: p.Room, Account: p.Account, Platform: p.Platform,
+		User: p.User, Room: room, Account: p.Account, Platform: p.Platform,
 		Title: p.Title, BodyClass: p.BodyClass, Screen: p.Screen,
 		Origin: p.Origin, Stream: p.Stream, VAPIDPublicKey: p.VAPIDPublicKey,
 		Notice: p.Notice, Error: p.Error, CustomStyles: p.CustomStyles,

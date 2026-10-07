@@ -2,14 +2,13 @@ package web
 
 import (
 	"bytes"
-	"github.com/basecamp/once-campfire-go/internal/database"
 	"html/template"
 	"testing"
 	"time"
 
-	"github.com/basecamp/once-campfire-go/internal/useragent"
-
+	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/responsebody"
+	"github.com/basecamp/once-campfire-go/internal/useragent"
 )
 
 func TestRoomShellPreservesBytesAndRequestData(t *testing.T) {
@@ -37,6 +36,17 @@ func TestRoomShellPreservesBytesAndRequestData(t *testing.T) {
 	}
 	check(base)
 	check(base)
+	t.Run("room activity reuses shell", func(t *testing.T) {
+		entries, size := len(app.fragments.entries), app.fragments.bytes
+		p := base
+		p.Room.UpdatedAt = time.Unix(1700000000, 0)
+		p.LoadedAt = "1234567999"
+		p.MessagesHTML = "<p>new message</p>"
+		check(p)
+		if len(app.fragments.entries) != entries || app.fragments.bytes != size {
+			t.Fatal("room activity retained another copy of unchanged shell HTML")
+		}
+	})
 	changes := map[string]func(*page){
 		"timestamp and messages": func(p *page) { p.LoadedAt = "1234567999"; p.MessagesHTML = "<p>new message</p>" },
 		"user":                   func(p *page) { p.User.Name = "Other <person>"; p.User.ID++ },
