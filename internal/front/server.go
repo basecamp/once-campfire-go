@@ -44,7 +44,11 @@ func bodyLimit(next http.Handler, limit int64) http.Handler {
 }
 func forward(next http.Handler, c Config) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r = r.Clone(r.Context())
+		// The server allocates a fresh Request and Header map per request
+		// (net/http.readRequestLimit), so the header edits below are made in
+		// place: cloning the request bought nothing and cost the largest
+		// per-request allocation in the public chain (a full header-map copy
+		// for the cookie-heavy loadgen requests).
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
 		if !c.ForwardHeaders {
 			for _, name := range []string{"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Port", "X-Forwarded-Proto", "Forwarded"} {
@@ -85,7 +89,9 @@ func Serve(ctx context.Context, c Config, app http.Handler) error {
 	} else {
 		app = bodyLimit(Deflate(app), c.MaxRequestBody)
 	}
-	public := forward(PublicCompression(NewCache(c.CacheSize, c.MaxCacheItemSize).Handler(app), c), c)
+	cache := NewCache(c.CacheSize, c.MaxCacheItemSize)
+	cache.FixedRoutes = c.FixedRoutes
+	public := forward(PublicCompression(cache.Handler(app), c), c)
 	var servers []*http.Server
 	var listeners []net.Listener
 	// loops holds the owned-loop servers replacing a net/http target

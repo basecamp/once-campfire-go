@@ -26,10 +26,21 @@ type Cache struct {
 	entries                 map[string]*list.Element
 	order                   *list.List
 	size, capacity, maxItem int64
+	// FixedRoutes enables the fixed-route table (fixed.go); see
+	// Config.FixedRoutes. The zero value disables it, so NewCache's default
+	// is on (matching the production FromEnv default).
+	FixedRoutes bool
+	// fixed holds the precomputed responses of the fixed routes: the first
+	// unconditional GET captures the route's application response once per
+	// content encoding and every later request replays the captured bytes
+	// without invoking the app. Bounded by construction: one pair for each
+	// path in fixedRoutes.
+	fixed       map[string]*fixedPair
+	fixedFailed bool
 }
 
 func NewCache(capacity, maxItem int64) *Cache {
-	return &Cache{entries: map[string]*list.Element{}, order: list.New(), capacity: capacity, maxItem: maxItem}
+	return &Cache{entries: map[string]*list.Element{}, order: list.New(), capacity: capacity, maxItem: maxItem, FixedRoutes: true, fixed: map[string]*fixedPair{}}
 }
 
 var publicDirective = regexp.MustCompile(`\bpublic\b`)
@@ -58,8 +69,22 @@ func lifetime(status int, h http.Header) time.Duration {
 	}
 	return time.Duration(seconds) * time.Second
 }
+
+// baseKey builds the cache key in one allocation: a Builder with an exact
+// size hint, instead of the chained concatenation that allocated once per
+// part. The key shape (method \n path \n query \n host) is unchanged.
 func baseKey(r *http.Request) string {
-	return r.Method + "\n" + r.URL.EscapedPath() + "\n" + r.URL.RawQuery + "\n" + r.Host
+	path := r.URL.EscapedPath()
+	var b strings.Builder
+	b.Grow(len(r.Method) + len(path) + len(r.URL.RawQuery) + len(r.Host) + 3)
+	b.WriteString(r.Method)
+	b.WriteByte('\n')
+	b.WriteString(path)
+	b.WriteByte('\n')
+	b.WriteString(r.URL.RawQuery)
+	b.WriteByte('\n')
+	b.WriteString(r.Host)
+	return b.String()
 }
 func (c *Cache) get(key string, r *http.Request) *cacheEntry {
 	c.mu.Lock()
@@ -103,15 +128,63 @@ func (c *Cache) put(entry *cacheEntry) {
 	c.size += entry.size
 }
 
-// recordResponse streams through and keeps only a bounded copy of cacheable bodies.
+// replay writes one stored entry through the response writer: the single-alloc
+// header copy, the validator check and the body write are shared by ordinary
+// hits and fixed-route replays. hit reports whether the ordinary X-Cache: hit
+// marker applies; fixed replays keep the captured X-Cache value, which is the
+// miss marker the application path produced when the fixed table was filled.
+func replay(w http.ResponseWriter, r *http.Request, entry *cacheEntry, hit bool) {
+	if marker, ok := w.(finalMarker); ok {
+		// The recorded bytes are final; skip the compression wrapper's
+		// buffering pass. Its header policy still runs in WriteHeader.
+		marker.markFinal()
+	}
+	h := w.Header()
+	// One backing array for every header value slice: the per-header
+	// append([]string(nil), values...) copies allocated one slice each.
+	count := 0
+	for _, values := range entry.header {
+		count += len(values)
+	}
+	joined := make([]string, 0, count)
+	for name, values := range entry.header {
+		base := len(joined)
+		joined = append(joined, values...)
+		h[name] = joined[base:]
+	}
+	if hit {
+		// The hit marker must overwrite the captured miss marker written at
+		// fill time, so it lands after the header copy.
+		h.Set("X-Cache", "hit")
+	}
+	if etag := entry.header.Get("ETag"); etag != "" && r.Header.Get("If-None-Match") != "" {
+		for _, candidate := range strings.Split(r.Header.Get("If-None-Match"), ",") {
+			if strings.TrimSpace(candidate) == etag {
+				h.Del("Content-Length")
+				w.WriteHeader(304)
+				return
+			}
+		}
+	}
+	w.WriteHeader(entry.status)
+	if r.Method != "HEAD" {
+		w.Write(entry.body)
+	}
+}
+
+// recordResponse streams through and keeps only a bounded copy of cacheable
+// bodies. captureAlways forces the copy for the fixed-route fill pass, whose
+// response is recorded even though its Cache-Control makes it uncacheable by
+// the ordinary cache.
 type recordResponse struct {
 	http.ResponseWriter
-	status   int
-	header   http.Header
-	body     bytes.Buffer
-	max      int64
-	ttl      time.Duration
-	overflow bool
+	status        int
+	header        http.Header
+	body          bytes.Buffer
+	max           int64
+	ttl           time.Duration
+	overflow      bool
+	captureAlways bool
 }
 
 func (w *recordResponse) Unwrap() http.ResponseWriter { return w.ResponseWriter }
@@ -121,7 +194,9 @@ func (w *recordResponse) WriteHeader(status int) {
 	}
 	w.status = status
 	w.ttl = lifetime(status, w.Header())
-	if w.ttl > 0 {
+	if w.captureAlways {
+		w.ttl = time.Hour
+	} else if w.ttl > 0 {
 		w.Header().Del("Set-Cookie")
 	}
 	w.header = w.Header().Clone()
@@ -159,32 +234,34 @@ func (c *Cache) Handler(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Fixed routes replay a captured response instead of the application;
+		// see fixed.go. The lookup is a map miss for every other path.
+		if pair := c.pairFor(r); pair != nil {
+			if entry := pair.forRequest(r); entry != nil {
+				replay(w, r, entry, false)
+				return
+			}
+			// Encoding the pair cannot serve: the application path below
+			// answers (its 406 or pass-through policy).
+		}
 		key := baseKey(r)
 		if entry := c.get(key, r); entry != nil {
-			for name, values := range entry.header {
-				w.Header()[name] = append([]string(nil), values...)
-			}
-			w.Header().Set("X-Cache", "hit")
-			if etag := entry.header.Get("ETag"); etag != "" {
-				for _, candidate := range strings.Split(r.Header.Get("If-None-Match"), ",") {
-					if strings.TrimSpace(candidate) == etag {
-						w.Header().Del("Content-Length")
-						w.WriteHeader(304)
-						return
-					}
-				}
-			}
-			w.WriteHeader(entry.status)
-			if r.Method != "HEAD" {
-				w.Write(entry.body)
-			}
+			replay(w, r, entry, true)
 			return
 		}
 		w.Header().Set("X-Cache", "miss")
-		capture := &recordResponse{ResponseWriter: w, max: c.maxItem}
+		fixed := c.FixedRoutes && fixedCandidate(r) && !c.fixedFailed
+		capture := &recordResponse{ResponseWriter: w, max: c.maxItem, captureAlways: fixed}
 		next.ServeHTTP(capture, r)
 		if capture.status == 0 {
 			capture.WriteHeader(200)
+		}
+		// The first clean unconditional GET of a fixed route completes the
+		// table: the application just produced one encoding of the response,
+		// the chain runs once more for the other, and later requests replay.
+		if fixed {
+			c.fillFixed(r, next, capture)
+			return
 		}
 		if capture.ttl <= 0 || capture.overflow {
 			return

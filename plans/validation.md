@@ -404,3 +404,68 @@ Validation: 9 runs, 394,573 acknowledged writes verified in messages+FTS,
 
 Room p99 1.99 ms vs Rust 0.94; sidebar p99 0.56 vs 0.71 (faster). Raw:
 `bench/results/final-native-20261007/`.
+
+## ENGINE-52 record (2026-10-07, auxiliary-route front fast paths)
+
+The three auxiliary rows of the official acceptance run — up, avatar,
+static_css — are tiny fixed responses whose gap to Rust was per-response
+overhead in the public front path (`merged-official-20261007`: up 0.73×,
+avatar 0.55×, static_css 0.75×). This record closes the per-request work:
+
+- **Fixed `/up` table** (`CAMPFIRE_FRONT_FIXED`, default `on`; `off` = the
+  application path, byte for byte): the first unconditional GET captures the
+  health response once per content encoding (identity and gzip — the chain
+  runs a second pass with the other Accept-Encoding and the captured gzip
+  body is verified to decode to the identity bytes), and every later request
+  replays the captured bytes without touching sessions, the arena, the
+  response buffer or the application. The table is keyed by host, path and
+  the exact Accept value (the application negotiates the health format from
+  Accept and emits `Vary: Accept`), bounded at 16 pairs, and conditional,
+  Range, Upgrade, non-negotiable-encoding and uncaptured-Accept requests
+  still reach the application. Replays carry the exact captured headers —
+  validators, `Vary`, `Content-Encoding`, `X-Cache: miss` — so the wire
+  bytes are identical to the application path, chunked framing included
+  (the application path emits no Content-Length, so neither does a replay).
+- **Replay lane of the ordinary response cache**: the compression wrapper's
+  buffering/decision pass is skipped for recorded replays (header policy
+  still runs in `WriteHeader`), and the per-header copied header slices
+  share one allocation. Wire-identical by construction.
+- **Encoding negotiation memo**: the public-layer per-request
+  Accept-Encoding parse is memoized per header value (bounded; the decision
+  is a pure function of the value). The count includes the identity path:
+  `identity` must not be starved out by an unbounded table, so the cap is 128
+  with a wholesale clear.
+- **`forward` no longer clones the request**: net/http allocates a fresh
+  `Request` and header map per request (`readRequestLimit`), so the clone —
+  the largest per-request allocation in the public chain for the
+  cookie-bearing loadgen requests — was pure overhead. The header edits are
+  made in place; `X-Forwarded-*` behavior is unchanged.
+
+Parity: `internal/front/parity_test.go` and `internal/web/aux_parity_test.go`
+compare the fast paths against the application path byte for byte (status,
+headers minus Date, raw body) across gzip/identity/absent/zstd-only
+Accept-Encoding, no-Accept/json/browser Accept, cookie-bearing requests,
+HEAD, rejected encodings and If-None-Match conditionals, and pin that the
+fixed table serves without invoking the application after the first fill.
+
+Package micro-benchmarks (`taskset -c 16-31 nice -n 19 env GOMAXPROCS=4`,
+single keep-alive connection, loadgen header shape; server chain only,
+handler over a shim writer, all three routes):
+
+| Benchmark | Before | After | Alloc before | Alloc after |
+|---|---:|---:|---:|---:|
+| FrontDirectUp (fixed replay) | 4,942 ns, 4,963 B, 42 allocs | 1,485 ns, 1,784 B, 18 allocs | ×3.3 | −57% |
+| FrontDirectAvatarHit | 2,034 ns, 3,048 B, 35 allocs | 1,603 ns, 2,072 B, 20 allocs | ×1.27 | −43% |
+| FrontDirectStaticCSSHit | 1,971 ns, 2,840 B, 35 allocs | 1,411 ns, 1,848 B, 20 allocs | ×1.40 | −43% |
+
+Full-chain end-to-end (same harness, server+client share the process):
+FrontUp 22.6 → 17.1 µs, FrontAvatarHit 22.4 → 20.9 µs, FrontStaticCSSHit
+18.7 → 18.0 µs, FrontUpLogged 22.4 → 18.1 µs (the log line still costs
+~1.8 µs; `LOG_REQUESTS` stays on by default). The residual hit-path cost
+is net/http's per-request parse/write machinery and socket syscalls; the
+measured trivial-handler floor for this harness is ~14 µs, so the front
+chain itself now sits ~1.5 µs above the floor. Adding Content-Length to
+replays (which would remove chunked framing) was deliberately not done:
+the application path emits no Content-Length, and the mandate is byte
+identity. A precomposed public-listener writer (fastserve) is the next
+step beyond this record.
