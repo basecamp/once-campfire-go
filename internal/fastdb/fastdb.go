@@ -751,36 +751,42 @@ func (c *Conn) anchorStamp(room, anchor int64) ([]byte, error) {
 
 // scanUser decodes the nine userColumns columns of the current row.
 func scanUser(rows *Rows) (User, error) {
+	return scanUserAt(rows, 0)
+}
+
+// scanUserAt decodes the nine userColumns columns starting at column off,
+// for joined statements whose room columns precede the user columns.
+func scanUserAt(rows *Rows, off int) (User, error) {
 	var user User
 	var err error
-	if user.ID, err = rows.Int64(0); err != nil {
+	if user.ID, err = rows.Int64(off + 0); err != nil {
 		return user, err
 	}
-	if user.Name, err = rows.Text(1); err != nil {
+	if user.Name, err = rows.Text(off + 1); err != nil {
 		return user, err
 	}
-	if user.Email, err = rows.Text(2); err != nil {
+	if user.Email, err = rows.Text(off + 2); err != nil {
 		return user, err
 	}
-	if user.Password, err = rows.Text(3); err != nil {
+	if user.Password, err = rows.Text(off + 3); err != nil {
 		return user, err
 	}
-	role, err := rows.Int64(4)
+	role, err := rows.Int64(off + 4)
 	if err != nil {
 		return user, err
 	}
-	status, err := rows.Int64(5)
+	status, err := rows.Int64(off + 5)
 	if err != nil {
 		return user, err
 	}
 	user.Role, user.Status = int(role), int(status)
-	if user.Bio, err = rows.Text(6); err != nil {
+	if user.Bio, err = rows.Text(off + 6); err != nil {
 		return user, err
 	}
-	if user.UpdatedAt, err = rows.Stamp(7); err != nil {
+	if user.UpdatedAt, err = rows.Stamp(off + 7); err != nil {
 		return user, err
 	}
-	if user.BotToken, err = rows.Text(8); err != nil {
+	if user.BotToken, err = rows.Text(off + 8); err != nil {
 		return user, err
 	}
 	return user, nil

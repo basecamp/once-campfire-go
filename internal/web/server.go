@@ -146,6 +146,11 @@ type page struct {
 	Messages                     []messageView
 	Setup                        bool
 	Query                        string
+	// sidebarKey carries the version-keyed fragment key from Server.sidebar
+	// to render, which stores the rendered fragment under it on a miss. It is
+	// unexported: only the sidebar handler sets it, and the render's sidebar
+	// branch is the only reader.
+	sidebarKey string
 }
 type messageView struct {
 	AllEmoji                         bool
@@ -522,12 +527,14 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	}
 	sidebarKey := ""
 	if name == "sidebar" {
-		sidebarKey = sidebarCacheKey(p)
-		if fragment, ok := s.fragments.get(sidebarKey); ok {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(status)
-			w.Write([]byte(fragment))
-			return
+		sidebarKey = p.sidebarKey
+		if sidebarKey != "" {
+			if fragment, ok := s.fragments.get(sidebarKey); ok {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(status)
+				w.Write([]byte(fragment))
+				return
+			}
 		}
 	}
 	b := borrowBuffer()
@@ -883,12 +890,30 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 	}
 }
 func (s *Server) sidebar(w http.ResponseWriter, r *http.Request, u database.User) {
+	// The fragment key comes from the sidebar version registry alone; a hit
+	// is served before any room, membership or placeholder read and before
+	// render's pageSetup (account read, flash, negotiation bookkeeping).
+	version, err := s.DB.SidebarVersion(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	key := sidebarFragmentKey(u.ID, version)
+	if fragment, ok := s.fragments.get(key); ok {
+		if respondFormat(w, r, "html") == "" {
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(200)
+		w.Write([]byte(fragment))
+		return
+	}
 	items, placeholders, err := s.sidebarData(r, u)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "sidebar", 200, page{Placeholders: placeholders, SidebarRooms: items, User: u, RoomsStream: s.Secrets.SignStream("rooms"), UserRoomsStream: s.Secrets.SignStream(rails.UserRoomsStream(u.ID))})
+	s.render(w, r, "sidebar", 200, page{Placeholders: placeholders, SidebarRooms: items, User: u, RoomsStream: s.Secrets.SignStream("rooms"), UserRoomsStream: s.Secrets.SignStream(rails.UserRoomsStream(u.ID)), sidebarKey: key})
 }
 func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User) {
 	q := database.SearchQuery(r.FormValue("q"))

@@ -28,6 +28,9 @@ type DB struct {
 	Read                *readPool
 	Write               *sql.DB
 	Now                 func() time.Time
+	// sidebar is the in-process sidebar fragment version registry
+	// (internal/database/versions.go); see DB.SidebarVersion.
+	sidebar sidebarVersions
 }
 
 func Open(path string, readers int) (*DB, error) {

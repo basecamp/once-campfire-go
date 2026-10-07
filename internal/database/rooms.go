@@ -126,7 +126,11 @@ func (d *DB) CreateRoom(ctx context.Context, creator int64, kind, name string, u
 		return room, err
 	}
 	err = d.Read.QueryRowContext(ctx, "SELECT id,creator_id,coalesce(name,''),type,updated_at FROM rooms WHERE id=?", room.ID).Scan(&room.ID, &room.CreatorID, &room.Name, &room.Type, timestamp{&room.UpdatedAt})
-	return room, err
+	if err != nil {
+		return room, err
+	}
+	d.bumpSidebarVersion()
+	return room, nil
 }
 func (d *DB) UpdateRoom(ctx context.Context, id int64, kind, name string, users []int64) error {
 	var revoked []int64
@@ -193,6 +197,9 @@ func (d *DB) UpdateRoom(ctx context.Context, id int64, kind, name string, users 
 			d.ResetConnections(user)
 		}
 	}
+	if err == nil {
+		d.bumpSidebarVersion()
+	}
 	return err
 }
 func (d *DB) DeleteRoom(ctx context.Context, id int64) error {
@@ -219,6 +226,7 @@ func (d *DB) DeleteRoom(ctx context.Context, id int64) error {
 	})
 	if err == nil {
 		d.PurgeDetached(blobs)
+		d.bumpSidebarVersion()
 	}
 	return err
 }
@@ -242,10 +250,12 @@ func (d *DB) SetInvolvement(ctx context.Context, user, room int64, value string)
 	if count == 0 {
 		return sql.ErrNoRows
 	}
+	d.bumpSidebarVersion()
 	return nil
 }
 func (d *DB) Presence(ctx context.Context, user, room int64, action string) error {
-	return d.Transaction(ctx, func(tx *sql.Tx) error {
+	clearUnread := action == "present"
+	err := d.Transaction(ctx, func(tx *sql.Tx) error {
 		now := d.Now()
 		stamp, cutoff := Stamp(now), Stamp(now.Add(-60*time.Second))
 		var query string
@@ -267,6 +277,10 @@ func (d *DB) Presence(ctx context.Context, user, room int64, action string) erro
 		_, err := tx.ExecContext(ctx, query, cutoff, stamp, user, room)
 		return err
 	})
+	if err == nil && clearUnread {
+		d.bumpSidebarVersion()
+	}
+	return err
 }
 
 // OriginalRoom follows Room.original (creation order, not the fixture ID order).

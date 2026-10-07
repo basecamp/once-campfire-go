@@ -59,7 +59,18 @@ handler as fallback, `off` disables ownership for A/B and rollback, and `force` 
 disables caching), which holds per-message fragments, the sidebar and the legacy recorded shells
 when the piece path is off; the engine piece cache reads the same key when routes migrate to it, so
 with both full the worst case is 2× the configured MiB (64 MiB by default), kept intentionally
-during the strangler migration. `CAMPFIRE_RECORDED_PIECES` (default `on`; also accepts `true`/`1`
+during the strangler migration. Sidebar fragments are keyed by a version, not by their content: an
+in-process registry (seeded once from the database on first use; bumped after every sidebar-visible
+write — room create/rename/delete, membership join/leave/removal, unread changes via message
+create and presence, user rename/avatar/role, direct-placeholder transitions, account room
+restrictions) yields the key without reading any room, membership or placeholder rows, so a cache
+hit serves the fragment with no row reads and no page setup, and the entry accounting is the same
+bounded LRU as every other fragment. The registry is per process: writes from another process are
+picked up on restart, not live (the same documented limit as the message-fragment caches). The
+write-helper audit is pinned in `internal/database/versions_test.go`, which fails when a
+sidebar-visible write helper stops bumping the version. No runtime gate backs the version keys:
+the before/after A/B compares binaries (`bench/application --baseline-go`), so a gate would only
+add a second code path to keep byte-identical. `CAMPFIRE_RECORDED_PIECES` (default `on`; also accepts `true`/`1`
 and `off`/`false`/`0`, warning on anything else) serves recorded room, messages and search pages
 from cached compressed pieces: the shell split at its `loadedAt` and message markers (`layout`,
 `0`..`2`) and the message list, each keyed by a SHA-256 of the rendered page inputs or of the
@@ -182,7 +193,10 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
   already subscribed socket. The composer shows the same deleted-room message.
 - The response cache uses least-recently-used eviction instead of Rust's sampled eviction. The Go
   message-fragment cache is also independently implemented. It retains versioned message lists
-  and sidebar HTML; current membership and permission data are read before cache lookup.
+  and sidebar HTML; sidebar hits are served from the version-keyed fragment cache with no row
+  reads and no page setup (the sidebar version registry is seeded from the database on first use
+  and bumped by every sidebar-visible write; see the `CAMPFIRE_FRAGMENT_CACHE_MB` notes above),
+  while room membership and permission data are still read afresh for non-sidebar pages.
   Room pages also cache their surrounding HTML keyed by fresh page data, inserting the current
   messages and refresh timestamp on every request. Responses assemble cached message bytes with fresh page HTML and derive validators from part
   lengths and hashes, so ETag values differ from both the original Go implementation and Rust.

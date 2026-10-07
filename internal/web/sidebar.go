@@ -44,66 +44,66 @@ func (r sidebarRoom) Label() string {
 	return strings.Join(names, "")
 }
 
+// applyMembers fills the direct-room member list and ping label from a member
+// slice, excluding the viewer. A direct room with only the viewer lists the
+// viewer against their own name, mirroring the reference sidebar view.
+func (v *sidebarRoom) applyMembers(members []database.User, user database.User) {
+	var names []string
+	for _, member := range members {
+		if member.ID != user.ID {
+			v.Members = append(v.Members, member)
+			names = append(names, member.Name)
+		}
+	}
+	if len(v.Members) == 0 {
+		v.Members = []database.User{user}
+		v.Name = user.Name
+		return
+	}
+	switch len(names) {
+	case 1:
+		v.Name = names[0]
+	case 2:
+		v.Name = names[0] + " and " + names[1]
+	default:
+		v.Name = strings.Join(names[:len(names)-1], ", ") + ", and " + names[len(names)-1]
+	}
+}
+
 // displayRoom builds the sidebar's room view, loading the members of direct
 // rooms through fastdb when c is set (it is passed by the room and sidebar
 // handlers; read-path call sites outside those pass nil and use database/sql).
 func (s *Server) displayRoom(c *fastdb.Conn, ctx context.Context, room database.Room, user database.User) (sidebarRoom, error) {
 	view := sidebarRoom{Room: room}
-	if room.Type == "Rooms::Direct" {
-		var members []database.User
-		if c != nil {
-			fast, err := c.RoomMembers(nil, room.ID)
-			if err != nil {
-				return view, err
-			}
-			members = usersOf(fast)
-		} else {
-			var err error
-			members, err = s.DB.RoomMembers(ctx, room.ID)
-			if err != nil {
-				return view, err
-			}
+	if room.Type != "Rooms::Direct" {
+		return view, nil
+	}
+	var members []database.User
+	if c != nil {
+		fast, err := c.RoomMembers(nil, room.ID)
+		if err != nil {
+			return view, err
 		}
-		var names []string
-		for _, member := range members {
-			if member.ID != user.ID {
-				view.Members = append(view.Members, member)
-				names = append(names, member.Name)
-			}
-		}
-		if len(view.Members) == 0 {
-			view.Members = []database.User{user}
-			view.Name = user.Name
-		} else {
-			switch len(names) {
-			case 1:
-				view.Name = names[0]
-			case 2:
-				view.Name = names[0] + " and " + names[1]
-			default:
-				view.Name = strings.Join(names[:len(names)-1], ", ") + ", and " + names[len(names)-1]
-			}
+		members = usersOf(fast)
+	} else {
+		var err error
+		members, err = s.DB.RoomMembers(ctx, room.ID)
+		if err != nil {
+			return view, err
 		}
 	}
+	view.applyMembers(members, user)
 	return view, nil
 }
 func (s *Server) sidebarRooms(c *fastdb.Conn, ctx context.Context, user database.User) ([]sidebarRoom, error) {
-	var rooms []database.SidebarRoom
 	if c != nil {
-		fast, err := c.SidebarRooms(nil, user.ID)
-		if err != nil {
-			return nil, err
-		}
-		rooms = make([]database.SidebarRoom, 0, len(fast))
-		for _, room := range fast {
-			rooms = append(rooms, sidebarRoomOf(room))
-		}
-	} else {
-		var err error
-		rooms, err = s.DB.SidebarRooms(ctx, user.ID)
-		if err != nil {
-			return nil, err
-		}
+		return s.sidebarRoomsJoined(c, user)
+	}
+	var rooms []database.SidebarRoom
+	var err error
+	rooms, err = s.DB.SidebarRooms(ctx, user.ID)
+	if err != nil {
+		return nil, err
 	}
 	var result []sidebarRoom
 	for _, room := range rooms {
