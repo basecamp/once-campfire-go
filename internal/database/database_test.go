@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"uuid"
 )
 
 func testDB(t *testing.T) *DB {
@@ -43,6 +44,10 @@ func TestSchemaAndMessageTransaction(t *testing.T) {
 	m, err := d.CreateMessage(ctx, u.ID, rooms[0].ID, "", "<p>running dogs</p>", "running dogs")
 	if err != nil {
 		t.Fatal(err)
+	}
+	id, err := uuid.Parse(m.ClientID)
+	if err != nil || m.ClientID != id.String() || id[6]>>4 != 4 || id[8]&0xc0 != 0x80 {
+		t.Fatalf("generated client ID must remain a canonical UUID v4: %q (%v)", m.ClientID, err)
 	}
 	messages, err := d.Messages(ctx, rooms[0].ID, 0)
 	if err != nil || len(messages) != 1 || messages[0].ID != m.ID || messages[0].Body != "<p>running dogs</p>" {
