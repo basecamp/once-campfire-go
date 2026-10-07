@@ -903,7 +903,10 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 	if !requireMessage(w, r) {
 		return
 	}
-	if _, err := s.DB.Room(r.Context(), u.ID, roomID(r)); err != nil {
+	// The room is the membership check; the same record serves the stream
+	// target below, so the message is never followed by a second room read.
+	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			s.render(w, r, "room-not-found", 200, page{User: u})
 			return
@@ -912,7 +915,6 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 		return
 	}
 	var staged *storage.Staged
-	var err error
 	if r.MultipartForm != nil && len(r.MultipartForm.File["message[attachment]"]) > 0 {
 		staged, err = s.stageAttachment(r, "message[attachment]")
 		if err != nil {
@@ -936,17 +938,28 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 
 	b := borrowBuffer()
 	defer releaseBuffer(b)
-	views, err := s.messageViews(r.Context(), []database.Message{m})
-	if err != nil {
-		s.fail(w, err)
-		return
+	// The new message's view comes from data this request already holds —
+	// creator, room, body, and the empty boosts and attachment a brand-new
+	// id cannot reference (AUTOINCREMENT ids are never reused) — instead of
+	// messageViews' per-view reads. Attachment posts keep the messageViews
+	// path, which lifts the blob row; direct rooms keep it too because their
+	// display name needs the other member.
+	views := make([]messageView, 0, 1)
+	if staged == nil && room.Type != "Rooms::Direct" {
+		view, err := s.freshMessageView(r, u, m, room)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		views = append(views, view)
+	} else {
+		views, err = s.messageViews(r.Context(), []database.Message{m})
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
 	}
 	if err = s.templates.ExecuteTemplate(b, "messages", page{Messages: views}); err != nil {
-		s.fail(w, err)
-		return
-	}
-	room, err := s.DB.Room(r.Context(), u.ID, m.RoomID)
-	if err != nil {
 		s.fail(w, err)
 		return
 	}
