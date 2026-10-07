@@ -646,16 +646,55 @@ func (h *Hub) authorize(ctx context.Context, recipients []recipient) {
 	}
 }
 
+// publishScratch is the per-publish working set: the wire-frame bytes and the
+// recipient snapshot. Pooled so a steady-state broadcast allocates nothing
+// beyond the frame itself (ENGINE-57): wrap holds the once-escaped frame
+// JSON, recips the recipients. A pooled scratch is private to one publish —
+// the frame cache clones whatever bytes it retains (NewPreparedMessage
+// copies, cache entries own their frames) — so reuse is safe.
+type publishScratch struct {
+	wrap   []byte
+	recips []recipient
+}
+
+var publishScratchPool = sync.Pool{
+	New: func() any {
+		return &publishScratch{wrap: make([]byte, 0, 1024), recips: make([]recipient, 0, 64)}
+	},
+}
+
+// memoEntry is one per-publish identifier→frame memo slot; frameMemoLen is
+// the stack-array bound before a publish falls back to a map for its memo.
+// A room or stream broadcast fans out over one identifier in practice (the
+// identifier encodes the room or stream), and a handful of the extras in
+// mixed publishes; the array covers those with zero allocation.
+type memoEntry struct {
+	identifier string
+	frame      *websocket.PreparedMessage
+}
+
+const frameMemoLen = 8
+
 func (h *Hub) publish(ctx context.Context, room int64, name string, message any) {
 	roomScope := ""
 	if room != 0 {
 		roomScope = fmt.Sprintf("room:%d", room)
 	}
+	scratch := publishScratchPool.Get().(*publishScratch)
+	wrap := scratch.wrap[:0]
+	recipients := scratch.recips[:0]
+	defer func() {
+		scratch.wrap, scratch.recips = wrap, recipients
+		publishScratchPool.Put(scratch)
+	}()
 	// Snapshot the recipients under the hub lock only; authorization and
-	// delivery run without it (ENGINE-40b). The slice is pre-sized to the
-	// client count, so the snapshot is one allocation with no growth.
+	// delivery run without it (ENGINE-40b). The pooled slice is grown to
+	// the client count when smaller, so the snapshot is one amortized
+	// allocation with no growth.
 	h.mu.RLock()
-	recipients := make([]recipient, 0, len(h.clients))
+	if cap(recipients) < len(h.clients) {
+		recipients = make([]recipient, 0, len(h.clients))
+	}
 	for c := range h.clients {
 		for identifier, sub := range c.subscriptions {
 			if room != 0 && sub.Room == room && sub.Channel == "RoomMessagesChannel" || name != "" && sub.Stream == name {
@@ -700,30 +739,68 @@ func (h *Hub) publish(ctx context.Context, room int64, name string, message any)
 		}
 	}
 
-	// Reuse frames per identifier within this publish; the frame cache
-	// extends the reuse across publishes of identical payloads (ENGINE-40).
-	frames := make(map[string]*websocket.PreparedMessage)
+	// ENGINE-57: encode once, share bytes. The payload is escaped exactly
+	// once per publish — a string payload straight into the pooled scratch
+	// (appendFrameUTF8), any other payload by one json.Marshal spliced into
+	// each wrapper (appendFrameJSON) — and every subscriber of an identifier
+	// receives the same immutable PreparedMessage, never a re-encode. The
+	// frame cache still keys on (scope, identifier, exact payload) with its
+	// FIFO bounds; a hit skips the wrapper entirely. Per-recipient work is a
+	// memo scan (stack array, map fallback beyond frameMemoLen distinct
+	// identifiers) and the channel send.
+	var messageJSON []byte
+	payloadString, stringPayload := "", false
+	if s, ok := message.(string); ok {
+		payloadString, stringPayload = s, true
+	} else {
+		var err error
+		if messageJSON, err = json.Marshal(message); err != nil {
+			return
+		}
+	}
+	var memo [frameMemoLen]memoEntry
+	memoLen := 0
+	var extra map[string]*websocket.PreparedMessage
 	for i := range recipients {
 		r := &recipients[i]
 		if r.user != r.client.user.ID {
 			r.client.cancel()
 			continue
 		}
-		frame, exists := frames[r.identifier]
-		if !exists {
-			data, err := json.Marshal(struct {
-				Identifier string `json:"identifier"`
-				Message    any    `json:"message"`
-			}{r.identifier, message})
-			if err != nil {
-				return
+		ident := r.identifier
+		frame, found := (*websocket.PreparedMessage)(nil), false
+		for j := 0; j < memoLen; j++ {
+			if memo[j].identifier == ident {
+				frame, found = memo[j].frame, true
+				break
+			}
+		}
+		if !found && extra != nil {
+			if f, ok := extra[ident]; ok {
+				frame, found = f, true
+			}
+		}
+		if !found {
+			wrap = wrap[:0]
+			if stringPayload {
+				wrap = appendFrameUTF8(wrap, ident, payloadString)
+			} else {
+				wrap = appendFrameJSON(wrap, ident, messageJSON)
 			}
 			if h.fast {
-				frame = h.cache.lookupOrCreate(r.scope, r.identifier, data)
+				frame = h.cache.lookupOrCreate(r.scope, ident, wrap)
 			} else {
-				frame = websocket.NewPreparedMessage(websocket.MessageText, data)
+				frame = websocket.NewPreparedMessage(websocket.MessageText, wrap)
 			}
-			frames[r.identifier] = frame
+			if memoLen < frameMemoLen {
+				memo[memoLen] = memoEntry{ident, frame}
+				memoLen++
+			} else {
+				if extra == nil {
+					extra = make(map[string]*websocket.PreparedMessage, 4)
+				}
+				extra[ident] = frame
+			}
 		}
 		r.client.sendFrame(frame)
 	}
