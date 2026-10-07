@@ -115,10 +115,19 @@ func TestFanOutDeliveryCounters(t *testing.T) {
 				}(c)
 			}
 			var firstData []byte
+			var firstFrame *websocket.PreparedMessage
 			for i := 0; i < n; i++ {
 				r := <-results
 				if r.f == nil {
 					t.Fatalf("client %p missing delivery", r.c)
+				}
+				// All recipients must observe the identical prepared frame:
+				// one per payload per identifier, shared across subscribers
+				// (compressed bytes included, by construction).
+				if firstFrame == nil {
+					firstFrame = r.f
+				} else if r.f != firstFrame {
+					t.Fatal("recipients received different prepared frames")
 				}
 				data := r.f.Data()
 				var frame struct {
@@ -429,6 +438,115 @@ func TestCableFastEnvGate(t *testing.T) {
 	os.Unsetenv("CAMPFIRE_CABLE_FAST")
 	if !fastFromEnv() {
 		t.Fatal("default fast path is off")
+	}
+}
+
+// TestHeartbeatGateKeepsDisconnectSemantics verifies the ENGINE-54 heartbeat
+// gate: with an unchanged session the connection keeps receiving pings (the
+// per-connection ticker keeps ticking), and a session deletion — which bumps
+// the session generation — is still detected within a tick or two, exactly
+// like the un-gated check.
+func TestHeartbeatGateKeepsDisconnectSemantics(t *testing.T) {
+	hub, db, user, roomID, secrets := hubFixture(t)
+	hub.heartbeat = 40 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	token, err := db.StartSession(ctx, user.ID, "heartbeat", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.Serve(w, r, user, token)
+	}))
+	defer server.Close()
+	conn := socketSubscriber(t, server.URL, roomID, secrets)
+
+	// 1. Pings keep flowing while the session is valid. The first tick
+	// queries (generations start at 0), stores them, and later ticks skip
+	// the re-check; the ping frame itself still goes out every tick.
+	pingDeadline := time.Now().Add(5 * time.Second)
+	pings := 0
+	for pings < 2 {
+		if time.Now().After(pingDeadline) {
+			t.Fatal("timed out waiting for pings on a valid session")
+		}
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("connection died on a valid session: %v", err)
+		}
+		if bytes.Contains(data, []byte(`"type":"ping"`)) {
+			pings++
+		}
+	}
+
+	// 2. Deleting the session bumps the generation, so the next tick
+	// re-queries and the writer returns; the server tears the connection
+	// down.
+	if err := db.DeleteSession(ctx, token, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, _, err := conn.Read(ctx)
+		if err != nil {
+			break // connection closed: session revocation detected
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("session deletion was not detected within 5s")
+		}
+	}
+}
+
+// TestHeartbeatGateSkipsUnchangedSessions is the counterpart of the gate:
+// with the generation gate, out-of-band sessions-table writes (direct SQL
+// that does not bump the generation) are invisible to the heartbeat, the
+// documented single-process limit shared with the ENGINE-40b authorization
+// cache. The un-gated pre-ENGINE-54 check would have caught it; this test
+// pins the documented contract so the gate cannot silently regress into a
+// full re-check (or lose the gate's DB-query elimination).
+func TestHeartbeatGateSkipsUnchangedSessions(t *testing.T) {
+	hub, db, user, roomID, secrets := hubFixture(t)
+	hub.heartbeat = 30 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	token, err := db.StartSession(ctx, user.ID, "heartbeat-gate", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.Serve(w, r, user, token)
+	}))
+	defer server.Close()
+	conn := socketSubscriber(t, server.URL, roomID, secrets)
+
+	// Arm the generations on the first tick.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatal("no ping within 3s")
+		}
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("connection died before the gate armed: %v", err)
+		}
+		if bytes.Contains(data, []byte(`"type":"ping"`)) {
+			break
+		}
+	}
+
+	// Delete the row out of band (no generation bump): the gated heartbeat
+	// does not see it, and the connection must survive several ticks.
+	if _, err := db.Write.ExecContext(ctx, "DELETE FROM sessions WHERE token=?", token); err != nil {
+		t.Fatal(err)
+	}
+	alive := time.Now().Add(300 * time.Millisecond) // ~9 ticks
+	for time.Now().Before(alive) {
+		_, _, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("out-of-band session delete disconnected the client: %v", err)
+		}
 	}
 }
 

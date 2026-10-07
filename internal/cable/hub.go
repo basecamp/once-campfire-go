@@ -205,10 +205,14 @@ type Hub struct {
 	db      *database.DB
 	secrets *rails.Secrets
 	fast    bool
-	mu      sync.RWMutex
-	clients map[*client]struct{}
-	cache   *frameCache
-	authz   *authzCache
+	// heartbeat is the session-check/ping interval per connection; the wire
+	// behaviour at the default 3s is unchanged (ENGINE-54 keeps the check
+	// but gates it on the session generations). Tests shorten it.
+	heartbeat time.Duration
+	mu        sync.RWMutex
+	clients   map[*client]struct{}
+	cache     *frameCache
+	authz     *authzCache
 }
 type client struct {
 	disconnect    chan bool
@@ -217,6 +221,11 @@ type client struct {
 	cancel        context.CancelFunc
 	out           chan *websocket.PreparedMessage
 	subscriptions map[string]subscription
+	// sessVer/userVer are the (SessionVersion, UserVersion) generations the
+	// last heartbeat session check ran under; an unchanged pair skips the
+	// re-check (ENGINE-54).
+	sessVer int64
+	userVer int64
 }
 
 type subscription struct {
@@ -227,7 +236,7 @@ type subscription struct {
 }
 
 func New(db *database.DB, secrets *rails.Secrets) *Hub {
-	return &Hub{db: db, secrets: secrets, fast: fastFromEnv(), clients: map[*client]struct{}{}, cache: newFrameCache(), authz: newAuthzCache()}
+	return &Hub{db: db, secrets: secrets, fast: fastFromEnv(), heartbeat: 3 * time.Second, clients: map[*client]struct{}{}, cache: newFrameCache(), authz: newAuthzCache()}
 }
 func (c *client) send(value any) bool {
 	data, err := json.Marshal(value)
@@ -279,7 +288,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 	go func() {
 		defer close(done)
 		defer cancel()
-		ticker := time.NewTicker(3 * time.Second)
+		ticker := time.NewTicker(h.heartbeat)
 		defer ticker.Stop()
 		var batch [websocket.BatchMaxFrames]*websocket.PreparedMessage
 		for {
@@ -294,8 +303,20 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 				closeAfter = true
 			case frame = <-c.out:
 			case <-ticker.C:
-				if _, err := h.db.SessionUser(ctx, c.token); err != nil {
-					return
+				// ENGINE-54: the session check runs only when a sessions-row
+				// or users.status write committed since the last check (the
+				// versioned generations, like the ENGINE-40b authorization
+				// cache). At 1000 clients an un-gated tick is ~330 SQLite
+				// queries per second re-verifying sessions that cannot have
+				// changed; a session insert/delete or a user ban/deactivation
+				// bumps a generation, so the skip is exact under the
+				// documented single-process write model. The ping itself is
+				// still sent every tick.
+				if sv, uv := h.db.SessionVersion(), h.db.UserVersion(); sv != c.sessVer || uv != c.userVer {
+					if _, err := h.db.SessionUser(ctx, c.token); err != nil {
+						return
+					}
+					c.sessVer, c.userVer = sv, uv
 				}
 				data, _ = json.Marshal(map[string]any{"type": "ping", "message": time.Now().Unix()})
 			}
@@ -321,14 +342,24 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 					}
 				}
 			}
-			timeout, stop := context.WithTimeout(ctx, 30*time.Second)
 			var err error
 			if h.fast {
-				err = conn.WritePreparedBatch(timeout, batch[:n])
+				// ENGINE-54: bound the wake's write with an absolute socket
+				// deadline instead of a per-wake context. The context armed
+				// and stopped two runtime timers and allocated per wake (the
+				// write's own WithTimeout plus the connection's AfterFunc),
+				// the dominant per-wake cost at 1000 clients; the deadline is
+				// set before the vectored write and cleared after, so a
+				// stalled socket still errors at 30 s and the connection is
+				// reaped the same way (the writer returns, the request
+				// context cancels, Serve closes the conn). The legacy path
+				// below keeps the historical per-write context behaviour.
+				err = conn.WritePreparedBatchDeadline(time.Now().Add(30*time.Second), batch[:n])
 			} else {
+				timeout, stop := context.WithTimeout(ctx, 30*time.Second)
 				err = conn.WritePrepared(timeout, batch[0])
+				stop()
 			}
-			stop()
 			if err != nil || closeAfter {
 				return
 			}
