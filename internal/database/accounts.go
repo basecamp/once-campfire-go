@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"uuid"
 )
 
 type Account struct {
@@ -214,7 +215,7 @@ func (d *DB) DeactivateUser(ctx context.Context, id int64) error {
 		}
 		var address any
 		if email.Valid {
-			address = strings.ReplaceAll(email.String, "@", "-deactivated-"+UUID()+"@")
+			address = strings.ReplaceAll(email.String, "@", "-deactivated-"+uuid.NewV4().String()+"@")
 		}
 		for _, table := range []string{"push_subscriptions", "searches", "sessions"} {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE user_id=?", id); err != nil {

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"uuid"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/integrations"
@@ -183,7 +184,7 @@ func (s *Server) testPushNotification(w http.ResponseWriter, r *http.Request, u 
 		s.fail(w, err)
 		return
 	}
-	err = s.Push.Send(r.Context(), subscription.Endpoint, subscription.Key, subscription.Auth, notificationJSON("Campfire Test", database.UUID(), s.origin(r)+pushPath, badge))
+	err = s.Push.Send(r.Context(), subscription.Endpoint, subscription.Key, subscription.Auth, notificationJSON("Campfire Test", uuid.NewV4().String(), s.origin(r)+pushPath, badge))
 	if err != nil {
 		s.fail(w, err)
 		return
