@@ -3,6 +3,8 @@ package web
 import (
 	"bytes"
 	"github.com/basecamp/once-campfire-go/internal/database"
+	"html/template"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,7 +25,13 @@ func TestSidebarCacheTracksRenderedChanges(t *testing.T) {
 	}
 	original := makePage()
 	body, key := render(original), sidebarCacheKey(original)
+	if !strings.Contains(body, "<!DOCTYPE html>") {
+		t.Fatal("standalone sidebar must render a complete page")
+	}
 	changes := map[string]func(*page){
+		"frame layout":       func(p *page) { p.Frame = true },
+		"styles":             func(p *page) { p.CustomStyles = template.HTML("<style>body{color:red}</style>") },
+		"flash":              func(p *page) { p.Notice = "Notice" },
 		"unread":             func(p *page) { p.SidebarRooms[0].Unread = true },
 		"rename":             func(p *page) { p.SidebarRooms[0].Name = "Renamed" },
 		"membership removed": func(p *page) { p.SidebarRooms = p.SidebarRooms[1:] },
