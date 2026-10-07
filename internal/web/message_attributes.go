@@ -90,14 +90,29 @@ func pendingBlob(staged *storage.Staged) database.BlobStager {
 	return staged
 }
 func (s *Server) saveNewMessage(ctx context.Context, user, room int64, client string, body *string, staged *storage.Staged, webhook bool) (database.Message, error) {
+	return s.saveNewMessageRich(ctx, user, room, client, body, staged, webhook, nil)
+}
+
+// saveNewMessageRich is saveNewMessage with the request's single-parse rich
+// result (ENGINE-45b): when rich is non-nil its canonical body and plain text
+// are stored directly — they are canonicalMessage's outputs for the same
+// input — so the body is not parsed a second time. Callers without a
+// precomputed result pass nil and get the original canonicalize-then-store
+// shape.
+func (s *Server) saveNewMessageRich(ctx context.Context, user, room int64, client string, body *string, staged *storage.Staged, webhook bool, rich *richPost) (database.Message, error) {
 	if staged != nil {
 		defer staged.Discard()
 	}
 	plain := ""
 	if body != nil {
-		value, text := s.canonicalMessage(ctx, *body)
-		body = &value
-		plain = text
+		if rich != nil {
+			body = &rich.canonical
+			plain = rich.plain
+		} else {
+			value, text := s.canonicalMessage(ctx, *body)
+			body = &value
+			plain = text
+		}
 	}
 	if strings.TrimSpace(plain) == "" && staged != nil {
 		plain = storage.Filename(staged.Blob.Filename)

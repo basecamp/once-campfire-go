@@ -21,6 +21,14 @@ import (
 var ErrPurpose = errors.New("message purpose mismatch")
 var ErrExpired = errors.New("message expired")
 
+// The two camel-to-snake passes modelPurpose runs are immutable, so their
+// patterns compile once instead of on every signed id (avatars sign on every
+// rendered message).
+var (
+	camelHeadPattern = regexp.MustCompile(`([A-Z]+)([A-Z][a-z])`)
+	camelMidPattern  = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+)
+
 type Verifier struct {
 	Key                                         []byte
 	SHA256, URLSafe, Padded, HTML, AllowMarshal bool
@@ -296,8 +304,8 @@ func marshalString(data []byte) (string, bool) {
 }
 func modelPurpose(model, purpose string) string {
 	model = strings.ReplaceAll(model, "::", "/")
-	model = regexp.MustCompile(`([A-Z]+)([A-Z][a-z])`).ReplaceAllString(model, "${1}_${2}")
-	model = regexp.MustCompile(`([a-z0-9])([A-Z])`).ReplaceAllString(model, "${1}_${2}")
+	model = camelHeadPattern.ReplaceAllString(model, "${1}_${2}")
+	model = camelMidPattern.ReplaceAllString(model, "${1}_${2}")
 	model = strings.ToLower(strings.ReplaceAll(model, "-", "_"))
 	if strings.TrimSpace(purpose) != "" {
 		model += "/" + purpose

@@ -154,9 +154,19 @@ func process(body string, ctx Context, fields outputFields) (Result, error) {
 		}
 		return result, nil
 	}
+	return processRoot(result, root, ctx, fields)
+}
+
+// processRoot runs process's output derivation on an already-loaded tree,
+// filling the tree-based fields into result (which may already carry the
+// string-based editable output). process never reads the original body
+// string after load — every later step works on the tree or on serialized
+// forms of it — so for any body, processRoot with load(body) is exactly the
+// rest of process(body, ctx, fields).
+func processRoot(result Result, root *xhtml.Node, ctx Context, fields outputFields) (Result, error) {
 	if fields&displayOutput != 0 {
 		plainRoot := clone(root)
-		if err = replaceAttachments(plainRoot, ctx, true, 0); err != nil {
+		if err := replaceAttachments(plainRoot, ctx, true, 0); err != nil {
 			result.Errors["plain"] = err
 		} else {
 			result.Plain = chomp(plain(plainRoot))
@@ -165,10 +175,11 @@ func process(body string, ctx Context, fields outputFields) (Result, error) {
 
 	if fields&bodyOutput != 0 {
 		rendered := clone(root)
-		if err = replaceAttachments(rendered, ctx, false, 0); err != nil {
+		if err := replaceAttachments(rendered, ctx, false, 0); err != nil {
 			result.Errors["body_html"] = err
 		} else {
 			galleries(rendered, true)
+			var err error
 			rendered, err = parse(serialize(rendered))
 			if err != nil {
 				return result, err
@@ -186,6 +197,7 @@ func process(body string, ctx Context, fields outputFields) (Result, error) {
 			removeSoloEmbed(filtered, ctx, result.Plain)
 			filterTags(filtered)
 			sanitizeDOM(filtered, "filter")
+			var err error
 			filtered, err = parse(strings.Trim(serialize(filtered), "\x00\t\n\v\f\r "))
 			if err != nil {
 				return result, err
@@ -227,6 +239,25 @@ func process(body string, ctx Context, fields outputFields) (Result, error) {
 	}
 
 	return result, nil
+}
+
+// ProcessMessage computes the outputs the message create pipeline stores and
+// renders from one load of the canonical body: Display's presentation and
+// plain text, PlainText's plain text (the same value), and MentionIDs'
+// recipients. For any body the three outputs equal the separate Display,
+// PlainText and MentionIDs calls on the same input, including their empty
+// outputs on failure, so the create path can derive everything from one
+// parse instead of three.
+func ProcessMessage(body string, ctx Context) (Result, error) {
+	result := Result{Mentioned: []int64{}, Errors: map[string]error{}}
+	root, err := load(body)
+	if err != nil {
+		for _, field := range []string{"plain", "filtered", "mentioned"} {
+			result.Errors[field] = err
+		}
+		return result, nil
+	}
+	return processRoot(result, root, ctx, displayOutput|mentionsOutput)
 }
 func editable(body string, ctx Context) (string, error) {
 	root, err := parse(strings.Trim(body, "\x00\t\n\v\f\r "))
@@ -587,8 +618,16 @@ func embedHTML(n *xhtml.Node, ctx Context) (string, error) {
 	return result + "    </div>\n  </actiontext-opengraph-embed>\n</figure>", nil
 }
 
+// erbEscape mirrors Rails' ERB::Util.html_escape. The replacer is immutable
+// and shared; the ContainsAny guard returns strings without special bytes
+// unchanged, which is what the replacer would produce.
+var erbEscapeReplacer = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\"", "&quot;", "'", "&#39;")
+
 func erbEscape(s string) string {
-	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\"", "&quot;", "'", "&#39;").Replace(s)
+	if !strings.ContainsAny(s, "&<>\"'") {
+		return s
+	}
+	return erbEscapeReplacer.Replace(s)
 }
 func galleries(root *xhtml.Node, render bool) {
 	walk(root, func(n *xhtml.Node) {

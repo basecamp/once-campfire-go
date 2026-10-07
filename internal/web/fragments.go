@@ -66,7 +66,13 @@ func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
 	if size > c.limit/4 {
 		return entry
 	}
-	entry.bytes, entry.digest, entry.payload = size, sha256.Sum256([]byte(html)), payload
+	// The digest feeds recorded-page ETags, which only ever hash the
+	// message-list payload; a single-message fragment's digest is never
+	// read, so only message-list entries pay for the hash (ENGINE-45b).
+	entry.bytes, entry.payload = size, payload
+	if strings.HasPrefix(key, "message-list/") {
+		entry.digest = sha256.Sum256([]byte(html))
+	}
 	c.entries[key] = c.order.PushFront(entry)
 	c.bytes += size
 	if c.bytes > c.limit {

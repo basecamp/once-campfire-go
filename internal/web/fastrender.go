@@ -404,8 +404,8 @@ type fragmentProgram struct {
 // working. Any unsupported construct or a failed escape is an error; the
 // caller falls back to the html/template path rather than serving
 // miscompiled markup.
-func compileMessageRenderer(secrets *rails.Secrets) (*messageRenderer, error) {
-	fm := templateFuncs(secrets)
+func compileMessageRenderer(secrets *rails.Secrets, avatars *avatarCache) (*messageRenderer, error) {
+	fm := templateFuncs(secrets, avatars)
 	compileTemplates, err := template.New("pages").Funcs(fm).ParseFS(templateFiles, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -417,7 +417,7 @@ func compileMessageRenderer(secrets *rails.Secrets) (*messageRenderer, error) {
 	// non-variadic: calling a variadic function through a func value
 	// materializes the argument slice on the heap per call, which would be
 	// the renderer's only allocation.
-	avatar := func(id int64, updated time.Time) string { return signedAvatar(secrets, id, updated) }
+	avatar := func(id int64, updated time.Time) string { return avatarURL(avatars, secrets, id, updated) }
 	c := &fragmentCompiler{t: compileTemplates, avatar: avatar, progs: map[string]*fragmentProgram{}, busy: map[string]bool{}}
 	root, err := c.compileTemplate("message-uncached", baseMessage)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -72,6 +73,9 @@ type Server struct {
 	authFast bool
 	// authCache is the verified-cookie cache; nil when authFast is off.
 	authCache *verifiedCookieCache
+	// avatars is the signed avatar URL cache shared by the template funcs
+	// and the compiled fragment renderer (ENGINE-45b).
+	avatars *avatarCache
 	// pieces stores recorded-response pieces (raw + deflate fragment + digest)
 	// under content-versioned keys, sized by CAMPFIRE_RECORDED_CACHE_MB.
 	pieces         *piececache.Cache
@@ -216,7 +220,8 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 	// Same cost-12 dummy digest as reference/crates/db/src/models/user.rs.
 	// Unknown-user login still pays bcrypt; startup need not create a new hash.
 	hash := []byte("$2a$12$FiKmSp4UhLvSB4Sd/ZUjQunyKP6.NjDRHdr5LnKUVk.BUn4Mq12WS")
-	t, err := parseTemplates(secrets)
+	avatars := newAvatarCache()
+	t, err := parseTemplates(secrets, avatars)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +280,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 	if fastRender {
 		// The compiler parses and escapes its own private template copy so
 		// the serving set stays pre-execution (Clone etc. keep working).
-		renderer, err = compileMessageRenderer(secrets)
+		renderer, err = compileMessageRenderer(secrets, avatars)
 		if err != nil {
 			renderer = nil
 			slog.Warn("fastrender compile failed; message fragments fall back to html/template", "error", err)
@@ -367,7 +372,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 			readCache = nil
 		}
 	}
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), refsCache: newMessageRefsCache(refsMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, zstdPieces: zstdPieces, precomposed: precomposed, arenaOn: arenaOn, xVersion: appVersion(), xRev: revision(), readCache: readCache, searchCache: searchCache, fastdb: openFastPool(dbPath), fastRender: renderer, authFast: authFast, authCache: authCache, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), refsCache: newMessageRefsCache(refsMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, zstdPieces: zstdPieces, precomposed: precomposed, arenaOn: arenaOn, xVersion: appVersion(), xRev: revision(), readCache: readCache, searchCache: searchCache, fastdb: openFastPool(dbPath), fastRender: renderer, authFast: authFast, authCache: authCache, avatars: avatars, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -1054,7 +1059,19 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 		value := r.Form.Get("message[body]")
 		body = &value
 	}
-	m, err := s.saveNewMessage(r.Context(), u.ID, roomID(r), r.Form.Get("message[client_message_id]"), body, staged, false)
+	// One rich-text parse per posted body (ENGINE-45b): canonicalization plus
+	// the plain text the store writes, the presentation the view renders and
+	// the mentioned ids the push and webhook paths consume all derive from a
+	// single parse of the canonical body (previously canonicalMessage, Display
+	// and MentionIDs each parsed it again with their own context). The three
+	// separate callers get the same values they computed themselves before;
+	// the richtext oracle pins the equality.
+	richCtx := s.richContext(r.Context())
+	var rich *richPost
+	if body != nil {
+		rich = s.richPostFor(*body, richCtx)
+	}
+	m, err := s.saveNewMessageRich(r.Context(), u.ID, roomID(r), r.Form.Get("message[client_message_id]"), body, staged, false, rich)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -1070,7 +1087,7 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 	// display name needs the other member.
 	views := make([]messageView, 0, 1)
 	if staged == nil && room.Type != "Rooms::Direct" {
-		view, err := s.freshMessageView(r, u, m, room)
+		view, err := s.freshMessageView(r, u, m, room, rich)
 		if err != nil {
 			s.fail(w, err)
 			return
@@ -1083,19 +1100,26 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 			return
 		}
 	}
-	if err = s.templates.ExecuteTemplate(b, "messages", page{Messages: views}); err != nil {
-		s.fail(w, err)
-		return
+	// The append frame is assembled in the pooled buffer from the fragment
+	// alone: executing the "messages" template with one view writes exactly
+	// the view's fragment, and the same bytes feed both the broadcast and
+	// the response, so no second render or intermediate copy happens.
+	b.WriteString(`<turbo-stream action="append" target="`)
+	b.WriteString(html.EscapeString(room.DOM("messages")))
+	b.WriteString(`"><template>`)
+	for i := range views {
+		b.WriteString(string(views[i].Fragment))
 	}
-	stream := stream("append", room.DOM("messages"), b.String())
+	b.WriteString(`</template></turbo-stream>`)
+	markup := b.String()
 	// Delivery follows commit and outlives a disconnected posting request.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	s.Cable.Publish(ctx, m.RoomID, stream)
+	s.Cable.Publish(ctx, m.RoomID, markup)
 	cancel()
-	s.messageCreated(m, room)
-	s.enqueueWebhooks(m, room)
+	s.messageCreated(m, room, richMentions(rich))
+	s.enqueueWebhooks(m, room, richMentions(rich))
 	if respondFormat(w, r, "turbo_stream") != "" {
-		writeStream(w, stream)
+		writeStream(w, markup)
 	}
 }
 func (s *Server) sidebar(w http.ResponseWriter, r *http.Request, u database.User) {

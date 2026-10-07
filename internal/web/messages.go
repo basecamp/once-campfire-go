@@ -165,17 +165,30 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 // the same fragment renderer, and nil and empty boosts range identically.
 // Callers keep the messageViews path for attachment posts and direct rooms
 // (whose display name needs the other member).
-func (s *Server) freshMessageView(r *http.Request, u database.User, m database.Message, room database.Room) (messageView, error) {
+//
+// rich, when non-nil, carries the presentation, plain text and mentions the
+// create path already derived from the same body in one parse (ENGINE-45b);
+// the nil case (a message with no body parameter) derives them here exactly
+// as before.
+func (s *Server) freshMessageView(r *http.Request, u database.User, m database.Message, room database.Room, rich *richPost) (messageView, error) {
 	view := messageView{Message: m}
 	view.RoomName = room.Name
 	view.CreatorTitle = u.Title()
 	view.CreatorUpdatedAt = u.UpdatedAt
 	view.Permalink = messagePermalink(r.Context(), m.RoomID, m.ID)
-	result, _ := richtext.Display(m.Body, s.richContext(r.Context()))
-	view.HTML = template.HTML(result.Presentation)
-	view.AllEmoji = allEmoji(result.Plain)
-	if sound := soundHTML(result.Plain); sound != "" {
-		view.HTML = template.HTML(sound)
+	if rich != nil {
+		view.HTML = template.HTML(rich.presentation)
+		view.AllEmoji = allEmoji(rich.plain)
+		if sound := soundHTML(rich.plain); sound != "" {
+			view.HTML = template.HTML(sound)
+		}
+	} else {
+		result, _ := richtext.Display(m.Body, s.richContext(r.Context()))
+		view.HTML = template.HTML(result.Presentation)
+		view.AllEmoji = allEmoji(result.Plain)
+		if sound := soundHTML(result.Plain); sound != "" {
+			view.HTML = template.HTML(sound)
+		}
 	}
 	key := messageCacheKey(view.Message)
 	if html, ok := s.fragments.get(key); ok {
