@@ -61,6 +61,7 @@ func New(db *database.DB, secrets *rails.Secrets, root string) *Store {
 	}
 	return &Store{db, secrets.AppVerifier("ActiveStorage"), files}
 }
+
 func Key() string {
 	const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
 	key := make([]byte, 0, 28)
@@ -80,17 +81,30 @@ func Key() string {
 	}
 	return string(key)
 }
+
 func (s *Store) Path(key string) (string, error) {
-	if len(key) < 4 || strings.ContainsAny(key, "/\\\x00") || key == "." || key == ".." {
+	// Both shard names become path components, even when the key has no slash.
+	if len(key) < 4 || strings.ContainsAny(key, "/\\\x00") || key[:2] == ".." || key[2:4] == ".." {
 		return "", errors.New("invalid storage key")
 	}
 	return filepath.Join(s.Root, key[:2], key[2:4], key), nil
 }
+
 func scanBlob(row *sql.Row) (Blob, error) {
 	var b Blob
 	var metadata sql.NullString
 	var checksum sql.NullString
-	err := row.Scan(&b.ID, &b.Key, &b.Filename, &b.ContentType, &metadata, &b.ServiceName, &b.ByteSize, &checksum, &b.CreatedAt)
+	err := row.Scan(
+		&b.ID,
+		&b.Key,
+		&b.Filename,
+		&b.ContentType,
+		&metadata,
+		&b.ServiceName,
+		&b.ByteSize,
+		&checksum,
+		&b.CreatedAt,
+	)
 	b.Metadata = json.RawMessage(metadata.String)
 	if !json.Valid(b.Metadata) {
 		b.Metadata = json.RawMessage("{}")
@@ -102,11 +116,27 @@ func scanBlob(row *sql.Row) (Blob, error) {
 const columns = "b.id,b.key,b.filename,b.content_type,b.metadata,b.service_name,b.byte_size,b.checksum,b.created_at"
 
 func (s *Store) Blob(ctx context.Context, id int64) (Blob, error) {
-	return scanBlob(s.DB.Read.QueryRowContext(ctx, "SELECT "+columns+" FROM active_storage_blobs b WHERE b.id=?", id))
+	return scanBlob(
+		s.DB.Read.QueryRowContext(
+			ctx,
+			"SELECT "+columns+" FROM active_storage_blobs b WHERE b.id=?",
+			id,
+		),
+	)
 }
+
 func (s *Store) Attached(ctx context.Context, kind string, id int64, name string) (Blob, error) {
-	return scanBlob(s.DB.Read.QueryRowContext(ctx, "SELECT "+columns+" FROM active_storage_blobs b JOIN active_storage_attachments a ON a.blob_id=b.id WHERE a.record_type=? AND a.record_id=? AND a.name=? ORDER BY a.id LIMIT 1", kind, id, name))
+	return scanBlob(
+		s.DB.Read.QueryRowContext(
+			ctx,
+			"SELECT "+columns+" FROM active_storage_blobs b JOIN active_storage_attachments a ON a.blob_id=b.id WHERE a.record_type=? AND a.record_id=? AND a.name=? ORDER BY a.id LIMIT 1",
+			kind,
+			id,
+			name,
+		),
+	)
 }
+
 func (s *Store) Create(ctx context.Context, b Blob) (Blob, error) {
 	if b.Key == "" {
 		b.Key = Key()
@@ -118,13 +148,25 @@ func (s *Store) Create(ctx context.Context, b Blob) (Blob, error) {
 		b.Metadata = json.RawMessage("{}")
 	}
 	b.CreatedAt = database.Stamp(s.DB.Now())
-	result, err := s.DB.Write.ExecContext(ctx, "INSERT INTO active_storage_blobs(key,filename,content_type,metadata,service_name,byte_size,checksum,created_at) VALUES (?,?,?,?,?,?,?,?)", b.Key, b.Filename, b.ContentType, string(b.Metadata), b.ServiceName, b.ByteSize, b.Checksum, b.CreatedAt)
+	result, err := s.DB.Write.ExecContext(
+		ctx,
+		"INSERT INTO active_storage_blobs(key,filename,content_type,metadata,service_name,byte_size,checksum,created_at) VALUES (?,?,?,?,?,?,?,?)",
+		b.Key,
+		b.Filename,
+		b.ContentType,
+		string(b.Metadata),
+		b.ServiceName,
+		b.ByteSize,
+		b.Checksum,
+		b.CreatedAt,
+	)
 	if err != nil {
 		return b, err
 	}
 	b.ID, err = result.LastInsertId()
 	return b, err
 }
+
 func (s *Store) SignedID(b Blob) string {
 	token, err := s.Verifier.Generate(b.ID, "blob_id", time.Time{})
 	if err != nil {
@@ -132,6 +174,7 @@ func (s *Store) SignedID(b Blob) string {
 	}
 	return token
 }
+
 func (s *Store) FindSigned(ctx context.Context, token string) (Blob, error) {
 	var id int64
 	if err := s.Verifier.Verify(token, "blob_id", s.DB.Now(), &id); err != nil {
@@ -139,12 +182,13 @@ func (s *Store) FindSigned(ctx context.Context, token string) (Blob, error) {
 	}
 	return s.Blob(ctx, id)
 }
+
 func (s *Store) Upload(ctx context.Context, token DiskToken, reader io.Reader) error {
 	path, err := s.Path(token.Key)
 	if err != nil {
 		return err
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	f, err := os.CreateTemp(filepath.Dir(path), ".upload-")
@@ -158,7 +202,8 @@ func (s *Store) Upload(ctx context.Context, token DiskToken, reader io.Reader) e
 	if err != nil {
 		return err
 	}
-	if n != token.ContentLength || base64.StdEncoding.EncodeToString(hash.Sum(nil)) != token.Checksum {
+	if n != token.ContentLength ||
+		base64.StdEncoding.EncodeToString(hash.Sum(nil)) != token.Checksum {
 		return ErrIntegrity
 	}
 	if err = ctx.Err(); err != nil {
@@ -169,23 +214,33 @@ func (s *Store) Upload(ctx context.Context, token DiskToken, reader io.Reader) e
 	}
 	return os.Rename(f.Name(), path)
 }
-func (s *Store) Stage(ctx context.Context, filename, contentType string, reader io.Reader) (Blob, error) {
+
+func (s *Store) Stage(
+	ctx context.Context,
+	filename, contentType string,
+	reader io.Reader,
+) (Blob, error) {
 	staged, err := s.StageFile(ctx, filename, contentType, reader)
 	if err != nil {
 		return Blob{}, err
 	}
 	return staged.Save(ctx)
 }
-func (s *Store) StageFile(ctx context.Context, filename, contentType string, reader io.Reader) (*Staged, error) {
+
+func (s *Store) StageFile(
+	ctx context.Context,
+	filename, contentType string,
+	reader io.Reader,
+) (*Staged, error) {
 	key := Key()
 	path, err := s.Path(key)
 	if err != nil {
 		return nil, err
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, err
 	}
@@ -207,22 +262,46 @@ func (s *Store) StageFile(ctx context.Context, filename, contentType string, rea
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
-	b := Blob{Key: key, Filename: filename, ContentType: &contentType, ServiceName: "local", Metadata: json.RawMessage(`{"identified":true}`), ByteSize: size, Checksum: base64.StdEncoding.EncodeToString(hash.Sum(nil))}
+	b := Blob{
+		Key:         key,
+		Filename:    filename,
+		ContentType: &contentType,
+		ServiceName: "local",
+		Metadata:    json.RawMessage(`{"identified":true}`),
+		ByteSize:    size,
+		Checksum:    base64.StdEncoding.EncodeToString(hash.Sum(nil)),
+	}
 	keep = true
 	return &Staged{Blob: b, path: path, store: s}, nil
 }
+
 func (s *Store) Attach(ctx context.Context, b Blob, kind string, id int64, name string) error {
 	var blobs []int64
 	err := s.DB.Transaction(ctx, func(tx *sql.Tx) error {
 		var err error
-		blobs, err = database.AttachmentBlobIDs(ctx, tx, "record_type=? AND record_id=? AND name=?", kind, id, name)
+		blobs, err = database.AttachmentBlobIDs(
+			ctx,
+			tx,
+			"record_type=? AND record_id=? AND name=?",
+			kind,
+			id,
+			name,
+		)
 		if err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "DELETE FROM active_storage_attachments WHERE record_type=? AND record_id=? AND name=?", kind, id, name); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, "INSERT INTO active_storage_attachments(blob_id,record_type,record_id,name,created_at) VALUES (?,?,?,?,?)", b.ID, kind, id, name, database.Stamp(s.DB.Now()))
+		_, err = tx.ExecContext(
+			ctx,
+			"INSERT INTO active_storage_attachments(blob_id,record_type,record_id,name,created_at) VALUES (?,?,?,?,?)",
+			b.ID,
+			kind,
+			id,
+			name,
+			database.Stamp(s.DB.Now()),
+		)
 		return err
 	})
 	if err == nil {
@@ -230,6 +309,7 @@ func (s *Store) Attach(ctx context.Context, b Blob, kind string, id int64, name 
 	}
 	return err
 }
+
 func (s *Store) DiskURL(b Blob, disposition string) (string, error) {
 	ct := b.Type()
 	served := ServingType(ct)
@@ -239,25 +319,49 @@ func (s *Store) DiskURL(b Blob, disposition string) (string, error) {
 	if disposition != "attachment" {
 		disposition = "inline"
 	}
-	token, err := s.Verifier.Generate(DiskKey{b.Key, Disposition(disposition, Filename(b.Filename)), &served, b.ServiceName}, "blob_key", s.DB.Now().Add(5*time.Minute))
+	token, err := s.Verifier.Generate(
+		DiskKey{b.Key, Disposition(disposition, Filename(b.Filename)), &served, b.ServiceName},
+		"blob_key",
+		s.DB.Now().Add(5*time.Minute),
+	)
 	if err != nil {
 		return "", err
 	}
-	return "/rails/active_storage/disk/" + Escape(token, false) + "/" + Escape(Filename(b.Filename), true), nil
+	return "/rails/active_storage/disk/" + Escape(
+		token,
+		false,
+	) + "/" + Escape(
+		Filename(b.Filename),
+		true,
+	), nil
 }
+
 func (s *Store) UploadURL(b Blob) (string, error) {
-	token, err := s.Verifier.Generate(DiskToken{b.Key, b.ContentType, b.ByteSize, b.Checksum, b.ServiceName}, "blob_token", s.DB.Now().Add(5*time.Minute))
+	token, err := s.Verifier.Generate(
+		DiskToken{b.Key, b.ContentType, b.ByteSize, b.Checksum, b.ServiceName},
+		"blob_token",
+		s.DB.Now().Add(5*time.Minute),
+	)
 	return "/rails/active_storage/disk/" + Escape(token, false), err
 }
+
 func (s *Store) BlobURL(b Blob) string {
-	return "/rails/active_storage/blobs/redirect/" + Escape(s.SignedID(b), false) + "/" + Escape(Filename(b.Filename), true)
+	return "/rails/active_storage/blobs/redirect/" + Escape(
+		s.SignedID(b),
+		false,
+	) + "/" + Escape(
+		Filename(b.Filename),
+		true,
+	)
 }
+
 func (b Blob) Type() string {
 	if b.ContentType == nil {
 		return ""
 	}
 	return *b.ContentType
 }
+
 func Filename(name string) string {
 	return strings.Map(func(c rune) rune {
 		if strings.ContainsRune("\u202e%$|:;/<>?*\"\t\r\n\\", c) {
@@ -266,18 +370,49 @@ func Filename(name string) string {
 		return c
 	}, strings.Trim(name, "\x00\t\n\v\f\r "))
 }
+
 func ServingType(ct string) string {
-	if slices.Contains([]string{"text/html", "image/svg+xml", "application/postscript", "application/x-shockwave-flash", "text/xml", "application/xml", "application/xhtml+xml", "application/mathml+xml", "text/cache-manifest"}, ct) {
+	if slices.Contains(
+		[]string{
+			"text/html",
+			"image/svg+xml",
+			"application/postscript",
+			"application/x-shockwave-flash",
+			"text/xml",
+			"application/xml",
+			"application/xhtml+xml",
+			"application/mathml+xml",
+			"text/cache-manifest",
+		},
+		ct,
+	) {
 		return "application/octet-stream"
 	}
 	return ct
 }
+
 func Inline(ct string) bool {
-	return slices.Contains([]string{"image/webp", "image/avif", "image/png", "image/gif", "image/jpeg", "image/tiff", "image/bmp", "image/vnd.adobe.photoshop", "image/vnd.microsoft.icon", "application/pdf"}, ct)
+	return slices.Contains(
+		[]string{
+			"image/webp",
+			"image/avif",
+			"image/png",
+			"image/gif",
+			"image/jpeg",
+			"image/tiff",
+			"image/bmp",
+			"image/vnd.adobe.photoshop",
+			"image/vnd.microsoft.icon",
+			"application/pdf",
+		},
+		ct,
+	)
 }
+
 func asciiWord(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
+
 func escape(text, keep string) string {
 	var out strings.Builder
 	for _, c := range []byte(text) {
@@ -289,6 +424,7 @@ func escape(text, keep string) string {
 	}
 	return out.String()
 }
+
 func Escape(text string, path bool) string {
 	keep := "-._~!$&'()*+,;=:@"
 	if path {
@@ -299,6 +435,7 @@ func Escape(text string, path bool) string {
 
 //go:embed approximations.json
 var approximationsJSON []byte
+
 var approximations = func() map[string]string {
 	var m map[string]string
 	if err := json.Unmarshal(approximationsJSON, &m); err != nil {
@@ -318,9 +455,27 @@ func Disposition(kind, name string) string {
 			ascii.WriteByte('?')
 		}
 	}
-	return kind + `; filename="` + escape(ascii.String(), " !#$+.^_`|~-") + `"; filename*=UTF-8''` + escape(name, "!#$&+.^_`|~-")
+	return kind + `; filename="` + escape(
+		ascii.String(),
+		" !#$+.^_`|~-",
+	) + `"; filename*=UTF-8''` + escape(
+		name,
+		"!#$&+.^_`|~-",
+	)
 }
 
 func Variable(ct string) bool {
-	return slices.Contains([]string{"image/png", "image/gif", "image/jpeg", "image/tiff", "image/webp", "image/avif", "image/heic", "image/heif"}, ct)
+	return slices.Contains(
+		[]string{
+			"image/png",
+			"image/gif",
+			"image/jpeg",
+			"image/tiff",
+			"image/webp",
+			"image/avif",
+			"image/heic",
+			"image/heif",
+		},
+		ct,
+	)
 }
