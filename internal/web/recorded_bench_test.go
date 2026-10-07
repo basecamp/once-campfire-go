@@ -63,14 +63,14 @@ func newRecordedBenchmarkFixture(b *testing.B) *recordedBenchFixture {
 	for i, segment := range [][]byte{prefix, middle, suffix} {
 		key := shellSegmentKey(identity, i)
 		copy(manifest[2+32*i:], key[:])
-		if _, ok := server.pieces.PutDigest(key, segment, compressGzip(segment)); !ok {
+		if _, ok := server.pieces.PutDigest(key, segment, compressFragment(segment)); !ok {
 			b.Fatalf("segment %d rejected", i)
 		}
 	}
 	if _, ok := server.pieces.PutDigest(identity, manifest, nil); !ok {
 		b.Fatal("manifest rejected")
 	}
-	payload, ok := server.pieces.PutDigest([32]byte{0x42}, payloadRaw, compressGzip(payloadRaw))
+	payload, ok := server.pieces.PutDigest([32]byte{0x42}, payloadRaw, compressFragment(payloadRaw))
 	if !ok {
 		b.Fatal("payload rejected")
 	}

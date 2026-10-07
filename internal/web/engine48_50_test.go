@@ -21,6 +21,7 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/fastserve"
 	"github.com/basecamp/once-campfire-go/internal/front"
 	"github.com/basecamp/once-campfire-go/internal/httpcompat"
+	"github.com/basecamp/once-campfire-go/internal/piececache"
 	"github.com/basecamp/once-campfire-go/internal/rails"
 )
 
@@ -98,11 +99,15 @@ func decodeZstd(t *testing.T, frames []byte) []byte {
 	return decoded
 }
 
-// TestRecordedZstdResponse serves the room page to a zstd-accepting client:
-// Content-Encoding zstd, the multi-frame body decodes to the identity body,
-// and a server with zstd members off serves the same request gzip/identity as
-// before (byte parity with the pre-engine negotiation).
+// TestRecordedZstdResponse serves the room page to a zstd-accepting client.
+// Since ENGINE-51 the multi-frame zstd body is never served (Chromium decodes
+// only the first frame, and the page is always several pieces), so even a
+// server with CAMPFIRE_RECORDED_ZSTD=on answers such a client with the
+// single-member gzip splice whose body decodes to the identity body; a server
+// with zstd off answers the same request gzip/identity as before (byte parity
+// with the pre-engine negotiation).
 func TestRecordedZstdResponse(t *testing.T) {
+	t.Setenv("CAMPFIRE_RECORDED_ZSTD", "on")
 	on, _, onServer, offServer, cookie, user := testRecordedPair(t)
 	ctx := context.Background()
 	rooms, err := on.DB.Rooms(ctx, user.ID)
@@ -117,17 +122,31 @@ func TestRecordedZstdResponse(t *testing.T) {
 	defer client.CloseIdleConnections()
 	path := fmt.Sprintf("/rooms/%d", room.ID)
 
-	// zstd server: the client that accepts zstd only gets zstd.
+	// zstd-enabled server, multi-piece page: the zstd-preferring client gets
+	// the single-member gzip splice, never a multi-frame zstd body.
 	zstdEx := recordedGet(t, client, onServer, path, "zstd", "", cookie)
-	if zstdEx.encoding != "zstd" {
-		t.Fatalf("zstd client got Content-Encoding %q", zstdEx.encoding)
+	if zstdEx.encoding != "gzip" {
+		t.Fatalf("zstd client on a multi-piece page got Content-Encoding %q, want gzip", zstdEx.encoding)
 	}
 	if !strings.Contains(strings.ToLower(zstdEx.vary), "accept-encoding") {
 		t.Fatalf("Vary %q lacks Accept-Encoding", zstdEx.vary)
 	}
+	// The degradation is not the empty-body path: the body decodes in full.
+	reader, err := gzip.NewReader(bytes.NewReader(zstdEx.body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader.Multistream(false)
+	decoded, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(decoded), "zstd body") {
+		t.Fatalf("degraded body lost the message")
+	}
 	identity := recordedGet(t, client, onServer, path, "identity", "", cookie)
-	if !bytes.Equal(decodeZstd(t, zstdEx.body), decodeRecorded(t, identity)) {
-		t.Fatalf("zstd body and identity body differ")
+	if !bytes.Equal(decoded, decodeRecorded(t, identity)) {
+		t.Fatalf("zstd-degraded body and identity body differ")
 	}
 
 	// Browsers send gzip first: still gzip.
@@ -226,18 +245,24 @@ func testSingleApp(t *testing.T, env ...string) (*Server, *httptest.Server, *htt
 	return app, server, server.Config, &http.Cookie{Name: "session_token", Value: rails.EscapeCookie(signed)}, user
 }
 
-// TestRecordedGzipLevelSizes pins the ENGINE-50 fill level: level 9 members
-// are smaller than level 6 on page-like HTML, and both decode to the raw
-// bytes (so the wire is unchanged apart from size).
+// TestRecordedGzipLevelSizes pins the ENGINE-50 fill level: level 9 fragments
+// are smaller than level 6 on page-like HTML, and both splice into a gzip
+// member that decodes to the raw bytes (so the wire is unchanged apart from
+// size).
 func TestRecordedGzipLevelSizes(t *testing.T) {
 	raw := benchmarkMarkup(64<<10, "level comparison payload")
-	atLevel6 := compressGzipLevel(raw, 6)
-	atLevel9 := compressGzipLevel(raw, 9)
+	atLevel6 := compressFragmentLevel(raw, 6)
+	atLevel9 := compressFragmentLevel(raw, 9)
 	if len(atLevel9) >= len(atLevel6) {
 		t.Fatalf("level 9 (%d bytes) not smaller than level 6 (%d)", len(atLevel9), len(atLevel6))
 	}
-	for _, member := range [][]byte{atLevel6, atLevel9} {
-		reader, err := gzip.NewReader(bytes.NewReader(member))
+	for _, fragment := range [][]byte{atLevel6, atLevel9} {
+		entry := piececache.NewEntry(raw, fragment, nil)
+		assembled, _, err := piececache.Assemble(nil, piececache.Gzip, entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader, err := gzip.NewReader(bytes.NewReader(assembled))
 		if err != nil {
 			t.Fatal(err)
 		}

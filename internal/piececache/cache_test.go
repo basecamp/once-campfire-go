@@ -2,29 +2,32 @@ package piececache
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
 	"crypto/sha256"
+	"hash/crc32"
 	"io"
 	"os"
 	"sync"
 	"testing"
 )
 
-// mustMember returns a complete gzip member of raw, the form Put stores.
-// BestSpeed and OS=3 mirror what front.Deflate writes.
-func mustMember(tb testing.TB, raw []byte) []byte {
+// mustFragment returns a raw deflate fragment of raw, the form Put stores:
+// compressed with compress/flate and Flush()ed (never Closed), so the bytes
+// end at a byte-aligned, non-final block boundary and splice with other
+// fragments.
+func mustFragment(tb testing.TB, raw []byte) []byte {
 	tb.Helper()
 	var buf bytes.Buffer
-	zw, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	fw, err := flate.NewWriter(&buf, flate.BestCompression)
 	if err != nil {
-		tb.Fatalf("gzip.NewWriterLevel: %v", err)
+		tb.Fatalf("flate.NewWriter: %v", err)
 	}
-	zw.Header.OS = 3
-	if _, err := zw.Write(raw); err != nil {
-		tb.Fatalf("gzip write: %v", err)
+	if _, err := fw.Write(raw); err != nil {
+		tb.Fatalf("flate write: %v", err)
 	}
-	if err := zw.Close(); err != nil {
-		tb.Fatalf("gzip close: %v", err)
+	if err := fw.Flush(); err != nil {
+		tb.Fatalf("flate flush: %v", err)
 	}
 	return buf.Bytes()
 }
@@ -58,7 +61,7 @@ func decodeMember(member []byte) ([]byte, error) {
 func TestPutDefensiveCopy(t *testing.T) {
 	cache := New(1 << 20)
 	raw := []byte("piece raw bytes, enough to be worth copying")
-	member := mustMember(t, raw)
+	member := mustFragment(t, raw)
 	rawCopy := append([]byte(nil), raw...)
 	memberCopy := append([]byte(nil), member...)
 
@@ -81,15 +84,18 @@ func TestPutDefensiveCopy(t *testing.T) {
 	if !bytes.Equal(entry.Raw, rawCopy) {
 		t.Fatalf("Raw = %q, want %q", entry.Raw, rawCopy)
 	}
-	if !bytes.Equal(entry.Member, memberCopy) {
-		t.Fatalf("Member mutated with the caller buffer: got %d bytes, want %d", len(entry.Member), len(memberCopy))
+	if !bytes.Equal(entry.Fragment, memberCopy) {
+		t.Fatalf("Fragment mutated with the caller buffer: got %d bytes, want %d", len(entry.Fragment), len(memberCopy))
 	}
 	if want := sha256.Sum256(rawCopy); entry.Digest != want {
 		t.Fatalf("Digest = %x, want %x", entry.Digest, want)
 	}
+	if want := crc32.ChecksumIEEE(rawCopy); entry.CRC != want {
+		t.Fatalf("CRC = %08x, want %08x", entry.CRC, want)
+	}
 	// The poisoned caller buffers are not the cached entry's storage.
-	if len(entry.Member) > 0 && &entry.Member[0] == &member[0] {
-		t.Fatal("Entry.Member aliases the caller's buffer")
+	if len(entry.Fragment) > 0 && &entry.Fragment[0] == &member[0] {
+		t.Fatal("Entry.Fragment aliases the caller's buffer")
 	}
 	if len(entry.Raw) > 0 && &entry.Raw[0] == &raw[0] {
 		t.Fatal("Entry.Raw aliases the caller's buffer")
@@ -109,7 +115,7 @@ func TestGetMiss(t *testing.T) {
 func TestGetReturnsSameImmutableView(t *testing.T) {
 	cache := New(1 << 20)
 	raw := []byte("first")
-	if _, ok := cache.Put("k", raw, mustMember(t, raw)); !ok {
+	if _, ok := cache.Put("k", raw, mustFragment(t, raw)); !ok {
 		t.Fatal("Put rejected")
 	}
 	first := cache.Get("k")
@@ -122,7 +128,7 @@ func TestGetReturnsSameImmutableView(t *testing.T) {
 	}
 
 	raw2 := []byte("second")
-	replacement, ok := cache.Put("k", raw2, mustMember(t, raw2))
+	replacement, ok := cache.Put("k", raw2, mustFragment(t, raw2))
 	if !ok {
 		t.Fatal("replacement Put rejected")
 	}
@@ -157,14 +163,14 @@ func TestNewEntryDefensiveCopy(t *testing.T) {
 	if !bytes.Equal(entry.Raw, []byte("raw bytes")) {
 		t.Fatalf("Raw aliased the caller: %q", entry.Raw)
 	}
-	if !bytes.Equal(entry.Member, []byte("member bytes")) {
-		t.Fatalf("Member aliased the caller: %q", entry.Member)
+	if !bytes.Equal(entry.Fragment, []byte("member bytes")) {
+		t.Fatalf("Member aliased the caller: %q", entry.Fragment)
 	}
 }
 
 func TestPutRejectsOversizedEntry(t *testing.T) {
 	raw := bytes.Repeat([]byte("x"), 300)
-	member := mustMember(t, raw)
+	member := mustFragment(t, raw)
 	size := memberSize("key", raw, member)
 
 	// limit/4 is one byte under the entry's charged size: not cached, but the
@@ -177,7 +183,7 @@ func TestPutRejectsOversizedEntry(t *testing.T) {
 	if entry == nil {
 		t.Fatal("rejected Put returned no entry; callers need it to serve the rendered piece")
 	}
-	if !bytes.Equal(entry.Raw, raw) || !bytes.Equal(entry.Member, member) {
+	if !bytes.Equal(entry.Raw, raw) || !bytes.Equal(entry.Fragment, member) {
 		t.Fatal("rejected Put returned an entry that does not match the input")
 	}
 	if want := sha256.Sum256(raw); entry.Digest != want {
@@ -206,7 +212,7 @@ func TestPutRejectsOversizedEntry(t *testing.T) {
 func TestLRUEvictsOldestAndPrunesTo75Percent(t *testing.T) {
 	makePiece := func(name string) (string, []byte, []byte, int) {
 		raw := bytes.Repeat([]byte(name), 200)
-		member := mustMember(t, raw)
+		member := mustFragment(t, raw)
 		return name, raw, member, memberSize(name, raw, member)
 	}
 	keyA, rawA, memberA, sizeA := makePiece("a")
@@ -271,7 +277,7 @@ func TestLRUEvictsOldestAndPrunesTo75Percent(t *testing.T) {
 func TestPutReplacesSameKeyAccounting(t *testing.T) {
 	cache := New(1 << 20)
 	raw1 := bytes.Repeat([]byte("1"), 500)
-	member1 := mustMember(t, raw1)
+	member1 := mustFragment(t, raw1)
 	first, ok := cache.Put("v1", raw1, member1)
 	if !ok {
 		t.Fatal("first Put rejected")
@@ -279,7 +285,7 @@ func TestPutReplacesSameKeyAccounting(t *testing.T) {
 	size1 := memberSize("v1", raw1, member1)
 
 	raw2 := bytes.Repeat([]byte("2"), 300)
-	member2 := mustMember(t, raw2)
+	member2 := mustFragment(t, raw2)
 	second, ok := cache.Put("v1", raw2, member2)
 	if !ok {
 		t.Fatal("replacement Put rejected")
@@ -308,11 +314,11 @@ func TestPutReplacesSameKeyAccounting(t *testing.T) {
 func TestPutRejectedReplacementKeepsOld(t *testing.T) {
 	cache := New(1 << 20) // limit/4 = 256 KiB
 	raw := []byte("small")
-	if _, ok := cache.Put("k", raw, mustMember(t, raw)); !ok {
+	if _, ok := cache.Put("k", raw, mustFragment(t, raw)); !ok {
 		t.Fatal("Put rejected small entry")
 	}
 	big := bytes.Repeat([]byte("z"), 300<<10)
-	returned, ok := cache.Put("k", big, mustMember(t, big))
+	returned, ok := cache.Put("k", big, mustFragment(t, big))
 	if ok {
 		t.Fatalf("oversized replacement cached: %v", returned)
 	}
@@ -328,7 +334,7 @@ func TestPutRejectedReplacementKeepsOld(t *testing.T) {
 func TestZeroLimitDisablesStorage(t *testing.T) {
 	cache := New(0)
 	raw := []byte("data")
-	entry, ok := cache.Put("k", raw, mustMember(t, raw))
+	entry, ok := cache.Put("k", raw, mustFragment(t, raw))
 	if ok {
 		t.Fatal("Put cached into a disabled cache")
 	}
@@ -351,7 +357,7 @@ func TestConcurrentReplaceIsAtomic(t *testing.T) {
 	sizes := make([]int, len(payloads))
 	for i := range payloads {
 		payloads[i] = bytes.Repeat([]byte{byte('a' + i)}, 1024)
-		members[i] = mustMember(t, payloads[i])
+		members[i] = mustFragment(t, payloads[i])
 		sizes[i] = memberSize(key, payloads[i], members[i])
 		if _, ok := cache.Put(key, payloads[i], members[i]); !ok {
 			t.Fatal("setup Put rejected")
@@ -387,13 +393,8 @@ func TestConcurrentReplaceIsAtomic(t *testing.T) {
 					t.Error("digest does not match Raw")
 					return
 				}
-				decoded, err := decodeMember(entry.Member)
-				if err != nil {
-					t.Errorf("member does not decode: %v", err)
-					return
-				}
-				if !bytes.Equal(decoded, entry.Raw) {
-					t.Error("member does not decode to Raw: torn entry")
+				if crc32.ChecksumIEEE(entry.Raw) != entry.CRC {
+					t.Error("CRC does not match Raw: torn entry")
 					return
 				}
 			}
@@ -468,7 +469,7 @@ func TestDigestKeysAreAFirstClassKeySpace(t *testing.T) {
 	cache := New(1 << 20)
 	key := sha256.Sum256([]byte("recorded-shell/room"))
 	raw := []byte("segment bytes")
-	entry, ok := cache.PutDigest(key, raw, mustMember(t, raw))
+	entry, ok := cache.PutDigest(key, raw, mustFragment(t, raw))
 	if !ok {
 		t.Fatal("digest Put rejected")
 	}
@@ -485,7 +486,7 @@ func TestDigestKeysAreAFirstClassKeySpace(t *testing.T) {
 	}
 	// Replacement under the same digest swaps the entry, not the key space.
 	replacement := []byte("replacement bytes")
-	second, ok := cache.PutDigest(key, replacement, mustMember(t, replacement))
+	second, ok := cache.PutDigest(key, replacement, mustFragment(t, replacement))
 	if !ok || second == entry {
 		t.Fatal("digest replacement failed")
 	}
@@ -501,7 +502,7 @@ func TestDigestKeysAreAFirstClassKeySpace(t *testing.T) {
 // evicted element must be removed from the map that owns it.
 func TestDigestKeysEvictWithStringKeys(t *testing.T) {
 	raw := bytes.Repeat([]byte("x"), 160)
-	member := mustMember(t, raw)
+	member := mustFragment(t, raw)
 	entryBytes := 32 + len(raw) + len(member) + 240
 	cache := New(entryBytes * 4)
 	if _, ok := cache.Put("string-a", raw, member); !ok {

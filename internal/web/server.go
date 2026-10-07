@@ -72,14 +72,15 @@ type Server struct {
 	authFast bool
 	// authCache is the verified-cookie cache; nil when authFast is off.
 	authCache *verifiedCookieCache
-	// pieces stores recorded-response pieces (raw + gzip member + digest)
+	// pieces stores recorded-response pieces (raw + deflate fragment + digest)
 	// under content-versioned keys, sized by CAMPFIRE_RECORDED_CACHE_MB.
 	pieces         *piececache.Cache
 	recordedPieces bool
-	// zstdPieces enables the zstd member variant of cached pieces
-	// (ENGINE-50, CAMPFIRE_RECORDED_ZSTD=off disables it): fills also store a
-	// complete zstd frame per piece and zstd-accepting clients are served the
-	// smaller multi-frame body.
+	// zstdPieces enables the zstd frame variant of cached pieces (ENGINE-50;
+	// off by default since ENGINE-51 because Chromium decodes only the first
+	// frame of a multi-frame stream, and the piece path is always
+	// multi-piece — see the flag comment in New): fills also store a complete
+	// zstd frame per piece, and only single-frame shapes are served zstd.
 	zstdPieces bool
 	// precomposed enables the ENGINE-49 precomposed-framing path
 	// (CAMPFIRE_PRECOMPOSED_FRAMING=off disables it): recorded responses are
@@ -312,15 +313,23 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 	}
 	setRecordedGzipFillLevel(gzipLevel)
 	slog.Info("recorded gzip fill level", "level", gzipLevel)
-	// CAMPFIRE_RECORDED_ZSTD turns the zstd member variant on (default) or
-	// off; off serves gzip-only, byte-identical to the pre-engine encoding
-	// negotiation.
-	zstdPieces := true
+	// CAMPFIRE_RECORDED_ZSTD turns the zstd frame variant on or off. It is
+	// OFF by default since ENGINE-51: Chromium decodes only the first frame
+	// of a multi-frame zstd stream (exactly as it decodes only the first
+	// member of a multi-member gzip stream), and every piece-path page
+	// assembles several pieces, so the multi-frame zstd body — which the
+	// loadgen and curl decode fine — renders an empty message list in
+	// browsers. When the flag is on, multi-piece responses fall back to the
+	// single-member gzip splice and only single-frame shapes use zstd; the
+	// implementation stays for non-browser clients and for the corpus that
+	// exercises it. gzip serves the same bytes on or off, so an off default
+	// cannot change what a gzip/identity client receives.
+	zstdPieces := false
 	if raw, ok := os.LookupEnv("CAMPFIRE_RECORDED_ZSTD"); ok {
 		var valid bool
 		zstdPieces, valid = parseRecordedPieces(raw)
 		if !valid {
-			slog.Warn("invalid CAMPFIRE_RECORDED_ZSTD; keeping zstd on", "value", raw)
+			slog.Warn("invalid CAMPFIRE_RECORDED_ZSTD; keeping zstd off", "value", raw)
 		}
 	}
 	slog.Info("recorded zstd members", "enabled", zstdPieces)
