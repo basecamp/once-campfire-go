@@ -28,6 +28,11 @@ func TestSidebarCacheTracksRenderedChanges(t *testing.T) {
 	if !strings.Contains(body, "<!DOCTYPE html>") {
 		t.Fatal("standalone sidebar must render a complete page")
 	}
+	loaded := original
+	loaded.LoadedAt = "new-request-time"
+	if render(loaded) != body || sidebarCacheKey(loaded) != key {
+		t.Fatal("an unused room refresh cursor must not invalidate the sidebar")
+	}
 	changes := map[string]func(*page){
 		"frame layout":       func(p *page) { p.Frame = true },
 		"styles":             func(p *page) { p.CustomStyles = template.HTML("<style>body{color:red}</style>") },

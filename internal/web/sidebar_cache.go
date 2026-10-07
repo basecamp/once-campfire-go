@@ -9,6 +9,7 @@ import (
 // Key every value the sidebar template reads. Authorization and membership data
 // are still read afresh before looking up the rendered fragment.
 func sidebarCacheKey(p page) string {
+	p.LoadedAt = "" // The sidebar does not render the room refresh cursor.
 	raw, _ := json.Marshal(p)
 	return fmt.Sprintf("sidebar/%x", sha256.Sum256(raw))
 }
