@@ -55,21 +55,34 @@ func TestSearchShellKeepsNavigationFresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed, body := get(etag, other.ID)
-	if changed.StatusCode != 200 || changed.Header.Get("ETag") == etag || !strings.Contains(body, "fresh-navigation") || !strings.Contains(body, fmt.Sprintf(`href="/rooms/%d"`, other.ID)) {
+	if changed.StatusCode != 200 || changed.Header.Get("ETag") == etag ||
+		!strings.Contains(body, "fresh-navigation") ||
+		!strings.Contains(body, fmt.Sprintf(`href="/rooms/%d"`, other.ID)) {
 		t.Fatal("retained layout hid fresh recent searches/return room")
 	}
 	if _, err := app.DB.Write.ExecContext(ctx, "DELETE FROM memberships WHERE user_id=? AND room_id=?", user.ID, other.ID); err != nil {
 		t.Fatal(err)
 	}
 	denied, body := get(changed.Header.Get("ETag"), other.ID)
-	if denied.StatusCode != 200 || strings.Contains(body, fmt.Sprintf(`href="/rooms/%d"`, other.ID)) {
+	if denied.StatusCode != 200 ||
+		strings.Contains(body, fmt.Sprintf(`href="/rooms/%d"`, other.ID)) {
 		t.Fatal("return-room authorization was not observed afresh")
 	}
 }
 
 func TestSearchShellPreservesBytesIdentityAndOwnership(t *testing.T) {
 	app, _, _, user := testApp(t)
-	base := page{User: user, Screen: "search", Title: "Search", BodyClass: "sidebar searches", Query: "coffee & <tea>", SearchResultCount: 2, RecentSearches: []string{"coffee", "<tea>"}, ReturnRoom: 12, MessagesHTML: "<div>one &amp; two</div>"}
+	base := page{
+		User:              user,
+		Screen:            "search",
+		Title:             "Search",
+		BodyClass:         "sidebar searches",
+		Query:             "coffee & <tea>",
+		SearchResultCount: 2,
+		RecentSearches:    []string{"coffee", "<tea>"},
+		ReturnRoom:        12,
+		MessagesHTML:      "<div>one &amp; two</div>",
+	}
 	check := func(t *testing.T, p page) []responsebody.Part {
 		t.Helper()
 		var expected, actual bytes.Buffer
@@ -141,7 +154,9 @@ func TestSearchShellPreservesBytesIdentityAndOwnership(t *testing.T) {
 	// Eviction releases only cache references, not already selected response Parts.
 	app.fragments.limit = 4096
 	for i := 0; i < 50; i++ {
-		app.fragments.putEntry(fragmentEntry{key: fmt.Sprint(i), part: responsebody.NewPart(make([]byte, 512))})
+		app.fragments.putEntry(
+			fragmentEntry{key: fmt.Sprint(i), part: responsebody.NewPart(make([]byte, 512))},
+		)
 	}
 	var retained bytes.Buffer
 	for _, part := range first {
@@ -160,7 +175,12 @@ func TestSearchShellPreservesBytesIdentityAndOwnership(t *testing.T) {
 		if limit > 1 {
 			for _, e := range app.fragments.entries {
 				entry := e.Value.(fragmentEntry)
-				if entry.shell == nil || entry.bytes != len(entry.key)+240+entry.shell.bytes+32+56*len(entry.shell.parts) {
+				if entry.shell == nil ||
+					entry.bytes != len(
+						entry.key,
+					)+240+entry.shell.bytes+32+56*len(
+						entry.shell.parts,
+					) {
 					t.Fatal("shell payload must be charged once")
 				}
 			}

@@ -8,22 +8,30 @@ import (
 	"time"
 )
 
-type Work func(context.Context) error
-type Runner struct {
-	mu      sync.RWMutex
-	closed  bool
-	pending int
-	changed chan struct{}
-	done    chan struct{}
-	queues  map[string]chan Work
-	ctx     context.Context
-	cancel  context.CancelFunc
-	workers sync.WaitGroup
-}
+type (
+	Work   func(context.Context) error
+	Runner struct {
+		mu      sync.RWMutex
+		closed  bool
+		pending int
+		changed chan struct{}
+		done    chan struct{}
+		queues  map[string]chan Work
+		ctx     context.Context
+		cancel  context.CancelFunc
+		workers sync.WaitGroup
+	}
+)
 
 func New(concurrency int, kinds ...string) *Runner {
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &Runner{changed: make(chan struct{}, 1), done: make(chan struct{}), queues: map[string]chan Work{}, ctx: ctx, cancel: cancel}
+	r := &Runner{
+		changed: make(chan struct{}, 1),
+		done:    make(chan struct{}),
+		queues:  map[string]chan Work{},
+		ctx:     ctx,
+		cancel:  cancel,
+	}
 	for _, kind := range kinds {
 		queue := make(chan Work, 1024)
 		r.queues[kind] = queue
@@ -52,6 +60,7 @@ func New(concurrency int, kinds ...string) *Runner {
 	}
 	return r
 }
+
 func run(ctx context.Context, kind string, work Work) {
 	defer func() {
 		if p := recover(); p != nil {
@@ -62,6 +71,7 @@ func run(ctx context.Context, kind string, work Work) {
 		slog.Error("background job failed", "kind", kind, "error", err)
 	}
 }
+
 func (r *Runner) Enqueue(kind string, work Work) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
