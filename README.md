@@ -114,6 +114,9 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 
 ## Known differences
 
+- Sidebar connection refresh waits for the current Turbo frame to finish loading,
+  preventing an aborted response on startup or reconnect. Obsolete connections and removed frames do not reload.
+
 - Search selects the newest 100 matching messages by insertion ID, then displays them in ID order. Backdated messages can appear in a different order from the original Rails app.
 
 - Templates use `html/template`. Whitespace, attribute serialization, some canonical form-action
