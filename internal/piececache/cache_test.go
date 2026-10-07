@@ -138,7 +138,7 @@ func TestGetReturnsSameImmutableView(t *testing.T) {
 }
 
 func TestEntryDigestIsSHA256OfRaw(t *testing.T) {
-	entry := NewEntry([]byte("digest me"), []byte("not checked"))
+	entry := NewEntry([]byte("digest me"), []byte("not checked"), nil)
 	if want := sha256.Sum256([]byte("digest me")); entry.Digest != want {
 		t.Fatalf("Digest = %x, want %x", entry.Digest, want)
 	}
@@ -147,7 +147,7 @@ func TestEntryDigestIsSHA256OfRaw(t *testing.T) {
 func TestNewEntryDefensiveCopy(t *testing.T) {
 	raw := []byte("raw bytes")
 	member := []byte("member bytes")
-	entry := NewEntry(raw, member)
+	entry := NewEntry(raw, member, nil)
 	for i := range raw {
 		raw[i] = 'x'
 	}

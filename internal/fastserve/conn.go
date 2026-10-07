@@ -52,6 +52,10 @@ type conn struct {
 	dateScratch   [64]byte
 	lenScratch    [24]byte
 	chunkScratch  [24]byte
+	// dateLine is the formatted Date value, refreshed at most once per second
+	// (ENGINE-49); dateSecond is the Unix second it was formatted for.
+	dateLine   []byte
+	dateSecond int64
 }
 
 // prefixReader serves the bytes a head parse pulled past the head end before

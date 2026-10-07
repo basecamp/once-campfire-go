@@ -7,8 +7,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/basecamp/once-campfire-go/internal/zstd"
 )
 
 // The legacy response shape writeRecorded hashes: [before, fragment, after].
@@ -49,9 +52,38 @@ func fixturePieces(tb testing.TB) ([]*Entry, [][]byte) {
 	parts := [][]byte{fixtureBefore, fixturePayload, fixtureAfter}
 	pieces := make([]*Entry, len(parts))
 	for i, part := range parts {
-		pieces[i] = NewEntry(part, mustMember(tb, part))
+		pieces[i] = NewEntry(part, mustMember(tb, part), nil)
 	}
 	return pieces, parts
+}
+
+func mustZstdFrame(tb testing.TB, src []byte) []byte {
+	tb.Helper()
+	var buf bytes.Buffer
+	w, err := zstd.NewWriterLevel(&buf, 3)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	if _, err := w.Write(src); err != nil {
+		tb.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		tb.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// decodeZstdFrames decodes a multi-frame zstd stream with the system zstd
+// CLI, the same decoder the zstd package's own tests use.
+func decodeZstdFrames(tb testing.TB, frames []byte) ([]byte, error) {
+	tb.Helper()
+	command := exec.Command("zstd", "-d", "-q", "-c")
+	command.Stdin = bytes.NewReader(frames)
+	decoded, err := command.Output()
+	if err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }
 
 func TestAssembleETagMatchesLegacyRecordFormula(t *testing.T) {
@@ -77,6 +109,50 @@ func TestAssembleETagMatchesLegacyRecordFormula(t *testing.T) {
 	}
 }
 
+func TestAssembleZstdRoundTrip(t *testing.T) {
+	rawParts := [][]byte{
+		fixtureBefore,
+		bytes.Repeat([]byte("The quick brown fox. "), 64),
+		fixtureAfter,
+	}
+	pieces := make([]*Entry, len(rawParts))
+	for i, part := range rawParts {
+		pieces[i] = NewEntry(part, mustMember(t, part), mustZstdFrame(t, part))
+	}
+
+	want := legacyETag(rawParts, sha256.Sum256(rawParts[1]))
+	for _, encoding := range []Encoding{Identity, Gzip, Zstd} {
+		assembled, etag, err := Assemble(nil, encoding, pieces...)
+		if err != nil {
+			t.Fatalf("%s: %v", encoding, err)
+		}
+		if etag != want {
+			t.Fatalf("%s ETag = %x, want %x", encoding, etag, want)
+		}
+		if encoding == Zstd {
+			decoded, err := decodeZstdFrames(t, assembled)
+			if err != nil {
+				t.Fatalf("zstd decode: %v", err)
+			}
+			wantRaw := append(append([]byte{}, rawParts[0]...), rawParts[1]...)
+			wantRaw = append(wantRaw, rawParts[2]...)
+			if !bytes.Equal(decoded, wantRaw) {
+				t.Fatalf("zstd round trip: decoded %d bytes, want %d", len(decoded), len(wantRaw))
+			}
+		}
+	}
+
+	// A zstd-less piece under Zstd is an error, like a gzip-less piece under
+	// Gzip; identity still renders it.
+	rawOnly := NewEntry([]byte("raw only"), nil, nil)
+	if _, _, err := Assemble(nil, Zstd, rawOnly); err != errNoMember {
+		t.Fatalf("Assemble(Zstd, raw-only) err = %v, want errNoMember", err)
+	}
+	if _, _, err := Assemble(nil, Zstd, pieces[0], rawOnly); err != errNoMember {
+		t.Fatalf("Assemble(Zstd, mixed) err = %v, want errNoMember", err)
+	}
+}
+
 func TestAssembleGzipRoundTrip(t *testing.T) {
 	rawParts := [][]byte{
 		fixtureBefore,
@@ -85,7 +161,7 @@ func TestAssembleGzipRoundTrip(t *testing.T) {
 	}
 	pieces := make([]*Entry, len(rawParts))
 	for i, part := range rawParts {
-		pieces[i] = NewEntry(part, mustMember(t, part))
+		pieces[i] = NewEntry(part, mustMember(t, part), nil)
 	}
 
 	assembled, etag, err := Assemble(nil, Gzip, pieces...)
@@ -151,7 +227,7 @@ func TestAssembleIdentityConcatenatesRaw(t *testing.T) {
 	raw := [][]byte{[]byte("one;"), nil, []byte("three")}
 	pieces := make([]*Entry, len(raw))
 	for i, part := range raw {
-		pieces[i] = NewEntry(part, mustMember(t, part))
+		pieces[i] = NewEntry(part, mustMember(t, part), nil)
 	}
 	got, _, err := Assemble(nil, Identity, pieces...)
 	if err != nil {
@@ -166,8 +242,8 @@ func TestAssembleIdentityConcatenatesRaw(t *testing.T) {
 // kept, and callers reuse a response buffer with dst[:0].
 func TestAssembleAppendsToDst(t *testing.T) {
 	pieces := []*Entry{
-		NewEntry([]byte("one"), mustMember(t, []byte("one"))),
-		NewEntry([]byte("two"), mustMember(t, []byte("two"))),
+		NewEntry([]byte("one"), mustMember(t, []byte("one")), nil),
+		NewEntry([]byte("two"), mustMember(t, []byte("two")), nil),
 	}
 	prefix := make([]byte, 0, 64)
 	prefix = append(prefix, "prefix:"...)
@@ -209,7 +285,7 @@ func TestAssembleEmptyIsError(t *testing.T) {
 }
 
 func TestAssembleNilPieceIsError(t *testing.T) {
-	good := NewEntry([]byte("x"), mustMember(t, []byte("x")))
+	good := NewEntry([]byte("x"), mustMember(t, []byte("x")), nil)
 	out, etag, err := Assemble([]byte("keep"), Identity, good, nil)
 	if err == nil {
 		t.Fatal("Assemble with a nil piece succeeded, want error")
@@ -227,8 +303,8 @@ func TestAssembleNilPieceIsError(t *testing.T) {
 // silently truncating the body. Identity assembly needs only Raw, so it still
 // renders the piece; an empty raw with a nil member is a no-op under both.
 func TestAssembleGzipRejectsRawOnlyPiece(t *testing.T) {
-	rawOnly := NewEntry([]byte("raw only"), nil)
-	tail := NewEntry([]byte("tail"), mustMember(t, []byte("tail")))
+	rawOnly := NewEntry([]byte("raw only"), nil, nil)
+	tail := NewEntry([]byte("tail"), mustMember(t, []byte("tail")), nil)
 
 	dst := []byte("keep")
 	out, etag, err := Assemble(dst, Gzip, rawOnly, tail)
@@ -250,7 +326,7 @@ func TestAssembleGzipRejectsRawOnlyPiece(t *testing.T) {
 		t.Fatalf("Identity = %q, want %q", identity, want)
 	}
 
-	empty := NewEntry(nil, nil)
+	empty := NewEntry(nil, nil, nil)
 	gzipOut, _, err := Assemble(nil, Gzip, empty, tail)
 	if err != nil {
 		t.Fatalf("Assemble(Gzip) with an empty piece: %v", err)
@@ -294,7 +370,7 @@ func TestETagOfMatchesAssembleAndValidates(t *testing.T) {
 	if _, err := ETagOf(good, nil); err != errNilPiece {
 		t.Fatalf("ETagOf(nil piece) err = %v, want errNilPiece", err)
 	}
-	rawOnly := NewEntry([]byte("raw only"), nil)
+	rawOnly := NewEntry([]byte("raw only"), nil, nil)
 	if _, err := ETagOf(rawOnly); err != errNoMember {
 		t.Fatalf("ETagOf(raw-only) err = %v, want errNoMember", err)
 	}
@@ -331,7 +407,7 @@ func TestETagStableAcrossDynamicPieces(t *testing.T) {
 
 	loadedAt := func(stamp string) *Entry {
 		raw := []byte(`<span data-loaded-at="` + stamp + `"></span>`)
-		return NewEntry(raw, mustMember(t, raw))
+		return NewEntry(raw, mustMember(t, raw), nil)
 	}
 	scene := func(dynamic *Entry) []*Entry {
 		return []*Entry{cached[0], dynamic, cached[1], cached[2]}
@@ -375,7 +451,7 @@ func TestETagStableAcrossDynamicPieces(t *testing.T) {
 }
 
 func TestAssembleUnknownEncodingIsError(t *testing.T) {
-	good := NewEntry([]byte("x"), mustMember(t, []byte("x")))
+	good := NewEntry([]byte("x"), mustMember(t, []byte("x")), nil)
 	if _, _, err := Assemble(nil, Encoding(99), good); err == nil {
 		t.Fatal("Assemble with unknown encoding succeeded, want error")
 	}
@@ -391,7 +467,7 @@ func TestAssembleNinePieces(t *testing.T) {
 		if i != 4 {
 			raw = []byte(fmt.Sprintf("part-%d;", i))
 		}
-		pieces[i] = NewEntry(raw, mustMember(t, raw))
+		pieces[i] = NewEntry(raw, mustMember(t, raw), nil)
 		want = append(want, raw...)
 	}
 	out, etag, err := Assemble(nil, Identity, pieces...)

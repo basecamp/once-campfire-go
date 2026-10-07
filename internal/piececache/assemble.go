@@ -18,6 +18,11 @@ const (
 	// decodes concatenated members as the concatenation of their raw streams,
 	// so no deflate-window or CRC bookkeeping crosses the piece boundary.
 	Gzip
+	// Zstd is the multi-frame zstd form: each piece's complete Zstd frame
+	// concatenated. zstd frames are independent, so a decoder processes
+	// concatenated frames as the concatenation of their raw streams exactly
+	// like gzip multi-member streams.
+	Zstd
 )
 
 func (e Encoding) String() string {
@@ -26,6 +31,8 @@ func (e Encoding) String() string {
 		return "identity"
 	case Gzip:
 		return "gzip"
+	case Zstd:
+		return "zstd"
 	default:
 		return "unknown"
 	}
@@ -48,9 +55,9 @@ var (
 // body: for each piece in order, little-endian uint64(raw length) followed by
 // SHA-256(raw). That is the digest loop of internal/web/recorded.go's
 // writeRecorded byte for byte, so a differential harness can compare ETag
-// headers directly. Because the records cover raw content, Identity and Gzip
-// yield the same digest for the same pieces. The legacy header spelling is
-// W/"<hex of the low 16 bytes>"; this returns the full 32-byte digest so a
+// headers directly. Because the records cover raw content, Identity, Gzip and
+// Zstd yield the same digest for the same pieces. The legacy header spelling
+// is W/"<hex of the low 16 bytes>"; this returns the full 32-byte digest so a
 // caller can also use it for 304 validation.
 //
 // The digest returned covers exactly the pieces passed. When the body also
@@ -63,12 +70,14 @@ var (
 // 8 pieces uses a per-call scratch slice sized to the piece count; only the ≤8
 // path is gated at zero allocations.
 //
-// An empty piece list, a nil piece, an unknown encoding, or a gzip piece with
-// raw bytes but no member returns an error and leaves dst unchanged. (Empty
-// lists are rejected rather than assembled to zero bytes: a response assembled
-// from nothing is a routing bug, and a silent empty 200 would hide it. A
-// raw-only piece under gzip would silently drop its content, so it is rejected
-// rather than assembled without it; identity assembly can still render it.)
+// An empty piece list, a nil piece, an unknown encoding, or a piece lacking
+// the member for a compressed encoding (raw bytes but no gzip member under
+// Gzip, no zstd frame under Zstd) returns an error and leaves dst unchanged.
+// (Empty lists are rejected rather than assembled to zero bytes: a response
+// assembled from nothing is a routing bug, and a silent empty 200 would hide
+// it. A raw-only piece under a compressed encoding would silently drop its
+// content, so it is rejected rather than assembled without it; identity
+// assembly can still render it.)
 func Assemble(dst []byte, encoding Encoding, pieces ...*Entry) ([]byte, [32]byte, error) {
 	if len(pieces) == 0 {
 		return dst, [32]byte{}, errNoPieces
@@ -86,6 +95,11 @@ func Assemble(dst []byte, encoding Encoding, pieces ...*Entry) ([]byte, [32]byte
 				return dst, [32]byte{}, errNoMember
 			}
 			total += len(piece.Member)
+		case Zstd:
+			if len(piece.Raw) > 0 && len(piece.Zstd) == 0 {
+				return dst, [32]byte{}, errNoMember
+			}
+			total += len(piece.Zstd)
 		default:
 			return dst, [32]byte{}, errEncoding
 		}
@@ -106,9 +120,13 @@ func Assemble(dst []byte, encoding Encoding, pieces ...*Entry) ([]byte, [32]byte
 		for _, piece := range pieces {
 			dst = append(dst, piece.Raw...)
 		}
-	default: // Gzip, checked above.
+	case Gzip:
 		for _, piece := range pieces {
 			dst = append(dst, piece.Member...)
+		}
+	default: // Zstd, checked above.
+		for _, piece := range pieces {
+			dst = append(dst, piece.Zstd...)
 		}
 	}
 	return dst, etag, nil

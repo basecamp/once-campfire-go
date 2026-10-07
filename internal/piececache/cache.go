@@ -42,8 +42,10 @@ const entryOverhead = 240
 
 // Entry is one immutable response piece: the raw bytes, a complete gzip member
 // of those bytes (header, deflate stream and CRC32/ISIZE trailer as produced
-// by compress/gzip), and the SHA-256 digest of the raw bytes that the response
-// ETag is computed from.
+// by compress/gzip), an optional complete zstd frame of the same bytes, and
+// the SHA-256 digest of the raw bytes that the response ETag is computed
+// from. The zstd frame is present when the piece was filled with zstd members
+// enabled; a piece without it can still be assembled as identity or gzip.
 //
 // Once published, an Entry is never mutated. NewEntry and Put take copies, so
 // the caller's buffers may be reused immediately afterwards. Immutability holds
@@ -54,19 +56,24 @@ type Entry struct {
 	Raw []byte
 	// Member is a complete gzip member of Raw.
 	Member []byte
+	// Zstd is a complete zstd frame of Raw, when the cache was filled with
+	// zstd members enabled.
+	Zstd []byte
 	// Digest is SHA-256 of Raw.
 	Digest [32]byte
 }
 
-// NewEntry returns an immutable entry for raw and member, copying both. Member
-// is trusted to be a gzip member of raw; it is not re-verified (the caller
-// just compressed it, and decompression on the request path would defeat the
-// point of the cache). NewEntry is exported for per-request dynamic pieces
-// that are assembled once but not cached; Put uses it for stored pieces.
-func NewEntry(raw, member []byte) *Entry {
+// NewEntry returns an immutable entry for raw, member and zstd, copying all
+// three. Member and Zstd are trusted to be encodings of raw; they are not
+// re-verified (the caller just compressed it, and decompression on the request
+// path would defeat the point of the cache). NewEntry is exported for
+// per-request dynamic pieces that are assembled once but not cached; Put uses
+// it for stored pieces. zstd may be nil for gzip-only pieces.
+func NewEntry(raw, member, zstd []byte) *Entry {
 	entry := &Entry{
 		Raw:    append([]byte(nil), raw...),
 		Member: append([]byte(nil), member...),
+		Zstd:   append([]byte(nil), zstd...),
 	}
 	entry.Digest = sha256.Sum256(entry.Raw)
 	return entry
@@ -156,18 +163,30 @@ func (c *Cache) GetDigest(key [32]byte) *Entry {
 // swap is critical. A concurrent reader therefore observes either the old
 // entry or the new one, both complete — never a half-updated mix.
 func (c *Cache) Put(key string, raw, member []byte) (*Entry, bool) {
-	return c.put(item{key: key}, len(key), raw, member)
+	return c.put(item{key: key}, len(key), raw, member, nil)
 }
 
 // PutDigest is Put for a fixed-size content digest key, charged as
 // digestKeyBytes rather than len(key).
 func (c *Cache) PutDigest(key [32]byte, raw, member []byte) (*Entry, bool) {
-	return c.put(item{digest: key, byDigest: true}, digestKeyBytes, raw, member)
+	return c.put(item{digest: key, byDigest: true}, digestKeyBytes, raw, member, nil)
 }
 
-func (c *Cache) put(element item, keyBytes int, raw, member []byte) (*Entry, bool) {
-	size := keyBytes + len(raw) + len(member) + entryOverhead
-	entry := NewEntry(raw, member)
+// PutZstd is Put for a piece that also carries a complete zstd frame; the
+// frame is charged against the budget like the gzip member. The returned
+// entry holds both members, so either encoding assembles without recompression.
+func (c *Cache) PutZstd(key string, raw, member, zstd []byte) (*Entry, bool) {
+	return c.put(item{key: key}, len(key), raw, member, zstd)
+}
+
+// PutDigestZstd is PutZstd for a fixed-size digest key.
+func (c *Cache) PutDigestZstd(key [32]byte, raw, member, zstd []byte) (*Entry, bool) {
+	return c.put(item{digest: key, byDigest: true}, digestKeyBytes, raw, member, zstd)
+}
+
+func (c *Cache) put(element item, keyBytes int, raw, member, zstd []byte) (*Entry, bool) {
+	size := keyBytes + len(raw) + len(member) + len(zstd) + entryOverhead
+	entry := NewEntry(raw, member, zstd)
 	if size > c.limit/4 {
 		// Not cacheable, but the caller still needs the immutable piece for
 		// this response; return it uncached rather than forcing a re-copy.

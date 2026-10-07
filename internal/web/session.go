@@ -136,8 +136,8 @@ func (w *sessionWriter) Flush() {
 	http.NewResponseController(w.ResponseWriter).Flush()
 }
 func (s *Server) withBrowserSession(w http.ResponseWriter, r *http.Request) (http.ResponseWriter, *http.Request) {
-	state := &browserSession{server: s, request: r}
-	return &sessionWriter{ResponseWriter: w, session: state}, r.WithContext(context.WithValue(r.Context(), browserSessionKey{}, state))
+	state := borrowBrowserSession(s, r)
+	return borrowSessionWriter(w, state), r.WithContext(context.WithValue(r.Context(), browserSessionKey{}, state))
 }
 func (s *Server) requestAuthentication(w http.ResponseWriter, r *http.Request) {
 	browserState(r).set("return_to_after_authenticating", s.origin(r)+r.URL.RequestURI())

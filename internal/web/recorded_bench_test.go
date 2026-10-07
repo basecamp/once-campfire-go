@@ -120,9 +120,8 @@ func BenchmarkRecordedResponse(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			clear(writer.header)
-			gzipped := clientAcceptsGzip(request)
 			buffered := &responseBuffer{ResponseWriter: writer}
-			if _, err := fixture.server.writeRecordedPieces(buffered, request, 200, "room", fixture.page, recordedPayload{piece: fixture.payload}, gzipped); err != nil {
+			if _, err := fixture.server.writeRecordedPieces(buffered, request, 200, "room", fixture.page, recordedPayload{piece: fixture.payload}, "identity"); err != nil {
 				b.Fatal(err)
 			}
 			buffered.finish(request)
@@ -133,14 +132,80 @@ func BenchmarkRecordedResponse(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			clear(writer.header)
-			gzipped := clientAcceptsGzip(gzipRequest)
 			buffered := &responseBuffer{ResponseWriter: writer}
-			if _, err := fixture.server.writeRecordedPieces(buffered, gzipRequest, 200, "room", fixture.page, recordedPayload{piece: fixture.payload}, gzipped); err != nil {
+			if _, err := fixture.server.writeRecordedPieces(buffered, gzipRequest, 200, "room", fixture.page, recordedPayload{piece: fixture.payload}, "gzip"); err != nil {
 				b.Fatal(err)
 			}
 			buffered.finish(gzipRequest)
 		}
 	})
+}
+
+// benchPrecomposedWriter models the fastserve receiver for the framed bench:
+// it accepts the precomposed emission and allocates nothing per call. The
+// real receiver (fastserve.response.WritePrecomposed) is exercised byte-for-
+// byte by the parity tests; this stub measures the web-side cost of the same
+// contract.
+type benchPrecomposedWriter struct {
+	header http.Header
+	head   []byte
+	parts  [][]byte
+	status int
+}
+
+func (w *benchPrecomposedWriter) Header() http.Header { return w.header }
+func (w *benchPrecomposedWriter) Write([]byte) (int, error) {
+	panic("framed writer must not receive raw writes")
+}
+func (w *benchPrecomposedWriter) WriteHeader(int) {}
+func (w *benchPrecomposedWriter) WritePrecomposed(status int, head []byte, parts [][]byte) error {
+	w.status, w.head, w.parts = status, head, parts
+	return nil
+}
+
+// BenchmarkRecordedFramedHit runs the ENGINE-48/49 hit path end to end: the
+// arena-backed response buffer, the variant-cached ETag, the precomposed head
+// block and (for gzip) the arena-assembled body, emitted through the owned
+// writer contract. The target is 0 allocs/op for both gzip and identity on
+// the warm path; the first two iterations warm the variant cache and the
+// arena block before the timer starts.
+func BenchmarkRecordedFramedHit(b *testing.B) {
+	fixture := newRecordedBenchmarkFixture(b)
+	server := fixture.server
+	server.precomposed = true
+	writer := &benchPrecomposedWriter{header: http.Header{}}
+	request := httptest.NewRequest("GET", "/rooms/1", nil)
+	gzipRequest := httptest.NewRequest("GET", "/rooms/1", nil)
+	gzipRequest.Header.Set("Accept-Encoding", "gzip")
+	run := func(b *testing.B, req *http.Request) {
+		clear(writer.header)
+		// Warm: variant fill, pooled blocks warmed.
+		arena := borrowRequestArena()
+		buffered := borrowResponseBuffer(writer, arena)
+		buffered.framed = true // ServeHTTP computes this from the writer walk
+		if _, err := server.writeRecordedPieces(buffered, req, 200, "room", fixture.page, recordedPayload{piece: fixture.payload}, clientContentEncoding(req, false)); err != nil {
+			b.Fatal(err)
+		}
+		buffered.finish(req)
+		releaseResponseBuffer(buffered)
+		releaseRequestArena(arena)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			clear(writer.header)
+			arena := borrowRequestArena()
+			buffered := borrowResponseBuffer(writer, arena)
+			buffered.framed = true
+			if _, err := server.writeRecordedPieces(buffered, req, 200, "room", fixture.page, recordedPayload{piece: fixture.payload}, clientContentEncoding(req, false)); err != nil {
+				b.Fatal(err)
+			}
+			buffered.finish(req)
+			releaseResponseBuffer(buffered)
+			releaseRequestArena(arena)
+		}
+	}
+	b.Run("identity", func(b *testing.B) { run(b, request) })
+	b.Run("gzip", func(b *testing.B) { run(b, gzipRequest) })
 }
 
 // benchSentence builds deterministic, varied HTML text so the compressed
@@ -189,14 +254,14 @@ func BenchmarkRecordedHitPath(b *testing.B) {
 	raw := make([]database.Message, len(messages))
 	copy(raw, messages)
 	p := page{Room: room, User: user, Screen: "room", Chat: true, Title: room.Name, LoadedAt: "1767225845000"}
-	payload, err := app.recordedMessageList(ctx, raw, true)
+	payload, err := app.recordedMessageList(ctx, raw, true, false)
 	if err != nil {
 		b.Fatal(err)
 	}
 	if payload.piece == nil {
 		b.Fatal("piece path disabled")
 	}
-	shell, err := app.shellPieces(p, "room", true)
+	shell, err := app.shellPieces(p, "room", true, false)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -208,24 +273,23 @@ func BenchmarkRecordedHitPath(b *testing.B) {
 	request := httptest.NewRequest("GET", "/rooms/1", nil)
 	gzipRequest := httptest.NewRequest("GET", "/rooms/1", nil)
 	gzipRequest.Header.Set("Accept-Encoding", "gzip")
-	run := func(b *testing.B, req *http.Request, needMember bool) {
+	run := func(b *testing.B, req *http.Request, encoding string) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		b.ReportMetric(float64(pageBytes), "body_B")
 		for i := 0; i < b.N; i++ {
 			clear(writer.header)
-			gzipped := clientAcceptsGzip(req)
-			payload, err := app.recordedMessageList(ctx, raw, needMember)
+			payload, err := app.recordedMessageList(ctx, raw, encoding == "gzip", app.zstdPieces && encoding == "zstd")
 			if err != nil {
 				b.Fatal(err)
 			}
 			buffered := &responseBuffer{ResponseWriter: writer}
-			if _, err := app.writeRecordedPieces(buffered, req, 200, "room", p, payload, gzipped); err != nil {
+			if _, err := app.writeRecordedPieces(buffered, req, 200, "room", p, payload, encoding); err != nil {
 				b.Fatal(err)
 			}
 			buffered.finish(req)
 		}
 	}
-	b.Run("gzip", func(b *testing.B) { run(b, gzipRequest, true) })
-	b.Run("identity", func(b *testing.B) { run(b, request, false) })
+	b.Run("gzip", func(b *testing.B) { run(b, gzipRequest, "gzip") })
+	b.Run("identity", func(b *testing.B) { run(b, request, "identity") })
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/httpcompat"
 	"github.com/basecamp/once-campfire-go/internal/piececache"
 	"github.com/basecamp/once-campfire-go/internal/useragent"
+	"github.com/basecamp/once-campfire-go/internal/zstd"
 )
 
 // This file is the recorded-response piece path. A recorded page is stored as
@@ -47,14 +48,14 @@ const (
 // recordedShell is a rendered page split at its insertion markers into stable
 // pieces. count segments bound count-1 slots; when bit i of loadedMask is set,
 // the slot after segments[i] is the loadedAt timestamp, otherwise it is the
-// message payload.
-//
-// The random marker strings fall outside the segments, so the cut points are
-// marker-independent: two concurrent first renders store identical pieces.
+// message payload. identity is the content digest of the page inputs (the
+// shell's cache key), kept on the shell so the response path can derive
+// per-variant keys without re-hashing.
 type recordedShell struct {
 	segments   [3]*piececache.Entry
 	count      int
 	loadedMask uint8
+	identity   [32]byte
 }
 
 // shellLayout is the byte split before compression and storage.
@@ -238,11 +239,14 @@ func splitRecordedShell(rendered []byte, loadedMarker, messageMarker string) (sh
 
 // shellPieces returns the stable pieces for a page shell, rendering and storing
 // them on a miss. Pieces are keyed by content, so a miss is always a cold page,
-// never a stale one. needMember asks for gzip members because this request will
-// assemble a gzip body; when the cache cannot store anything and no gzip body
-// is being assembled, the members would be discarded immediately, so segment
-// compression is skipped.
-func (s *Server) shellPieces(p page, name string, needMember bool) (recordedShell, error) {
+// never a stale one. needGzip asks for gzip members because this request will
+// assemble a gzip body; needZstd asks for zstd frames (ENGINE-50). When the
+// cache cannot store anything and no compressed body is being assembled, the
+// members would be discarded immediately, so compression is skipped; the two
+// booleans let the caller request exactly the members it will use, so the
+// first fill of a page for one encoding does not compress the other member
+// needlessly.
+func (s *Server) shellPieces(p page, name string, needGzip, needZstd bool) (recordedShell, error) {
 	identity := recordedShellIdentity(name, p)
 	switch shell, status := s.loadShell(identity); status {
 	case shellHit:
@@ -268,6 +272,7 @@ func (s *Server) shellPieces(p page, name string, needMember bool) (recordedShel
 	}
 	var shell recordedShell
 	shell.count = layout.count
+	shell.identity = identity
 	for i := 0; i < layout.count-1; i++ {
 		if layout.slots[i] == slotLoadedAt {
 			shell.loadedMask |= 1 << i
@@ -279,11 +284,14 @@ func (s *Server) shellPieces(p page, name string, needMember bool) (recordedShel
 	for i := 0; i < layout.count; i++ {
 		key := shellSegmentKey(identity, i)
 		copy(manifest[2+32*i:], key[:])
-		var member []byte
-		if needMember || s.pieces.Enabled() {
+		var member, zstdMember []byte
+		if needGzip || s.pieces.Enabled() {
 			member = compressGzip(layout.segments[i])
 		}
-		entry, _ := s.pieces.PutDigest(key, layout.segments[i], member)
+		if s.zstdPieces && (needZstd || s.pieces.Enabled()) {
+			zstdMember = compressZstd(layout.segments[i])
+		}
+		entry, _ := s.pieces.PutDigestZstd(key, layout.segments[i], member, zstdMember)
 		shell.segments[i] = entry
 	}
 	s.pieces.PutDigest(identity, manifest, nil)
@@ -317,7 +325,7 @@ func (s *Server) loadShell(identity [32]byte) (recordedShell, shellStatus) {
 	if count < 2 || count > 3 || mask>>(count-1) != 0 || len(manifest.Raw) != 2+32*count {
 		return recordedShell{}, shellMiss
 	}
-	shell := recordedShell{count: count, loadedMask: mask}
+	shell := recordedShell{count: count, loadedMask: mask, identity: identity}
 	for i := 0; i < count; i++ {
 		var key [32]byte
 		copy(key[:], manifest.Raw[2+32*i:])
@@ -332,30 +340,46 @@ func (s *Server) loadShell(identity [32]byte) (recordedShell, shellStatus) {
 
 // writeRecordedPieces serves a recorded response from cached pieces. It returns
 // handled=false, before writing anything, when the page shell cannot be split
-// into pieces; the caller then renders the legacy way. gzipped is the request's
-// encoding decision, computed once by the caller so this path and
-// recordedMessageList agree without a second negotiation.
+// into pieces; the caller then renders the legacy way. encoding is the
+// request's encoding decision ("gzip", "zstd" or "identity"), computed once by
+// the caller so this path and recordedMessageList agree without a second
+// negotiation.
 //
 // Order of operations is the 304 contract: the ETag covers the cache-stable
 // pieces only, and a matching If-None-Match returns before any assembly. A
-// gzip client gets one assembled multi-member buffer and a pre-set
-// Content-Encoding that front.Deflate passes through; an identity client gets
-// the pieces' raw bytes through the parts channel, which is already the wire
-// form and copies nothing. HEAD requests skip assembly and report the length
-// the GET body would have.
-func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, status int, name string, p page, recorded recordedPayload, gzipped bool) (bool, error) {
+// compressed client gets one assembled multi-member buffer (gzip members or
+// zstd frames) and a pre-set Content-Encoding that front.Deflate passes
+// through; an identity client gets the pieces' raw bytes through the parts
+// channel, which is already the wire form and copies nothing. HEAD requests
+// skip assembly and report the length the GET body would have.
+//
+// When the precomposed-framing path applies (see framing.go), the response is
+// emitted as one head block plus the parts, with no http.Header map churn and
+// no per-request header strings; every other path is byte-identical to the
+// map path.
+func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, status int, name string, p page, recorded recordedPayload, encoding string) (bool, error) {
 	payload := recorded.piece
 	if payload == nil {
 		s.recordedShellFallbacks.Add(1)
 		return false, nil
 	}
-	shell, err := s.shellPieces(p, name, gzipped)
+	needGzip := encoding == "gzip"
+	needZstd := s.zstdPieces && encoding == "zstd"
+	shell, err := s.shellPieces(p, name, needGzip, needZstd)
 	if err != nil {
 		s.recordedShellFallbacks.Add(1)
 		if s.recordedShellWarned.CompareAndSwap(false, true) {
 			slog.Warn("recorded response served by the legacy renderer", "name", name, "error", err)
 		}
 		return false, nil
+	}
+	// A cache filled before zstd members were enabled holds pieces without
+	// zstd frames; degrade such requests to gzip (whose members every piece
+	// carries) rather than assembling a zstd body from nothing.
+	if encoding == "zstd" && !piecesCarryZstd(shell, payload) {
+		encoding = "gzip"
+		needGzip = true
+		needZstd = false
 	}
 
 	// Stable pieces in output order, minus the per-request loadedAt, are what
@@ -369,25 +393,232 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 		}
 	}
 	h := w.Header()
+	// The response buffer gate: framing needs its arena for the head and
+	// body carves, and the buffer carries the writer-side gate from
+	// ServeHTTP (buffered.framed).
+	buffered := findResponseBuffer(w)
+	// The variant cache hands back the identity-record digest for this
+	// (shell, payload, encoding) combination; a miss computes it once (the
+	// digest pass over the stable pieces) and stores it under the variant
+	// key, keyed by the same content digests the pieces use, so a hit is
+	// correct by construction and the next request skips the digest pass.
+	// The ETag spelling is only produced when it is consumed: a framed
+	// request renders it into arena memory (request-lifetime), the map path
+	// renders the usual heap string. Neither path writes the map unless the
+	// map path runs.
+	encodingTag := encodeIdentity
+	wireEncoding := ""
+	switch encoding {
+	case "gzip":
+		encodingTag, wireEncoding = encodeGzip, "gzip"
+	case "zstd":
+		encodingTag, wireEncoding = encodeZstd, "zstd"
+	}
+	var etagDigest *[32]byte
 	if h.Get("ETag") == "" {
-		digest, err := piececache.ETagOf(stable...)
-		if err != nil {
-			return true, err
+		variantKey := variantKeyDigest(shell.identity, payload.Digest, encodingTag)
+		if variant := s.pieces.GetDigest(variantKey); variant != nil && len(variant.Raw) == 32 {
+			digest := *(*[32]byte)(variant.Raw)
+			etagDigest = &digest
+		} else {
+			digest, err := piececache.ETagOf(stable...)
+			if err != nil {
+				return true, err
+			}
+			s.pieces.PutDigest(variantKey, digest[:], nil)
+			etagDigest = &digest
 		}
-		h.Set("ETag", weakETag(digest))
+	}
+	// The precomposed/request gates settle first: the writer gate and the
+	// precomposed/arena flags were captured on the buffer by ServeHTTP, and
+	// the request-side gates (a changed browser session or a Set-Cookie mean
+	// the response head is not the recorded block) are evaluated here. A
+	// fresh request (If-None-Match) on this path emits its 304 through the
+	// same precomposed block, with the entity headers suppressed by the
+	// status; the map path writes the 304 immediately as before.
+	compressed := wireEncoding != ""
+	framed := buffered != nil && buffered.framed && status == 200 && encoding != "" && r.Method != "HEAD"
+	if framed {
+		var state *browserSession
+		if raw, ok := r.Context().Value(browserSessionKey{}).(*browserSession); ok {
+			state = raw
+		}
+		if !precomposedEligible(r, h, state) {
+			framed = false
+		}
+	}
+	// The ETag spelling is produced only where it is consumed: a framed
+	// request renders it into arena memory (bytes valid until the arena is
+	// released after finish) and compares it against If-None-Match without a
+	// string conversion; the map path renders the usual heap string it
+	// places in the map. The decision is made after the final gates settle,
+	// so a request that falls back to the map path always has its string.
+	etagString := ""
+	var etagBytes []byte
+	if etagDigest != nil {
+		if framed && buffered != nil && buffered.arena != nil {
+			if scratch := buffered.arena.carveBlock(40); scratch != nil {
+				etagBytes = weakETagInto(scratch, *etagDigest)
+				framed = true
+			}
+		}
+		if etagBytes == nil {
+			// The arena could not hold the validator spelling: fall to the
+			// map path (which renders the heap string) rather than framing
+			// a head with an empty ETag.
+			framed = false
+			etagString = weakETag(*etagDigest)
+		}
+	} else {
+		etagString = h.Get("ETag")
+		if framed {
+			etagBytes = []byte(etagString)
+		}
+	}
+	// A pre-set ETag (the messages route's validator) is converted to bytes
+	// only when this request actually frames.
+	if framed && etagBytes == nil {
+		// The arena could not hold the validator spelling (or a pre-set
+		// validator produced nothing): not safe to frame an empty ETag.
+		framed = false
+	}
+	if framed && requestIsFresh(r, etagBytes, time.Time{}) {
+		// The 304 emission happens at finish from the same precomposed
+		// block (entity headers suppressed); mark the variant and return
+		// without writing. A block carve failure falls through to the map
+		// path, whose notModified writes the 304 immediately with the
+		// restored headers.
+		if block := buffered.arena.carveBlock(2048); block != nil {
+			buffered.recordedHead = s.appendRecordedHead(block, etagBytes, "", "", 0, http.StatusNotModified)
+			buffered.precomposed = true
+			buffered.recordedEtag = etagBytes
+			buffered.recordedStatus = http.StatusNotModified
+			if sw, ok := w.(*sessionWriter); ok {
+				sw.written = true
+			} else {
+				buffered.status = http.StatusNotModified
+			}
+			return true, nil
+		}
+	}
+	if framed {
+		ok := true
+		if compressed {
+			var loaded *piececache.Entry
+			if shell.loadedMask != 0 {
+				scratch := borrowLoadedAt(p.LoadedAt, encoding == "zstd")
+				defer scratch.release()
+				loaded = &scratch.entry
+			}
+			var partsBuf [5]*piececache.Entry
+			parts := partsBuf[:0]
+			total := 0
+			// The carve room must cover the assembled members exactly: the
+			// slot members (loadedAt or the payload) are part of the body,
+			// so a total that omitted them would let the assembly write past
+			// the carve into the next carve's memory.
+			for i := 0; i < shell.count; i++ {
+				parts = append(parts, shell.segments[i])
+				total += memberLen(shell.segments[i], encoding)
+				if i >= shell.count-1 {
+					continue
+				}
+				if shell.loadedMask&(1<<i) != 0 {
+					parts = append(parts, loaded)
+					total += memberLen(loaded, encoding)
+				} else {
+					parts = append(parts, payload)
+					total += memberLen(payload, encoding)
+				}
+			}
+			dst := buffered.arena.carveBlock(total)
+			if dst == nil {
+				ok = false
+			} else {
+				var pieceEncoding piececache.Encoding
+				if encoding == "zstd" {
+					pieceEncoding = piececache.Zstd
+				} else {
+					pieceEncoding = piececache.Gzip
+				}
+				encoded, _, err := piececache.Assemble(dst, pieceEncoding, parts...)
+				if err != nil {
+					ok = false
+				} else {
+					buffered.encoded = encoded
+				}
+			}
+		} else {
+			var raws [][]byte
+			raws = buffered.partsBuf[:0]
+			for i := 0; i < shell.count; i++ {
+				raws = append(raws, shell.segments[i].Raw)
+				if i >= shell.count-1 {
+					continue
+				}
+				if shell.loadedMask&(1<<i) != 0 {
+					raws = append(raws, buffered.partBytes(p.LoadedAt))
+				} else {
+					raws = append(raws, payload.Raw)
+				}
+			}
+			buffered.parts = raws
+		}
+		if ok {
+			length := 0
+			if len(buffered.encoded) > 0 {
+				length = len(buffered.encoded)
+			} else {
+				for _, raw := range buffered.parts {
+					length += len(raw)
+				}
+			}
+			// The head block is ~700 bytes with the longest process
+			// constants, so a 2048-byte carve guarantees the appends stay
+			// inside the arena block.
+			block := buffered.arena.carveBlock(2048)
+			if block != nil {
+				buffered.recordedHead = s.appendRecordedHead(block, etagBytes, h.Get("Last-Modified"), wireEncoding, length, http.StatusOK)
+				buffered.precomposed = true
+				buffered.recordedEtag = etagBytes
+				buffered.recordedStatus = http.StatusOK
+				if sw, ok := w.(*sessionWriter); ok {
+					// The session writer's WriteHeader (and the deferred
+					// wrapper in ServeHTTP) must not emit a second head; the
+					// session was checked unchanged, so commit is a no-op.
+					sw.written = true
+				} else {
+					buffered.status = http.StatusOK
+				}
+				return true, nil
+			}
+		}
+		// The arena could not serve the body or head: fall through to the
+		// map path below, which needs the fixed headers the framed request
+		// skipped.
+		s.restoreRecordedHeaders(h)
+	}
+	// A request whose writer gate passed but that did not take the framed
+	// path (session changed, Set-Cookie, a failed carve) skipped the fixed
+	// headers in ServeHTTP and render; restore them so the map-path response
+	// is byte-identical to a request that never framed.
+	if buffered != nil && buffered.framed {
+		s.restoreRecordedHeaders(h)
+	}
+	if notModified(w, r, etagString, time.Time{}) {
+		return true, nil
+	}
+	if h.Get("ETag") == "" && etagString != "" {
+		h.Set("ETag", etagString)
 	}
 	if h.Get("Cache-Control") == "" {
 		h.Set("Cache-Control", "max-age=0, private, must-revalidate")
 	}
-	if notModified(w, r, h.Get("ETag"), time.Time{}) {
-		return true, nil
-	}
-	buffered := findResponseBuffer(w)
 
-	if gzipped {
+	if compressed {
 		var loaded *piececache.Entry
 		if shell.loadedMask != 0 {
-			scratch := borrowLoadedAt(p.LoadedAt)
+			scratch := borrowLoadedAt(p.LoadedAt, encoding == "zstd")
 			defer scratch.release()
 			loaded = &scratch.entry
 		}
@@ -407,9 +638,9 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 		if r.Method == "HEAD" {
 			total := 0
 			for _, part := range parts {
-				total += len(part.Member)
+				total += memberLen(part, encoding)
 			}
-			h.Set("Content-Encoding", "gzip")
+			h.Set("Content-Encoding", wireEncoding)
 			addVaryAcceptEncoding(h)
 			w.WriteHeader(status)
 			if sw, ok := w.(*sessionWriter); ok && sw.failed {
@@ -426,7 +657,13 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 			assembly = borrowAssemblyBuffer()
 			dst = assembly.buf[:0]
 		}
-		encoded, _, err := piececache.Assemble(dst, piececache.Gzip, parts...)
+		var pieceEncoding piececache.Encoding
+		if encoding == "zstd" {
+			pieceEncoding = piececache.Zstd
+		} else {
+			pieceEncoding = piececache.Gzip
+		}
+		encoded, _, err := piececache.Assemble(dst, pieceEncoding, parts...)
 		if err != nil {
 			assembly.release()
 			return true, err
@@ -435,7 +672,7 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 			assembly.buf = encoded
 		}
 		s.recordedAssemblies.Add(1)
-		h.Set("Content-Encoding", "gzip")
+		h.Set("Content-Encoding", wireEncoding)
 		addVaryAcceptEncoding(h)
 		w.WriteHeader(status)
 		if sw, ok := w.(*sessionWriter); ok && sw.failed {
@@ -468,7 +705,7 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 			continue
 		}
 		if shell.loadedMask&(1<<i) != 0 {
-			raws = append(raws, []byte(p.LoadedAt))
+			raws = append(raws, buffered.partBytes(p.LoadedAt))
 		} else {
 			raws = append(raws, payload.Raw)
 		}
@@ -500,6 +737,30 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 	return true, nil
 }
 
+// memberLen returns the wire length of one part under the chosen encoding.
+func memberLen(part *piececache.Entry, encoding string) int {
+	switch encoding {
+	case "zstd":
+		return len(part.Zstd)
+	case "gzip":
+		return len(part.Member)
+	default:
+		return len(part.Raw)
+	}
+}
+
+// piecesCarryZstd reports whether every cache-stable piece of this response
+// has a zstd frame, so a zstd body can be assembled from them.
+func piecesCarryZstd(shell recordedShell, payload *piececache.Entry) bool {
+	for i := 0; i < shell.count; i++ {
+		segment := shell.segments[i]
+		if len(segment.Raw) > 0 && len(segment.Zstd) == 0 {
+			return false
+		}
+	}
+	return len(payload.Raw) == 0 || len(payload.Zstd) > 0
+}
+
 // findResponseBuffer returns the per-request responseBuffer behind w's wrapper
 // chain, or nil when the response is not buffered.
 func findResponseBuffer(w http.ResponseWriter) *responseBuffer {
@@ -526,6 +787,18 @@ func weakETag(digest [32]byte) string {
 	return string(buf[:])
 }
 
+// weakETagInto renders the weak validator spelling of digest into dst and
+// returns the extended slice. The framed path renders it into arena memory,
+// so the ETag costs no heap string on the precomposed path.
+func weakETagInto(dst []byte, digest [32]byte) []byte {
+	dst = append(dst, `W/"`...)
+	const hexDigits = "0123456789abcdef"
+	for _, b := range digest[:16] {
+		dst = append(dst, hexDigits[b>>4], hexDigits[b&0xF])
+	}
+	return append(dst, '"')
+}
+
 // addVaryAcceptEncoding mirrors front.addVary: append the token unless it (or a
 // wildcard) is already present in any Vary value.
 func addVaryAcceptEncoding(h http.Header) {
@@ -543,9 +816,18 @@ func addVaryAcceptEncoding(h http.Header) {
 	}
 }
 
-// clientAcceptsGzip reports whether this request may receive a pre-encoded gzip
-// body. It defers to httpcompat.Encoding, the same selector front.Deflate uses
-// for its own negotiation, so a pre-encoded body is only sent when the
+// clientEncoding selects the wire encoding for this request's pre-encoded
+// recorded response: "gzip", "zstd" or "identity", or "" when the client
+// accepts nothing (the front middleware answers 406 on the identity path).
+// When zstd members are disabled the selector returns exactly what
+// httpcompat.Encoding returns (clientAcceptsGzip's result).
+func (s *Server) clientEncoding(r *http.Request) string {
+	return clientContentEncoding(r, s.zstdPieces)
+}
+
+// clientAcceptsGzip reports whether this request may receive a pre-encoded
+// gzip body. It defers to httpcompat.Encoding, the same selector front.Deflate
+// uses for its own negotiation, so a pre-encoded body is only sent when the
 // middleware would itself have chosen gzip (front.Deflate passes a pre-set
 // Content-Encoding through untouched, including its 406 policy). When front is
 // not in the chain, at worst the response goes out as identity bytes and the
@@ -554,30 +836,215 @@ func clientAcceptsGzip(r *http.Request) bool {
 	return httpcompat.Encoding(r.Header.Get("Accept-Encoding")) == "gzip"
 }
 
-// recordedCompressor is one pooled gzip writer plus the buffer it fills. The
-// buffer is capped like the response buffer pool, so one miss-compressed page
-// cannot pin an unbounded buffer per P.
-type recordedCompressor struct {
-	writer *gzip.Writer
-	buf    bytes.Buffer
+// clientContentEncoding selects the wire encoding for a pre-encoded recorded
+// response: "gzip", "zstd" or "identity", or "" when the client accepts
+// nothing (front.Deflate answers 406 on the identity path). zstd is the
+// ENGINE-50 addition: a zstd member is served only to clients that accept it
+// and prefer it over gzip, so no existing client changes encoding; every
+// other decision is left to the httpcompat selector, byte for byte. The scan
+// is allocation-free (in-place token walk over a stack state).
+func clientContentEncoding(r *http.Request, zstdEnabled bool) string {
+	header := r.Header.Get("Accept-Encoding")
+	if !zstdEnabled {
+		return httpcompat.Encoding(header)
+	}
+	// Candidate state: quality, rejection, and whether the name was
+	// mentioned at all. Preference order on equal quality follows the
+	// httpcompat convention (gzip over identity); zstd sits between them.
+	var q = [3]float64{-1, -1, -1} // gzip, zstd, identity
+	rejected := [3]bool{}
+	mentioned := [3]bool{}
+	expanded := [3]bool{}
+	wildcardQ := -1.0
+
+	parse := func(part string) {
+		name, params, _ := strings.Cut(part, ";")
+		name = strings.TrimSpace(name)
+		params = strings.TrimSpace(params)
+		quality := 1.0
+		if strings.HasPrefix(params, "q=") {
+			quality = parseQuality(params[2:])
+		}
+		index := -1
+		switch {
+		case foldEqASCII(name, "gzip"):
+			index = 0
+		case foldEqASCII(name, "zstd"):
+			index = 1
+		case foldEqASCII(name, "identity"):
+			index = 2
+		}
+		if index >= 0 {
+			mentioned[index] = true
+			if quality == 0 {
+				rejected[index] = true
+			} else if quality > q[index] {
+				q[index] = quality
+			}
+			return
+		}
+		if name == "*" {
+			wildcardQ = quality
+		}
+	}
+	for header != "" {
+		var part string
+		if comma := strings.IndexByte(header, ','); comma >= 0 {
+			part, header = header[:comma], header[comma+1:]
+		} else {
+			part, header = header, ""
+		}
+		part = strings.TrimSpace(part)
+		if part != "" {
+			parse(part)
+		}
+	}
+	// Wildcard expansion: the unmentioned names at the wildcard's quality.
+	// An expansion counts as "mentioned" for the identity-fallback rule even
+	// at q=0, exactly as httpcompat treats a wildcard-expanded identity.
+	if wildcardQ >= 0 {
+		if wildcardQ == 0 {
+			for i := 0; i < 3; i++ {
+				if !mentioned[i] {
+					rejected[i] = true
+					expanded[i] = true
+				}
+			}
+		} else {
+			for i := 0; i < 3; i++ {
+				if !mentioned[i] && q[i] < 0 {
+					q[i] = wildcardQ
+					expanded[i] = true
+				}
+			}
+		}
+	}
+	// The middleware appended an identity fallback whenever the header never
+	// mentioned identity; that fallback is never rejected.
+	identityFallback := !mentioned[2] && !expanded[2]
+
+	// The identity fallback matches httpcompat exactly: it never competes
+	// with a real candidate; it is the answer only when nothing the client
+	// named is acceptable.
+	best := -1
+	bestQ := -1.0
+	for i := 0; i < 3; i++ {
+		if rejected[i] || q[i] < 0 {
+			continue
+		}
+		if q[i] > bestQ || (q[i] == bestQ && i < best) {
+			best, bestQ = i, q[i]
+		}
+	}
+	if best < 0 {
+		if identityFallback {
+			return "identity"
+		}
+		return ""
+	}
+	switch best {
+	case 0:
+		return "gzip"
+	case 1:
+		return "zstd"
+	default:
+		return "identity"
+	}
 }
 
-var recordedCompressors = sync.Pool{New: func() any {
-	writer, _ := gzip.NewWriterLevel(nil, 6)
-	return &recordedCompressor{writer: writer}
-}}
+// foldEqASCII compares two ASCII strings case-insensitively without
+// allocation (Accept-Encoding tokens are ASCII; the fold mirrors the
+// canonicalisation the selector historically applied via strings.ToLower).
+func foldEqASCII(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ca, cb := a[i], b[i]
+		if 'A' <= ca && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if 'A' <= cb && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
+}
 
-// compressGzip returns a complete gzip member of raw. It is used when a piece
-// is stored; the writer and buffer are reset before use and the returned bytes
-// are an independent copy, so a pooled buffer can never leak one caller's
-// bytes into another's response.
-func compressGzip(raw []byte) []byte { return compressGzipInto(nil, raw) }
+// parseQuality parses the numeric prefix of a q= parameter, mirroring
+// httpcompat.quality: a malformed value yields 0 (the failed ParseFloat
+// result was assigned unconditionally).
+func parseQuality(value string) float64 {
+	end := 0
+	for end < len(value) && (value[end] >= '0' && value[end] <= '9' || value[end] == '.') {
+		end++
+	}
+	if end == 0 {
+		return 1.0
+	}
+	q, _ := strconv.ParseFloat(value[:end], 64)
+	return q
+}
 
-// compressGzipInto appends a gzip member of raw to dst, reusing the pooled
-// writer. dst may alias the caller's own buffer; the member is fully rewritten
-// from index len(dst) onwards.
-func compressGzipInto(dst, raw []byte) []byte {
-	c := recordedCompressors.Get().(*recordedCompressor)
+// recordedCompressor is one pooled compressor state: a gzip writer plus the
+// zstd writer sharing one output buffer. The buffer is capped like the
+// response buffer pool, so one miss-compressed page cannot pin an unbounded
+// buffer per P. One pool per gzip level (compress/gzip has no level change
+// method that outlives Reset in this Go version), so a level change keeps a
+// writer per level instead of rebuilding one per fill.
+type recordedCompressor struct {
+	writer     *gzip.Writer
+	buf        bytes.Buffer
+	zstdWriter *zstd.Writer
+}
+
+var recordedCompressorPools [10]sync.Pool
+
+func init() {
+	for level := 1; level <= 9; level++ {
+		level := level
+		recordedCompressorPools[level].New = func() any {
+			writer, _ := gzip.NewWriterLevel(nil, level)
+			return &recordedCompressor{writer: writer}
+		}
+	}
+}
+
+func compressorPool(level int) *sync.Pool {
+	if level < 1 || level > 9 {
+		level = 6 // guarded levels only reach here through misuse
+	}
+	return &recordedCompressorPools[level]
+}
+
+// recordedGzipFillLevel is the gzip level used when cached members are
+// compressed at fill (ENGINE-50): level 9 by default; CAMPFIRE_RECORDED_GZIP_LEVEL
+// configures it, and 6 is the pre-engine value kept for the A/B and rollback
+// switch. Compression is a one-time fill cost, so the higher level's CPU is
+// never on the request path; smaller members mean fewer socket-write bytes on
+// every gzip request.
+var recordedGzipFillLevel = 9
+
+func setRecordedGzipFillLevel(level int) { recordedGzipFillLevel = level }
+
+// compressGzip returns a complete gzip member of raw at the configured fill
+// level. It is used when a piece is stored; the writer and buffer are reset
+// before use and the returned bytes are an independent copy, so a pooled
+// buffer can never leak one caller's bytes into another's response.
+func compressGzip(raw []byte) []byte { return compressGzipLevel(raw, recordedGzipFillLevel) }
+
+// compressGzipLevel is compressGzip at an explicit level (benchmarks and the
+// legacy level-6 A/B).
+func compressGzipLevel(raw []byte, level int) []byte { return compressGzipInto(nil, raw, level) }
+
+// compressGzipInto appends a gzip member of raw to dst at level, reusing the
+// pooled writer of that level. dst may alias the caller's own buffer; the
+// member is fully rewritten from index len(dst) onwards.
+func compressGzipInto(dst, raw []byte, level int) []byte {
+	c := compressorPool(level).Get().(*recordedCompressor)
 	c.buf.Reset()
 	c.writer.Reset(&c.buf)
 	c.writer.Header.OS = 3
@@ -586,7 +1053,37 @@ func compressGzipInto(dst, raw []byte) []byte {
 	c.writer.Reset(nil)
 	dst = append(dst, c.buf.Bytes()...)
 	if c.buf.Cap() <= 1<<20 {
-		recordedCompressors.Put(c)
+		compressorPool(level).Put(c)
+	}
+	return dst
+}
+
+// recordedZstdFillLevel is the zstd fill level (ENGINE-50): cache-fill
+// compression is a one-time cost, so members are compressed at libzstd's best
+// level the way the gzip fill uses level 9. Decode cost does not depend on
+// the level, so the larger compression ratio is pure per-request byte savings.
+const recordedZstdFillLevel = 19
+
+// compressZstd returns a complete zstd frame of raw at the fill level, for
+// pieces stored under the zstd member variant. Like compressGzip it is only
+// paid at fill time.
+func compressZstd(raw []byte) []byte { return compressZstdInto(nil, raw) }
+
+// compressZstdInto appends a complete zstd frame of raw to dst. The writer
+// and buffer are reset before use and the returned bytes are an independent
+// copy (the buffer is pooled; the caller's dst slice owns the appended bytes).
+func compressZstdInto(dst, raw []byte) []byte {
+	c := compressorPool(9).Get().(*recordedCompressor)
+	if c.zstdWriter == nil {
+		c.zstdWriter, _ = zstd.NewWriterLevel(nil, recordedZstdFillLevel)
+	}
+	c.buf.Reset()
+	_ = c.zstdWriter.Reset(&c.buf)
+	_, _ = c.zstdWriter.Write(raw)
+	_ = c.zstdWriter.End()
+	dst = append(dst, c.buf.Bytes()...)
+	if c.buf.Cap() <= 1<<20 {
+		compressorPool(9).Put(c)
 	}
 	return dst
 }
@@ -628,32 +1125,41 @@ func (a *recordedAssemblyBuffer) release() {
 	recordedAssemblyBuffers.Put(a)
 }
 
-// loadedAtScratch caches one (timestamp value -> gzip member) conversion per
+// loadedAtScratch caches one (timestamp value -> members) conversion per
 // pooled scratch: the room page's loadedAt changes at most once per
-// millisecond, so a burst of requests reuses one member. Comparing the value
-// makes a stale pooled member impossible. Digest is deliberately zero: the
-// loadedAt slot is excluded from the response ETag, and only the assembled
-// bytes ever read the piece.
+// millisecond, so a burst of requests reuses the members. Comparing the value
+// makes a stale pooled member impossible. raw is the value's bytes (the
+// identity path's part), member is the gzip member, zstd the zstd frame when
+// enabled. Digest is deliberately zero: the loadedAt slot is excluded from the
+// response ETag, and only the assembled bytes ever read the piece.
 type loadedAtScratch struct {
 	value  string
 	raw    []byte
 	member []byte
+	zstd   []byte
 	entry  piececache.Entry
 }
 
 var loadedAtScratches = sync.Pool{New: func() any { return &loadedAtScratch{} }}
 
-// borrowLoadedAt returns a dynamic gzip piece scratch for value. The caller
-// must release it once the assembled response no longer reads the entry; the
-// method call avoids a per-request closure allocation.
-func borrowLoadedAt(value string) *loadedAtScratch {
+// borrowLoadedAt returns a dynamic response piece scratch for value. The
+// caller must release it once the assembled response no longer reads the
+// entry; the method call avoids a per-request closure allocation. wantZstd
+// asks for the zstd frame because this request will assemble one; building
+// the frame is a per-millisecond fill cost, so it is only paid when the pool
+// will hand the member out.
+func borrowLoadedAt(value string, wantZstd bool) *loadedAtScratch {
 	scratch := loadedAtScratches.Get().(*loadedAtScratch)
 	if scratch.member == nil || scratch.value != value {
 		scratch.raw = append(scratch.raw[:0], value...)
-		scratch.member = compressGzipInto(scratch.member[:0], scratch.raw)
+		scratch.member = compressGzipInto(scratch.member[:0], scratch.raw, recordedGzipFillLevel)
+		scratch.zstd = scratch.zstd[:0]
 		scratch.value = value
 	}
-	scratch.entry = piececache.Entry{Raw: scratch.raw, Member: scratch.member}
+	if wantZstd && len(scratch.zstd) == 0 && len(scratch.raw) > 0 {
+		scratch.zstd = compressZstdInto(scratch.zstd[:0], scratch.raw)
+	}
+	scratch.entry = piececache.Entry{Raw: scratch.raw, Member: scratch.member, Zstd: scratch.zstd}
 	return scratch
 }
 

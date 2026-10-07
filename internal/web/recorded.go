@@ -57,11 +57,11 @@ func messageListIdentity(messages []database.Message) [32]byte {
 // recordedMessageList returns the message-list payload for a recorded page,
 // caching it as a compressed piece on the piece path. The key is content
 // derived (message ids and updated-at stamps), so writes invalidate by key
-// change alone. needMember asks for the gzip member because this request will
-// assemble a gzip body; when the cache cannot store anything and no gzip body
-// is being assembled, the compression would be discarded immediately, so it is
-// skipped.
-func (s *Server) recordedMessageList(ctx context.Context, messages []database.Message, needMember bool) (recordedPayload, error) {
+// change alone. needGzip asks for the gzip member because this request will
+// assemble a gzip body; needZstd the zstd frame (ENGINE-50). When the cache
+// cannot store anything and no compressed body is being assembled, the
+// compression would be discarded immediately, so it is skipped.
+func (s *Server) recordedMessageList(ctx context.Context, messages []database.Message, needGzip, needZstd bool) (recordedPayload, error) {
 	if !s.recordedPieces {
 		entry, err := s.messageList(ctx, messages)
 		return recordedPayload{fragment: entry}, err
@@ -79,11 +79,14 @@ func (s *Server) recordedMessageList(ctx context.Context, messages []database.Me
 		body.WriteString(string(view.Fragment))
 	}
 	raw := []byte(body.String())
-	var member []byte
-	if needMember || s.pieces.Enabled() {
+	var member, zstdMember []byte
+	if needGzip || s.pieces.Enabled() {
 		member = compressGzip(raw)
 	}
-	entry, _ := s.pieces.PutDigest(identity, raw, member)
+	if s.zstdPieces && (needZstd || s.pieces.Enabled()) {
+		zstdMember = compressZstd(raw)
+	}
+	entry, _ := s.pieces.PutDigestZstd(identity, raw, member, zstdMember)
 	return recordedPayload{piece: entry}, nil
 }
 

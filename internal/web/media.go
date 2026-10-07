@@ -157,5 +157,9 @@ func (s *Server) deleteLogo(w http.ResponseWriter, r *http.Request, u database.U
 		s.fail(w, err)
 		return
 	}
+	// The detach changes Account().HasLogo without touching the accounts row
+	// or any sidebar-visible table, so the account read cache's logo version
+	// moves to make every cached account row miss.
+	s.logoVersion.Add(1)
 	http.Redirect(w, r, "/account/edit", 302)
 }

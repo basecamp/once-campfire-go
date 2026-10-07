@@ -459,7 +459,7 @@ func TestRecordedPiecesPayloadReplacement(t *testing.T) {
 	results := make(chan result, workers)
 	for i := 0; i < workers; i++ {
 		go func() {
-			payload, err := app.recordedMessageList(ctx, messages, true)
+			payload, err := app.recordedMessageList(ctx, messages, true, false)
 			if err != nil {
 				results <- result{err: err}
 				return
@@ -845,10 +845,10 @@ func TestRecordedShellSplitGuards(t *testing.T) {
 }
 
 func TestRecordedCompressorPoolPoisoning(t *testing.T) {
-	poison := recordedCompressors.Get().(*recordedCompressor)
+	poison := compressorPool(9).Get().(*recordedCompressor)
 	poison.buf.WriteString(strings.Repeat("POISON", 64))
 	poison.writer.Reset(nil)
-	recordedCompressors.Put(poison)
+	compressorPool(9).Put(poison)
 
 	first := compressGzip([]byte("first payload"))
 	second := compressGzip([]byte("second payload"))
