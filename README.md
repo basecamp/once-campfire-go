@@ -313,6 +313,38 @@ with four hardware threads allocated to each app.
 
 See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 
+
+## Engine fork results (this machine)
+
+This fork (`engine` branch) adds version-keyed in-memory caches, cached
+pre-compressed response pieces, direct SQLite reads and writes through the
+bundled C library, an adaptive group-commit write lane with checkpoints off the
+request path, a compiled message renderer and route matcher, and an owned
+HTTP/1.1 loop with vectored writes (all behind `CAMPFIRE_*` flags).
+
+Measured with the official Elixir comparison harness running production Docker
+images for Rails, Rust and this fork on the same machine, same fresh seed,
+identical CPU pinning, 3 rotating repetitions, c=16 medians, zero HTTP errors:
+
+| Route (req/s at c=16) | Rails | This fork | Rust | vs Rust | CPU/req vs Rust |
+|---|---:|---:|---:|---:|---:|
+| Room page | 220 | 79,343 | 36,859 | 2.15× | 47 vs 103 µs |
+| Search | 389 | 103,753 | 34,734 | 2.99× | 35.5 vs 95.8 µs |
+| Messages page | 415 | 81,918 | 41,909 | 1.95× | 44.6 vs 89.9 µs |
+| Sidebar | 529 | 56,204 | 35,580 | 1.58× | 68.8 vs 107 µs |
+| Post message | 273 | 8,473 | 6,667 | 1.27× | 308 vs 381 µs |
+| /up | 4,207 | 274,711 | 245,753 | 1.12× | — |
+| Avatar | 97,534 | 221,149 | 382,877 | 0.58× | — |
+| Static CSS | 137,157 | 329,394 | 442,263 | 0.74× | — |
+
+Cable fan-out (messages delivered to every client): 100 clients 5,049 vs
+4,033 (1.25×), 500 clients parity, 1,000 clients 520 vs 552 (0.94×).
+
+Correctness: `bin/check` (gofmt, assets, vet, full `-race` suite), browser
+workflows, 178/178 applicable screen pixels and accessibility comparisons,
+Rails/Rust upgrade interoperability, and native write/FTS verification.
+Raw reports: `bench/results/` and the official harness results directory.
+
 ## Known differences
 
 - Templates use `html/template`. Whitespace, attribute serialization, some canonical form-action

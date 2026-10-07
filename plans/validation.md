@@ -510,3 +510,32 @@ step beyond this record.
   head-terminating blank line on keep-alive responses (search page reached real
   browsers as a malformed header block; proxies returned 502). Fixed in
   `35661c9` with a regression test pinning the keep-alive path.
+
+## FINAL3 official acceptance (2026-10-07, production images, 3 reps)
+
+Elixir harness, Rails/Rust/Go production images, fresh seed `9f6241dc`,
+3 rotating reps, c=16 medians [min–max], zero HTTP errors. Go image
+`once-campfire-go:final3` (`bcd375a47bdc`, engine `b9bca18` with the
+upgrade-handoff cable fix). Rust and Rails built and measured on this machine.
+
+| Route c=16 | Rails | Go final3 | Rust | Go vs Rust | CPU/req Go vs Rust |
+|---|---:|---:|---:|---:|---:|
+| room_show | 220 | **79,343** | 36,859 | **2.15×** | 47 vs 103 µs |
+| search | 389 | **103,753** | 34,734 | **2.99×** | 35.5 vs 95.8 |
+| messages_page | 415 | **81,918** | 41,909 | **1.95×** | 44.6 vs 89.9 |
+| sidebar | 529 | **56,204** | 35,580 | **1.58×** | 68.8 vs 107 |
+| post_message | 273 | **8,473** | 6,667 | **1.27×** | 308 vs 381 |
+| up | 4,207 | **274,711** | 245,753 | **1.12×** | — |
+| avatar | 97,534 | 221,149 | 382,877 | 0.58× | — |
+| static_css | 137,157 | 329,394 | 442,263 | 0.74× | — |
+
+Cable (delivered to all): 100 clients **5,049 vs Rust 4,033 (1.25×)**;
+500 clients 1,094 vs 1,112 (parity); 1000 clients 520 vs 552 (0.94×).
+Saturated post→all p50: Go faster at every size (0.87/6.41/13.6 ms vs
+1.03/7.96/15.7). Connect+subscribe at parity. Memory at 1000 clients:
+Go 200–233 MiB vs Rust ~101–123 (Rails 1,124–1,406).
+
+Correctness on this tree: `bin/check` green, browser workflows PASS,
+178/178 applicable screen pixels+a11y, Go↔Rust interop PASS,
+native run 463,937 writes verified in messages+FTS, 0 delivery failures.
+Raw: `../once-campfire-elixir/bench/results/FINAL3-official-20261007/`.
