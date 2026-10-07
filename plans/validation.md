@@ -684,3 +684,41 @@ websocket module (`third_party/websocket`) green, vet and gofmt clean. A
 pre-existing front-package port flake (`TestServerLoopFlagDiff` freePort
 race under `-p 2` with sibling packages binding the same ephemeral pool) is
 documented in plans/engine-41.md; it reproduces without this change's route.
+
+## PR review fixes (2026-10-07, PR #10 findings)
+
+Four findings from the pull-request review, each verified against the code and
+fixed on `engine`:
+
+1. **`registerRoutes` owns no routes (High).** `internal/engine/router.go`'s
+   compiled table is empty, so `CAMPFIRE_ENGINE=on/off/force` are all
+   pass-throughs. The runtime behavior is the intended strangler scaffold, but
+   the PR description and README overstated it as active route ownership; both
+   now describe the scaffold accurately (the measured wins come from the
+   handler fast paths). No runtime change.
+2. **CreateRoom sidebar bump (Medium).** `internal/database/rooms.go` bumped
+   the sidebar version only after a fallible post-commit hydration read; a
+   canceled context after commit left a committed room with stale sidebar
+   caches. Both registries now move immediately after the commit, before the
+   read.
+3. **Empty q parameter (Medium).** The single-item `ParseAccept` fast path in
+   `internal/httpcompat/formats.go` stripped `q=` only when a value survived
+   trailing-empty-field trimming, so `text/html;q=` failed lookup while the
+   multi-item path parsed it. The fast path now strips on the presence of a q
+   parameter and trims; single-item regression cases added.
+4. **Case-insensitive ETag (Medium).** The framed conditional path in
+   `internal/web/conditional.go` compared validators with `bytesEqualFold`
+   while the map path compared exactly. Both are byte-exact now; a regression
+   test pins case sensitivity.
+
+## FINAL5 official acceptance (2026-10-07, async access log; complete HTTP sweep)
+
+Elixir harness, production images, 3 rotating reps, c=16 medians, zero HTTP
+errors. Go image `once-campfire-go:final5` (tree 3305f44; the later
+review-fix commit `ce6428e` is correctness-only). Every HTTP row is ahead of
+Rust, including the auxiliary routes: room 2.63×, search 3.90×, messages
+2.45×, sidebar 1.70×, post 1.26×, /up 1.88×, static CSS 1.05×, avatar 1.01×;
+CPU per request is below Rust on all eight rows. Cable sustained: 100 clients
+1.29×, 500 and 1,000 parity (0.98× / 0.99×); saturated post→all p50 at 1,000
+clients 13.5 vs 16.1 ms. Container, ACME and native write/FTS checks pass on
+the same image.

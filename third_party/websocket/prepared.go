@@ -95,7 +95,7 @@ func (c *Conn) WritePreparedBatch(ctx context.Context, msgs []*PreparedMessage) 
 		}
 		return nil
 	}
-	return c.writePreparedBatchCore(ctx, time.Time{}, msgs)
+	return c.writePreparedBatchCore(ctx, time.Time{}, false, msgs)
 }
 
 // WritePreparedBatchDeadline writes a batch exactly like WritePreparedBatch
@@ -108,6 +108,9 @@ func (c *Conn) WritePreparedBatch(ctx context.Context, msgs []*PreparedMessage) 
 // dominant socket-level cost). The connection is not closed on expiry; the
 // write returns an i/o timeout error and the caller is expected to tear the
 // connection down, as the hub does.
+//
+// WritePreparedBatchDeadlineRetained is the variant that keeps the deadline
+// armed after the write; the hub's ENGINE-61 write path uses that one.
 func (c *Conn) WritePreparedBatchDeadline(deadline time.Time, msgs []*PreparedMessage) (err error) {
 	if len(msgs) == 0 {
 		return nil
@@ -120,10 +123,42 @@ func (c *Conn) WritePreparedBatchDeadline(deadline time.Time, msgs []*PreparedMe
 		}
 		return nil
 	}
-	return c.writePreparedBatchCore(nil, deadline, msgs)
+	return c.writePreparedBatchCore(nil, deadline, false, msgs)
 }
 
-func (c *Conn) writePreparedBatchCore(ctx context.Context, deadline time.Time, msgs []*PreparedMessage) (err error) {
+// WritePreparedBatchDeadlineRetained writes a batch exactly like
+// WritePreparedBatchDeadline but leaves the socket write deadline armed
+// after the write returns: the deadline is installed before the vectored
+// write and never cleared. A later write on the same connection that arms
+// no deadline of its own — the hub's ENGINE-61 unarmed branch — therefore
+// still runs under the remaining budget and a stalled socket is reaped at
+// the original deadline (ENGINE-61: the hub arms at most once per
+// cableDeadlineRearm and relies on the deadline persisting between arms;
+// WritePreparedBatchDeadline's clear-after-write left those batches
+// unbounded). The deadline is absolute: a write that starts after it has
+// passed fails immediately with an i/o timeout, so callers must re-arm
+// (as the hub does) rather than rely on one retained deadline forever.
+// A fully-flowing socket pays one deadline store per re-arm and nothing
+// between arms: no timers and no allocations on the unarmed wake.
+// Callers that need the deadline cleared after the write (a connection
+// shared with deadline-less readers or reused for later unbounded writes)
+// must use WritePreparedBatchDeadline instead.
+func (c *Conn) WritePreparedBatchDeadlineRetained(deadline time.Time, msgs []*PreparedMessage) (err error) {
+	if len(msgs) == 0 {
+		return nil
+	}
+	if c.client || c.flate() && !c.copts.serverNoContextTakeover {
+		for _, m := range msgs {
+			if err := c.WritePrepared(context.Background(), m); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return c.writePreparedBatchCore(nil, deadline, true, msgs)
+}
+
+func (c *Conn) writePreparedBatchCore(ctx context.Context, deadline time.Time, retainDeadline bool, msgs []*PreparedMessage) (err error) {
 	// Resolve payloads (the compressed forms are shared and computed once)
 	// before taking the frame lock.
 	if cap(c.batchData) < len(msgs) {
@@ -186,10 +221,15 @@ func (c *Conn) writePreparedBatchCore(ctx context.Context, deadline time.Time, m
 	} else if !deadline.IsZero() {
 		// rwc is typed io.ReadWriteCloser for upstream compatibility; the
 		// accepted/dialed values are always net.Conns (the hub's hijacked
-		// TCP socket), which accept a write deadline.
+		// TCP socket), which accept a write deadline. The retained variant
+		// (WritePreparedBatchDeadlineRetained) deliberately does not clear
+		// the deadline: the caller relies on it remaining armed to bound
+		// later writes that arm no deadline of their own.
 		if nc, ok := c.rwc.(net.Conn); ok {
 			nc.SetWriteDeadline(deadline)
-			defer nc.SetWriteDeadline(time.Time{})
+			if !retainDeadline {
+				defer nc.SetWriteDeadline(time.Time{})
+			}
 		}
 	}
 

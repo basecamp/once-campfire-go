@@ -481,20 +481,31 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 				// write's own WithTimeout plus the connection's AfterFunc),
 				// the dominant per-wake cost at 1000 clients. ENGINE-61: the
 				// deadline is armed only when it no longer has at least
-				// cableDeadlineRearm of budget left. Arming costs a netpoll
-				// timer lock plus a timer modify, and clearing costs the
-				// same again; a wake-with-frames at 1000 clients arrives
-				// every couple of milliseconds, and both calls were pure
-				// overhead on the ~500k-writes-per-second path. Re-arming
-				// every cableDeadlineRearm still bounds every stalled write
-				// at <= cableWriteDeadline: the unarmed branch is only taken
-				// while the armed deadline is at least cableDeadlineRearm in
-				// the future, so no write can start against an expired or
-				// about-to-expire deadline. The legacy path below keeps the
-				// historical per-write context behaviour.
+				// cableDeadlineRearm of budget left, and it REMAINS armed
+				// between batches: WritePreparedBatchDeadlineRetained
+				// installs the socket deadline and never clears it, so the
+				// unarmed branch below still writes under the remaining
+				// budget. (The batch API once cleared the deadline after
+				// every write, silently breaking that invariant and leaving
+				// every unarmed batch unbounded; the retained variant
+				// restores it.) Arming costs a netpoll timer lock plus a
+				// timer modify, and clearing costs the same again; a
+				// wake-with-frames at 1000 clients arrives every couple of
+				// milliseconds, and both calls were pure overhead on the
+				// ~500k-writes-per-second path. Re-arming every
+				// cableDeadlineRearm still bounds every stalled write at <=
+				// cableWriteDeadline: the unarmed branch is only taken while
+				// the armed deadline is at least cableDeadlineRearm in the
+				// future, so no write can start against an expired or
+				// about-to-expire deadline, and once the deadline passes the
+				// next batch re-arms before writing. The deadline is
+				// absolute on the socket, so it also bounds the heartbeat's
+				// pings, whose context path reaps by closing the connection
+				// and never clears a socket deadline. The legacy path below
+				// keeps the historical per-write context behaviour.
 				now := time.Now()
 				if deadlineArmedAt.IsZero() || now.Sub(deadlineArmedAt) >= cableDeadlineRearm {
-					err := conn.WritePreparedBatchDeadline(now.Add(cableWriteDeadline), batch[:n])
+					err := conn.WritePreparedBatchDeadlineRetained(now.Add(cableWriteDeadline), batch[:n])
 					deadlineArmedAt = now
 					return err
 				}
