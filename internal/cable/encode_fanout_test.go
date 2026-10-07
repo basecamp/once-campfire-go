@@ -320,11 +320,33 @@ func TestPublishAllocsBounded(t *testing.T) {
 	markup := "<turbo-stream action=\"append\"><template>alloc-pin</template></turbo-stream>"
 	hub.Publish(ctx, roomID, markup)        // prime authz + frame cache + pool
 	hub.PublishStream(ctx, "rooms", markup) // prime the stream path
-	if a := testing.AllocsPerRun(30, func() { hub.PublishStream(ctx, "rooms", markup) }); a != 0 {
-		t.Fatalf("stream broadcast allocated %v allocs/op, want 0", a)
-	}
-	if a := testing.AllocsPerRun(30, func() { hub.Publish(ctx, roomID, markup) }); a != 1 {
-		t.Fatalf("room broadcast allocated %v allocs/op, want 1 (scope string)", a)
+	// Under -race these exact pins are unreachable: Go's sync.Pool drops
+	// Put values at random in race builds (the race runtime pulls pooled
+	// objects out from under the pool's reuse bookkeeping), so pooled reuse
+	// is nondeterministic — measured +1 allocs/op on this machine (stream
+	// 0→1, room 1→2, occasionally unchanged; ~+1.75 avg across runs). The
+	// exact 0/1 pins therefore run only in non-race builds; race builds
+	// assert the documented pooled-path tolerance (≤ raceAllocTolerance)
+	// instead. Nothing else in this file is weakened under -race: delivery
+	// counters, byte equality, pointer identity and concurrency all stay
+	// exact and unconditional.
+	const raceAllocTolerance = 4
+	for _, tc := range []struct {
+		name    string
+		publish func()
+		exact   float64
+	}{
+		{"stream", func() { hub.PublishStream(ctx, "rooms", markup) }, 0},
+		{"room", func() { hub.Publish(ctx, roomID, markup) }, 1},
+	} {
+		a := testing.AllocsPerRun(30, tc.publish)
+		if raceBuild {
+			if a > raceAllocTolerance {
+				t.Fatalf("%s broadcast allocated %v allocs/op, want ≤ %v under -race", tc.name, a, raceAllocTolerance)
+			}
+		} else if a != tc.exact {
+			t.Fatalf("%s broadcast allocated %v allocs/op, want %v", tc.name, a, tc.exact)
+		}
 	}
 }
 
