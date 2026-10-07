@@ -710,3 +710,15 @@ fixed on `engine`:
    `internal/web/conditional.go` compared validators with `bytesEqualFold`
    while the map path compared exactly. Both are byte-exact now; a regression
    test pins case sensitivity.
+
+## FINAL5 official acceptance (2026-10-07, async access log; complete HTTP sweep)
+
+Elixir harness, production images, 3 rotating reps, c=16 medians, zero HTTP
+errors. Go image `once-campfire-go:final5` (tree 3305f44; the later
+review-fix commit `ce6428e` is correctness-only). Every HTTP row is ahead of
+Rust, including the auxiliary routes: room 2.63×, search 3.90×, messages
+2.45×, sidebar 1.70×, post 1.26×, /up 1.88×, static CSS 1.05×, avatar 1.01×;
+CPU per request is below Rust on all eight rows. Cable sustained: 100 clients
+1.29×, 500 and 1,000 parity (0.98× / 0.99×); saturated post→all p50 at 1,000
+clients 13.5 vs 16.1 ms. Container, ACME and native write/FTS checks pass on
+the same image.

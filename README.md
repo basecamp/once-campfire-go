@@ -308,11 +308,11 @@ with four hardware threads allocated to each app.
 
 | HTTP workload (requests/sec) | Rails | [Django](https://github.com/basecamp/once-campfire-django) | [Laravel](https://github.com/basecamp/once-campfire-laravel) | [Express](https://github.com/basecamp/once-campfire-express) | [Elixir](https://github.com/basecamp/once-campfire-elixir) | [Go](https://github.com/basecamp/once-campfire-go) | [Rust](https://github.com/basecamp/once-campfire-rust) |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Room page | 241 | 170 | 164 | 559 | 722 | 86,262 | 36,260 |
-| Messages page | 413 | 196 | 175 | 777 | 1,053 | 93,404 | 40,872 |
-| Sidebar | 552 | 615 | 715 | 4,125 | 1,275 | 55,014 | 34,672 |
-| Search | 435 | 315 | 305 | 1,294 | 1,156 | 117,661 | 33,299 |
-| Post a message | 273 | 154 | 137 | 256 | 801 | 8,391 | 6,896 |
+| Room page | 241 | 170 | 164 | 559 | 722 | 96,568 | 36,260 |
+| Messages page | 413 | 196 | 175 | 777 | 1,053 | 102,973 | 40,872 |
+| Sidebar | 552 | 615 | 715 | 4,125 | 1,275 | 60,081 | 34,672 |
+| Search | 435 | 315 | 305 | 1,294 | 1,156 | 132,259 | 33,299 |
+| Post a message | 273 | 154 | 137 | 256 | 801 | 8,502 | 6,896 |
 
 The Go column reflects this branch's engine, re-measured on this machine with
 the official comparison harness; the other columns are the published cross-port
@@ -336,19 +336,19 @@ identical CPU pinning, 3 rotating repetitions, c=16 medians, zero HTTP errors:
 
 | Route (req/s at c=16) | Rails | This fork | Rust | vs Rust | CPU/req vs Rust |
 |---|---:|---:|---:|---:|---:|
-| Room page | 195 | 86,262 | 36,370 | 2.37× | 43.2 vs 105 µs |
-| Search | 371 | 117,661 | 34,575 | 3.40× | 31.5 vs 96.6 µs |
-| Messages page | 414 | 93,404 | 41,553 | 2.25× | 39.5 vs 90.9 µs |
-| Sidebar | 517 | 55,014 | 35,028 | 1.57× | 68.1 vs 109 µs |
-| Post message | 253 | 8,391 | 6,766 | 1.24× | 299 vs 381 µs |
-| /up | 4,151 | 424,345 | 245,305 | 1.73× | 7.2 vs 15.0 µs |
-| Static CSS | 134,939 | 422,232 | 383,734 | 1.10× | 7.35 vs 7.82 µs |
-| Avatar | 97,894 | 377,043 | 382,537 | 0.99× | 8.35 vs 7.96 µs |
+| Room page | 222 | 96,568 | 36,771 | 2.63× | 38.3 vs 104 µs |
+| Search | 382 | 132,259 | 33,951 | 3.90× | 27.7 vs 97.5 µs |
+| Messages page | 406 | 102,973 | 42,059 | 2.45× | 35.5 vs 89.7 µs |
+| Sidebar | 539 | 60,081 | 35,269 | 1.70× | 62.3 vs 108 µs |
+| Post message | 269 | 8,502 | 6,772 | 1.26× | 296 vs 378 µs |
+| /up | 4,176 | 453,789 | 242,009 | 1.88× | 5.8 vs 15.2 µs |
+| Static CSS | 133,801 | 468,683 | 444,944 | 1.05× | 5.97 vs 7.47 µs |
+| Avatar | 98,680 | 390,494 | 386,903 | 1.01× | 7.07 vs 7.96 µs |
 
 Cable fan-out (messages delivered to every client, same harness and production
-images): 100 clients 5,343 vs 4,085 (1.31×), 500 clients parity (1,121 vs
-1,123), 1,000 clients 548 vs 544 (1.007×); saturated post→all p50 at 1,000
-clients is faster than Rust (13.4 vs 15.8 ms). Earlier recording (ENGINE-60/61
+images): 100 clients 5,196 vs 4,043 (1.29×), 500 clients parity (1,101 vs
+1,123), 1,000 clients parity (538 vs 542); saturated post→all p50 at 1,000
+clients is faster than Rust (13.5 vs 16.1 ms). Earlier recording (ENGINE-60/61
 paired medians): 100 clients 5,084 vs 4,261 (1.19×), 500 parity, 1,000 534 vs
 548 (0.98×). See plans/wrong.md for the residual-gap analysis.
 
