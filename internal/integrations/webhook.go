@@ -27,7 +27,9 @@ type WebhookReply struct {
 }
 type WebhookClient struct{ Client *http.Client }
 
-func NewWebhookClient() *WebhookClient { return &WebhookClient{HTTPClient(false, 7*time.Second, nil)} }
+func NewWebhookClient() *WebhookClient {
+	return &WebhookClient{Client: WebhookHTTPClient(7*time.Second, nil)}
+}
 func (c *WebhookClient) Deliver(ctx context.Context, endpoint string, payload []byte) (WebhookReply, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()

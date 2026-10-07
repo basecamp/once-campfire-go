@@ -3,6 +3,7 @@ package fastdb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/rails"
+	"github.com/basecamp/once-campfire-go/internal/storage"
 )
 
 // The differential tests run every fastdb query against the same database
@@ -171,6 +174,26 @@ func populateFallback(t testing.TB, d *database.DB) {
 		}
 	}
 	if _, err := d.Write.Exec("UPDATE memberships SET unread_at=? WHERE room_id=? AND user_id=?", database.Stamp(base.Add(2*time.Hour)), open, bob.ID); err != nil {
+		t.Fatal(err)
+	}
+	// A boost and an attachment (metadata and checksum NULL, exercising the
+	// decoders' fallbacks) for the hot reads messageViews performs.
+	var last int64
+	if err := d.Read.QueryRowContext(ctx, "SELECT id FROM messages WHERE room_id=? ORDER BY id DESC LIMIT 1", open).Scan(&last); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.CreateBoost(ctx, bob.ID, last, "great post"); err != nil {
+		t.Fatal(err)
+	}
+	stamp := database.Stamp(base)
+	if _, err := d.Write.Exec("INSERT INTO active_storage_blobs(key,filename,content_type,metadata,service_name,byte_size,checksum,created_at) VALUES ('differential-key','note.txt','text/plain',NULL,'local',11,NULL,?)", stamp); err != nil {
+		t.Fatal(err)
+	}
+	var blobID int64
+	if err := d.Read.QueryRowContext(ctx, "SELECT id FROM active_storage_blobs WHERE key='differential-key'").Scan(&blobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.CreateMessageWithBlob(ctx, bob.ID, open, "attached", "<p>attached</p>", "attached", blobID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.StartSession(ctx, alice.ID, "test-agent", "127.0.0.1"); err != nil {
@@ -956,4 +979,154 @@ func queryIDs(t *testing.T, d *database.DB, query string, args ...any) ([]int64,
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// recordOfBoost builds the database.Boost the web layer would compute from a
+// fastdb boost row: the title comes from Name and Bio exactly as
+// database.DB.Boosts computes it.
+func recordOfBoost(b Boost) database.Boost {
+	return database.Boost{ID: b.ID, MessageID: b.MessageID, BoosterID: b.BoosterID, Content: b.Content, Booster: b.Booster, BoosterUpdatedAt: b.BoosterUpdatedAt, CreatedAt: b.CreatedAt, UpdatedAt: b.UpdatedAt, BoosterTitle: (database.User{Name: b.Booster, Bio: b.Bio}).Title()}
+}
+
+type blobRecord struct {
+	ID            int64
+	Key, Filename string
+	ContentType   *string
+	Metadata      json.RawMessage
+	ServiceName   string
+	ByteSize      int64
+	Checksum      string
+	CreatedAt     string
+}
+
+func (b Blob) record() blobRecord {
+	return blobRecord{ID: b.ID, Key: b.Key, Filename: b.Filename, ContentType: b.ContentType, Metadata: b.Metadata, ServiceName: b.ServiceName, ByteSize: b.ByteSize, Checksum: b.Checksum, CreatedAt: b.CreatedAt}
+}
+
+func recordOfBlob(b storage.Blob) blobRecord {
+	return blobRecord{ID: b.ID, Key: b.Key, Filename: b.Filename, ContentType: b.ContentType, Metadata: b.Metadata, ServiceName: b.ServiceName, ByteSize: b.ByteSize, Checksum: b.Checksum, CreatedAt: b.CreatedAt}
+}
+
+// openStore builds the storage reader the web layer uses for attachments.
+func openStore(t testing.TB, d *database.DB) *storage.Store {
+	t.Helper()
+	secrets, err := rails.NewSecrets("fastdb-differential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return storage.New(d, secrets, t.TempDir())
+}
+
+// TestDifferentialMessageViewsReads covers the readers messageViews now uses:
+// the unscoped room lookup, the user lookup, the per-message boosts and the
+// attachment blob. Every row the fixture holds is compared field by field
+// between the fastdb reader and its database/sql twin, plus the error shapes.
+func TestDifferentialMessageViewsReads(t *testing.T) {
+	path := fixtureDB(t)
+	d, c := openBoth(t, path)
+	ctx := context.Background()
+	store := openStore(t, d)
+
+	rooms, err := queryIDs(t, d, "SELECT id FROM rooms ORDER BY id")
+	if err != nil || len(rooms) == 0 {
+		t.Fatalf("fixture rooms: %v", err)
+	}
+	for _, id := range rooms {
+		want, err := d.FindRoom(ctx, id)
+		if err != nil {
+			t.Fatalf("database.FindRoom(%d): %v", id, err)
+		}
+		var got Room
+		if err := c.RoomByID(&got, id); err != nil {
+			t.Fatalf("fastdb.RoomByID(%d): %v", id, err)
+		}
+		if !reflect.DeepEqual(got.record(), recordOfRoom(want)) {
+			t.Errorf("RoomByID(%d): fastdb %+v != database %+v", id, got.record(), recordOfRoom(want))
+		}
+	}
+	const missingRoom = int64(1) << 62
+	var room Room
+	if err := c.RoomByID(&room, missingRoom); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("missing room: got %v, want ErrNoRows", err)
+	}
+
+	users, err := queryIDs(t, d, "SELECT id FROM users ORDER BY id")
+	if err != nil || len(users) == 0 {
+		t.Fatalf("fixture users: %v", err)
+	}
+	for _, id := range users {
+		want, err := d.User(ctx, id)
+		if err != nil {
+			t.Fatalf("database.User(%d): %v", id, err)
+		}
+		var got User
+		if err := c.UserByID(&got, id); err != nil {
+			t.Fatalf("fastdb.UserByID(%d): %v", id, err)
+		}
+		if !reflect.DeepEqual(got.record(), recordOfUser(want)) {
+			t.Errorf("UserByID(%d): fastdb %+v != database %+v", id, got.record(), recordOfUser(want))
+		}
+	}
+	var missingUser User
+	if err := c.UserByID(&missingUser, missingRoom); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("missing user: got %v, want ErrNoRows", err)
+	}
+
+	messages, err := queryIDs(t, d, "SELECT id FROM messages ORDER BY id")
+	if err != nil || len(messages) == 0 {
+		t.Fatalf("fixture messages: %v", err)
+	}
+	boosted := 0
+	for _, id := range messages {
+		want, err := d.Boosts(ctx, id)
+		if err != nil {
+			t.Fatalf("database.Boosts(%d): %v", id, err)
+		}
+		got, err := c.Boosts(nil, id)
+		if err != nil {
+			t.Fatalf("fastdb.Boosts(%d): %v", id, err)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("Boosts(%d): fastdb %d rows != database %d", id, len(got), len(want))
+		}
+		for i := range want {
+			if !reflect.DeepEqual(recordOfBoost(got[i]), want[i]) {
+				t.Errorf("Boosts(%d)[%d]: fastdb %+v != database %+v", id, i, recordOfBoost(got[i]), want[i])
+			}
+		}
+		boosted += len(want)
+	}
+	if boosted == 0 {
+		t.Fatal("fixture has no boosts to compare")
+	}
+
+	var blob Blob
+	if err := c.AttachedBlob(&blob, "Message", messages[0], "attachment"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("message without attachment: got %v, want ErrNoRows", err)
+	}
+	attached := 0
+	for _, id := range messages {
+		want, wantErr := store.Attached(ctx, "Message", id, "attachment")
+		var got Blob
+		gotErr := c.AttachedBlob(&got, "Message", id, "attachment")
+		if errors.Is(wantErr, sql.ErrNoRows) {
+			if !errors.Is(gotErr, sql.ErrNoRows) {
+				t.Errorf("AttachedBlob(%d): fastdb %v, want ErrNoRows", id, gotErr)
+			}
+			continue
+		}
+		if wantErr != nil {
+			t.Fatalf("storage.Attached(%d): %v", id, wantErr)
+		}
+		if gotErr != nil {
+			t.Fatalf("fastdb.AttachedBlob(%d): %v", id, gotErr)
+		}
+		if !reflect.DeepEqual(got.record(), recordOfBlob(want)) {
+			t.Errorf("AttachedBlob(%d): fastdb %+v != storage %+v", id, got.record(), recordOfBlob(want))
+		}
+		attached++
+	}
+	if attached == 0 {
+		t.Fatal("fixture has no attachments to compare")
+	}
 }
