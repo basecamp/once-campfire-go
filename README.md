@@ -90,8 +90,21 @@ add a second code path to keep byte-identical. `CAMPFIRE_RECORDED_PIECES` (defau
 and `off`/`false`/`0`, warning on anything else) serves recorded room, messages and search pages
 from cached compressed pieces: the shell split at its `loadedAt` and message markers (`layout`,
 `0`..`2`) and the message list, each keyed by a SHA-256 of the rendered page inputs or of the
-message ids and updated-at stamps and stored as raw bytes plus a complete gzip member. Setting it
+message ids and updated-at stamps and stored as raw bytes plus a raw DEFLATE fragment (a
+block-stream ended at a byte-aligned non-final boundary by a Flush, at `CAMPFIRE_RECORDED_GZIP_LEVEL`,
+default 9). Gzip clients receive ONE gzip member spliced from those fragments — header,
+fragments, final empty stored block and a single CRC32/ISIZE trailer of the whole body, with the
+per-piece CRCs combined in GF(2) at assembly time so no raw byte is re-scanned — because
+Chromium decodes only the first member of a multi-member gzip stream and rendered an empty
+message list on the old multi-member wire. The splice is the browser-safe form; identity
+clients still get the raw pieces with no copy. Setting it
 `off` restores the legacy per-request render, compression and ETag path for A/B and rollback.
+`CAMPFIRE_RECORDED_ZSTD` (default `off`; same value shapes and warning policy) enables the zstd
+frame variant of cached pieces. It is off by default for the same browser reason: Chromium
+decodes only the first frame of a multi-frame zstd stream, and every piece-path page assembles
+several pieces, so with the flag on, multi-piece responses are served as the single-member gzip
+splice and only single-frame shapes would use zstd; the multi-frame zstd assembly remains in
+`internal/piececache` for non-browser clients and the corpus that exercises it.
 `CAMPFIRE_FASTDB` (default `on`; also accepts `true`/`1` and `off`/`false`/`0`, warning on anything else)
 routes the hot read paths — room pages, message pages, the session lookup in `auth`, the sidebar
 (rooms, direct-room members, placeholders), the search FTS scan, and message view assembly (room,
@@ -178,7 +191,7 @@ newline also take the regex recognizer, because `.` and `[^...]` exclude `\n` bu
 scans would not.
 `CAMPFIRE_RECORDED_CACHE_MB` sizes that recorded-response piece cache independently (default 32;
 `0` disables storage while still serving from freshly rendered pieces). Each cached piece charges
-its raw bytes, its gzip member and the key, so one piece costs up to about twice its HTML size;
+its raw bytes, its deflate fragment and the key, so one piece costs up to about twice its HTML size;
 with the fragment and recorded caches full the accounting is 64 MiB by default. The recorded room
 page's ETag covers the cache-stable pieces only, so it no longer moves with the per-request
 `loadedAt` timestamp — a deliberate difference from the legacy per-request hash, which would

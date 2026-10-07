@@ -20,6 +20,7 @@ import (
 
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/front"
+	"github.com/basecamp/once-campfire-go/internal/piececache"
 	"github.com/basecamp/once-campfire-go/internal/rails"
 	"github.com/basecamp/once-campfire-go/internal/useragent"
 )
@@ -216,9 +217,10 @@ func decodeRecordedErr(x recordedExchange) ([]byte, error) {
 
 // compareRecorded asserts the piece path and the legacy path agree on status,
 // negotiated encoding and decoded body. Encoded bytes differ by construction:
-// the piece path assembles one gzip member per piece (RFC 1952 multi-member)
-// where front.Deflate emits a single member; ETag values differ for the room
-// route by the documented loadedAt-free scheme.
+// the piece path assembles ONE gzip member spliced from deflate fragments
+// (single-member, browser-safe) where front.Deflate emits its own single
+// member; ETag values differ for the room route by the documented
+// loadedAt-free scheme.
 func compareRecorded(t *testing.T, label string, pieces, legacy recordedExchange) {
 	t.Helper()
 	if pieces.status != legacy.status {
@@ -237,7 +239,7 @@ func compareRecorded(t *testing.T, label string, pieces, legacy recordedExchange
 		t.Fatalf("%s: Cache-Control %q vs %q", label, pieces.cacheControl, legacy.cacheControl)
 	}
 	// A declared Content-Length must describe the bytes actually received on
-	// that side; the multi-member gzip body differs in length from the legacy
+	// that side; the spliced gzip body differs in length from the legacy
 	// single member, so cross-side comparison is only meaningful for identity.
 	for name, x := range map[string]recordedExchange{"pieces": pieces, "legacy": legacy} {
 		if x.contentLength != "" && x.contentLength != strconv.Itoa(len(x.body)) {
@@ -844,19 +846,30 @@ func TestRecordedShellSplitGuards(t *testing.T) {
 	}
 }
 
+// TestRecordedCompressorPoolPoisoning proves a pooled compressor's buffer
+// cannot leak one piece's bytes into the next: the buffer is reset before use,
+// the writer is reset to nil on return, and every caller gets an independent
+// copy. Poisoning the pooled buffer directly is the strongest form. The
+// fragments are not self-decoding, so each is spliced into its own single
+// gzip member for the read-back.
 func TestRecordedCompressorPoolPoisoning(t *testing.T) {
 	poison := compressorPool(9).Get().(*recordedCompressor)
 	poison.buf.WriteString(strings.Repeat("POISON", 64))
 	poison.writer.Reset(nil)
 	compressorPool(9).Put(poison)
 
-	first := compressGzip([]byte("first payload"))
-	second := compressGzip([]byte("second payload"))
+	first := compressFragment([]byte("first payload"))
+	second := compressFragment([]byte("second payload"))
 	for name, tc := range map[string]struct {
-		member []byte
-		want   string
+		fragment []byte
+		want     string
 	}{"first": {first, "first payload"}, "second": {second, "second payload"}} {
-		reader, err := gzip.NewReader(bytes.NewReader(tc.member))
+		entry := piececache.NewEntry([]byte(tc.want), tc.fragment, nil)
+		assembled, _, err := piececache.Assemble(nil, piececache.Gzip, entry)
+		if err != nil {
+			t.Fatalf("%s: assemble: %v", name, err)
+		}
+		reader, err := gzip.NewReader(bytes.NewReader(assembled))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}

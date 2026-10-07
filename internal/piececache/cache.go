@@ -1,10 +1,22 @@
 // Package piececache stores immutable, content-versioned response pieces —
-// raw bytes plus a complete gzip member of those bytes — in a byte-bounded LRU
-// and assembles ordered piece lists into a response with no allocation on the
-// warm path: up to eight pieces into a caller buffer with enough capacity
-// allocates nothing. Two documented exceptions: more than eight pieces uses
-// per-piece record scratch, and a caller buffer too small for the encoded
-// pieces grows once.
+// raw bytes plus a raw DEFLATE fragment of those bytes (a block-stream ended
+// at a byte-aligned, non-final boundary by a Flush, not a gzip member) — in a
+// byte-bounded LRU and assembles ordered piece lists into a response with no
+// allocation on the warm path: up to eight pieces into a caller buffer with
+// enough capacity allocates nothing. Two documented exceptions: more than
+// eight pieces uses per-piece record scratch, and a caller buffer too small
+// for the encoded pieces grows once.
+//
+// Assembly for gzip clients splices the fragments into ONE gzip member: the
+// RFC 1952 header, the concatenated fragments, a final empty stored block,
+// and the CRC32/ISIZE trailer of the whole raw concatenation. RFC 1952
+// permits multi-member streams and most decoders (Go, Python, curl, the Rust
+// loadgen) decode them, but Chromium decodes only the first member, so a
+// multi-member body renders the page shell without its messages in browsers;
+// the single-member splice is the wire form every browser decodes. Per-piece
+// CRC-32 values are stored at fill time and combined with the GF(2) matrix
+// method (zlib's crc32_combine) at assembly, so the trailer costs no raw
+// re-scan on the request path.
 //
 // Keys are content versions. Two key spaces share one budget and one recency
 // order: string keys for version strings (a room's message version, a user's
@@ -17,16 +29,17 @@
 // instead of editing the old one. Readers may keep and use an entry after it
 // has been evicted or replaced. Immutability holds by convention: every reader
 // shares one entry, so a caller must never write through Entry.Raw or
-// Entry.Member.
+// Entry.Fragment.
 //
 // No HTTP or template types cross this boundary: callers bring version strings
-// and complete gzip members, and take away bytes and a digest.
+// and raw deflate fragments, and take away bytes and a digest.
 package piececache
 
 import (
 	"container/list"
 	"crypto/sha256"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"strconv"
 	"sync"
@@ -40,42 +53,65 @@ const DefaultLimit = 32 << 20
 // the fragment cache uses (internal/web/fragments.go).
 const entryOverhead = 240
 
-// Entry is one immutable response piece: the raw bytes, a complete gzip member
-// of those bytes (header, deflate stream and CRC32/ISIZE trailer as produced
-// by compress/gzip), an optional complete zstd frame of the same bytes, and
-// the SHA-256 digest of the raw bytes that the response ETag is computed
-// from. The zstd frame is present when the piece was filled with zstd members
-// enabled; a piece without it can still be assembled as identity or gzip.
+// Entry is one immutable response piece: the raw bytes, a raw DEFLATE
+// fragment of those bytes (produced by compress/flate with Flush, so it ends
+// at a byte-aligned non-final block boundary and splices with other
+// fragments), an optional complete zstd frame of the same bytes, the CRC-32
+// (IEEE) of the raw bytes, and the SHA-256 digest of the raw bytes that the
+// response ETag is computed from. The zstd frame is present when the piece
+// was filled with zstd frames enabled; a piece without it can still be
+// assembled as identity or gzip.
+//
+// CRC, ZerosOp and Digest are derived from Raw and stored so the request path
+// never re-scans the content: gzip assembly combines the per-piece CRCs with
+// the stored zero operators, and the ETag hashes the digest records.
 //
 // Once published, an Entry is never mutated. NewEntry and Put take copies, so
 // the caller's buffers may be reused immediately afterwards. Immutability holds
-// by convention: callers must never write through Raw or Member, because every
-// reader of that key shares the same entry.
+// by convention: callers must never write through Raw or Fragment, because
+// every reader of that key shares the same entry.
 type Entry struct {
 	// Raw is the uncompressed payload.
 	Raw []byte
-	// Member is a complete gzip member of Raw.
-	Member []byte
+	// Fragment is a raw deflate fragment of Raw; see the package comment.
+	Fragment []byte
 	// Zstd is a complete zstd frame of Raw, when the cache was filled with
-	// zstd members enabled.
+	// zstd frames enabled.
 	Zstd []byte
+	// CRC is crc32.ChecksumIEEE(Raw), stored for splice assembly.
+	CRC uint32
+	// ZerosOp is x^(8·len(Raw)) modulo the CRC-32 polynomial: the GF(2)
+	// operator that appends len(Raw) zero bytes, used to combine CRC into a
+	// page trailer instead of re-scanning Raw (see ZerosOp).
+	ZerosOp uint32
 	// Digest is SHA-256 of Raw.
 	Digest [32]byte
 }
 
-// NewEntry returns an immutable entry for raw, member and zstd, copying all
-// three. Member and Zstd are trusted to be encodings of raw; they are not
+// ZerosOp returns the GF(2) operator x^(8·rawLen) modulo the reflected CRC-32
+// polynomial in zlib's convention: combining a CRC with this operator is
+// exactly what appending rawLen zero bytes to the covered data does. Entries
+// store their own ZerosOp at fill time (and NewEntry derives it), so gzip
+// assembly combines CRCs without re-scanning raw bytes and without computing
+// the operator per request. Exported for dynamic pieces assembled but not
+// cached (internal/web's loadedAt scratch).
+func ZerosOp(rawLen int) uint32 { return x2nmodp(int64(rawLen), 3) }
+
+// NewEntry returns an immutable entry for raw, fragment and zstd, copying all
+// three. Fragment and Zstd are trusted to be encodings of raw; they are not
 // re-verified (the caller just compressed it, and decompression on the request
 // path would defeat the point of the cache). NewEntry is exported for
 // per-request dynamic pieces that are assembled once but not cached; Put uses
 // it for stored pieces. zstd may be nil for gzip-only pieces.
-func NewEntry(raw, member, zstd []byte) *Entry {
+func NewEntry(raw, fragment, zstd []byte) *Entry {
 	entry := &Entry{
-		Raw:    append([]byte(nil), raw...),
-		Member: append([]byte(nil), member...),
-		Zstd:   append([]byte(nil), zstd...),
+		Raw:      append([]byte(nil), raw...),
+		Fragment: append([]byte(nil), fragment...),
+		Zstd:     append([]byte(nil), zstd...),
 	}
 	entry.Digest = sha256.Sum256(entry.Raw)
+	entry.CRC = crc32.ChecksumIEEE(entry.Raw)
+	entry.ZerosOp = ZerosOp(len(entry.Raw))
 	return entry
 }
 
@@ -150,43 +186,43 @@ func (c *Cache) GetDigest(key [32]byte) *Entry {
 	return element.Value.(*item).entry
 }
 
-// Put copies raw and member into a new immutable entry, computes the SHA-256
-// digest of raw, and — when it fits — publishes it under key, replacing any
-// previous entry in one lock acquisition. It reports false when the charged
-// size (len(key) + len(raw) + len(member) + entryOverhead) exceeds limit/4, so
-// one piece can never thrash the whole budget; the returned entry is still
-// valid and independent of the caller's buffers, it is simply not cached. A
-// rejected Put changes nothing in the cache, so an oversized replacement
-// leaves the previous entry in place.
+// Put copies raw and fragment into a new immutable entry, computes the SHA-256
+// digest and CRC-32 of raw, and — when it fits — publishes it under key,
+// replacing any previous entry in one lock acquisition. It reports false when
+// the charged size (len(key) + len(raw) + len(fragment) + entryOverhead)
+// exceeds limit/4, so one piece can never thrash the whole budget; the
+// returned entry is still valid and independent of the caller's buffers, it is
+// simply not cached. A rejected Put changes nothing in the cache, so an
+// oversized replacement leaves the previous entry in place.
 //
 // The copies and the digest are computed outside the mutex; only the map/list
 // swap is critical. A concurrent reader therefore observes either the old
 // entry or the new one, both complete — never a half-updated mix.
-func (c *Cache) Put(key string, raw, member []byte) (*Entry, bool) {
-	return c.put(item{key: key}, len(key), raw, member, nil)
+func (c *Cache) Put(key string, raw, fragment []byte) (*Entry, bool) {
+	return c.put(item{key: key}, len(key), raw, fragment, nil)
 }
 
 // PutDigest is Put for a fixed-size content digest key, charged as
 // digestKeyBytes rather than len(key).
-func (c *Cache) PutDigest(key [32]byte, raw, member []byte) (*Entry, bool) {
-	return c.put(item{digest: key, byDigest: true}, digestKeyBytes, raw, member, nil)
+func (c *Cache) PutDigest(key [32]byte, raw, fragment []byte) (*Entry, bool) {
+	return c.put(item{digest: key, byDigest: true}, digestKeyBytes, raw, fragment, nil)
 }
 
 // PutZstd is Put for a piece that also carries a complete zstd frame; the
-// frame is charged against the budget like the gzip member. The returned
-// entry holds both members, so either encoding assembles without recompression.
-func (c *Cache) PutZstd(key string, raw, member, zstd []byte) (*Entry, bool) {
-	return c.put(item{key: key}, len(key), raw, member, zstd)
+// frame is charged against the budget like the gzip fragment. The returned
+// entry holds both encodings, so either assembles without recompression.
+func (c *Cache) PutZstd(key string, raw, fragment, zstd []byte) (*Entry, bool) {
+	return c.put(item{key: key}, len(key), raw, fragment, zstd)
 }
 
 // PutDigestZstd is PutZstd for a fixed-size digest key.
-func (c *Cache) PutDigestZstd(key [32]byte, raw, member, zstd []byte) (*Entry, bool) {
-	return c.put(item{digest: key, byDigest: true}, digestKeyBytes, raw, member, zstd)
+func (c *Cache) PutDigestZstd(key [32]byte, raw, fragment, zstd []byte) (*Entry, bool) {
+	return c.put(item{digest: key, byDigest: true}, digestKeyBytes, raw, fragment, zstd)
 }
 
-func (c *Cache) put(element item, keyBytes int, raw, member, zstd []byte) (*Entry, bool) {
-	size := keyBytes + len(raw) + len(member) + len(zstd) + entryOverhead
-	entry := NewEntry(raw, member, zstd)
+func (c *Cache) put(element item, keyBytes int, raw, fragment, zstd []byte) (*Entry, bool) {
+	size := keyBytes + len(raw) + len(fragment) + len(zstd) + entryOverhead
+	entry := NewEntry(raw, fragment, zstd)
 	if size > c.limit/4 {
 		// Not cacheable, but the caller still needs the immutable piece for
 		// this response; return it uncached rather than forcing a re-copy.

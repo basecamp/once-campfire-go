@@ -2,11 +2,12 @@ package web
 
 import (
 	"bytes"
-	"compress/gzip"
+	"compress/flate"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"hash/crc32"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -22,13 +23,14 @@ import (
 )
 
 // This file is the recorded-response piece path. A recorded page is stored as
-// immutable raw+gzip pieces (internal/piececache) — the page shell split at its
-// insertion markers, the message list as one piece — and a response is served
-// from those pieces: gzip clients get one assembled multi-member buffer with a
-// pre-set Content-Encoding, identity clients get the raw pieces through the
-// parts channel with no copy at all. A cache hit therefore never recompresses
-// the page, never copies the shell through strings.ReplaceAll, and never hashes
-// the body for the ETag.
+// immutable raw+fragment pieces (internal/piececache) — the page shell split at
+// its insertion markers, the message list as one piece — and a response is
+// served from those pieces: gzip clients get one assembled single-member gzip
+// body (the deflate fragments spliced with a header, final block and one
+// CRC32/ISIZE trailer; the multi-member form Chromium cannot decode), identity
+// clients get the raw pieces through the parts channel with no copy at all. A
+// cache hit therefore never recompresses the page, never copies the shell
+// through strings.ReplaceAll, and never hashes the body for the ETag.
 //
 // CAMPFIRE_RECORDED_PIECES=off keeps the legacy HTML-fragment path
 // (room_shell.go, recorded.go, fragments.go) byte for byte; the differential
@@ -284,14 +286,14 @@ func (s *Server) shellPieces(p page, name string, needGzip, needZstd bool) (reco
 	for i := 0; i < layout.count; i++ {
 		key := shellSegmentKey(identity, i)
 		copy(manifest[2+32*i:], key[:])
-		var member, zstdMember []byte
+		var fragment, zstdMember []byte
 		if needGzip || s.pieces.Enabled() {
-			member = compressGzip(layout.segments[i])
+			fragment = compressFragment(layout.segments[i])
 		}
 		if s.zstdPieces && (needZstd || s.pieces.Enabled()) {
 			zstdMember = compressZstd(layout.segments[i])
 		}
-		entry, _ := s.pieces.PutDigestZstd(key, layout.segments[i], member, zstdMember)
+		entry, _ := s.pieces.PutDigestZstd(key, layout.segments[i], fragment, zstdMember)
 		shell.segments[i] = entry
 	}
 	s.pieces.PutDigest(identity, manifest, nil)
@@ -373,10 +375,24 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 		}
 		return false, nil
 	}
-	// A cache filled before zstd members were enabled holds pieces without
-	// zstd frames; degrade such requests to gzip (whose members every piece
+	// A cache filled before zstd frames were enabled holds pieces without
+	// zstd frames; degrade such requests to gzip (whose fragments every piece
 	// carries) rather than assembling a zstd body from nothing.
 	if encoding == "zstd" && !piecesCarryZstd(shell, payload) {
+		encoding = "gzip"
+		needGzip = true
+		needZstd = false
+	}
+	// Chromium decodes only the first frame of a multi-frame zstd stream —
+	// the same probe that showed it decoding only the first gzip member — so
+	// a multi-piece zstd body would render the shell without its messages in
+	// browsers. These pages always assemble several pieces (shell segments
+	// plus the message payload), so every zstd-preferring request degrades
+	// to the single-member gzip splice; the zstd frames stay in the cache
+	// for clients and shapes that assemble one frame, and piececache keeps
+	// the multi-frame assembly for the non-browser corpus. This is why
+	// CAMPFIRE_RECORDED_ZSTD defaults off (see server.go).
+	if encoding == "zstd" && zstdMultiPiece(shell) {
 		encoding = "gzip"
 		needGzip = true
 		needZstd = false
@@ -512,40 +528,44 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 			}
 			var partsBuf [5]*piececache.Entry
 			parts := partsBuf[:0]
-			total := 0
-			// The carve room must cover the assembled members exactly: the
-			// slot members (loadedAt or the payload) are part of the body,
-			// so a total that omitted them would let the assembly write past
-			// the carve into the next carve's memory.
+			// The carve room must cover the assembled body exactly: the slot
+			// members (loadedAt or the payload) are part of the body, and the
+			// gzip member frames the fragments with a fixed 23-byte splice
+			// overhead, so a total that omitted either would let the assembly
+			// write past the carve into the next carve's memory. EncodedLen
+			// is the same computation Assemble uses, so the sizes cannot
+			// drift.
 			for i := 0; i < shell.count; i++ {
 				parts = append(parts, shell.segments[i])
-				total += memberLen(shell.segments[i], encoding)
 				if i >= shell.count-1 {
 					continue
 				}
 				if shell.loadedMask&(1<<i) != 0 {
 					parts = append(parts, loaded)
-					total += memberLen(loaded, encoding)
 				} else {
 					parts = append(parts, payload)
-					total += memberLen(payload, encoding)
 				}
 			}
-			dst := buffered.arena.carveBlock(total)
-			if dst == nil {
+			total := encodedTotal(parts, encoding)
+			if total == 0 {
 				ok = false
 			} else {
-				var pieceEncoding piececache.Encoding
-				if encoding == "zstd" {
-					pieceEncoding = piececache.Zstd
-				} else {
-					pieceEncoding = piececache.Gzip
-				}
-				encoded, _, err := piececache.Assemble(dst, pieceEncoding, parts...)
-				if err != nil {
+				dst := buffered.arena.carveBlock(total)
+				if dst == nil {
 					ok = false
 				} else {
-					buffered.encoded = encoded
+					var pieceEncoding piececache.Encoding
+					if encoding == "zstd" {
+						pieceEncoding = piececache.Zstd
+					} else {
+						pieceEncoding = piececache.Gzip
+					}
+					encoded, _, err := piececache.Assemble(dst, pieceEncoding, parts...)
+					if err != nil {
+						ok = false
+					} else {
+						buffered.encoded = encoded
+					}
 				}
 			}
 		} else {
@@ -636,10 +656,6 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 			}
 		}
 		if r.Method == "HEAD" {
-			total := 0
-			for _, part := range parts {
-				total += memberLen(part, encoding)
-			}
 			h.Set("Content-Encoding", wireEncoding)
 			addVaryAcceptEncoding(h)
 			w.WriteHeader(status)
@@ -647,7 +663,7 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 				return true, nil
 			}
 			if buffered != nil {
-				buffered.encodedLength = total
+				buffered.encodedLength = encodedTotal(parts, encoding)
 			}
 			return true, nil
 		}
@@ -737,16 +753,24 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 	return true, nil
 }
 
-// memberLen returns the wire length of one part under the chosen encoding.
-func memberLen(part *piececache.Entry, encoding string) int {
+// encodedTotal returns the exact assembled wire length for the ordered part
+// list under encoding, or 0 when the list cannot assemble for that encoding
+// (the caller falls back before assembling).
+func encodedTotal(parts []*piececache.Entry, encoding string) int {
+	var pieceEncoding piececache.Encoding
 	switch encoding {
 	case "zstd":
-		return len(part.Zstd)
+		pieceEncoding = piececache.Zstd
 	case "gzip":
-		return len(part.Member)
+		pieceEncoding = piececache.Gzip
 	default:
-		return len(part.Raw)
+		pieceEncoding = piececache.Identity
 	}
+	total, err := piececache.EncodedLen(pieceEncoding, parts...)
+	if err != nil {
+		return 0
+	}
+	return total
 }
 
 // piecesCarryZstd reports whether every cache-stable piece of this response
@@ -759,6 +783,16 @@ func piecesCarryZstd(shell recordedShell, payload *piececache.Entry) bool {
 		}
 	}
 	return len(payload.Raw) == 0 || len(payload.Zstd) > 0
+}
+
+// zstdMultiPiece reports whether the response assembles more than one piece.
+// The multi-frame zstd wire form is fine for the loadgen and curl, but
+// Chromium decodes only the first frame, so a multi-piece zstd body must
+// never be served. Every shell has at least one cut (count ≥ 2), so on these
+// pages every zstd request is multi-piece, but the rule is written generally:
+// a hypothetical single-piece response could still use its one zstd frame.
+func zstdMultiPiece(shell recordedShell) bool {
+	return shell.count > 1
 }
 
 // findResponseBuffer returns the per-request responseBuffer behind w's wrapper
@@ -989,14 +1023,14 @@ func parseQuality(value string) float64 {
 	return q
 }
 
-// recordedCompressor is one pooled compressor state: a gzip writer plus the
+// recordedCompressor is one pooled compressor state: a flate writer plus the
 // zstd writer sharing one output buffer. The buffer is capped like the
 // response buffer pool, so one miss-compressed page cannot pin an unbounded
-// buffer per P. One pool per gzip level (compress/gzip has no level change
+// buffer per P. One pool per flate level (compress/flate has no level change
 // method that outlives Reset in this Go version), so a level change keeps a
 // writer per level instead of rebuilding one per fill.
 type recordedCompressor struct {
-	writer     *gzip.Writer
+	writer     *flate.Writer
 	buf        bytes.Buffer
 	zstdWriter *zstd.Writer
 }
@@ -1007,7 +1041,7 @@ func init() {
 	for level := 1; level <= 9; level++ {
 		level := level
 		recordedCompressorPools[level].New = func() any {
-			writer, _ := gzip.NewWriterLevel(nil, level)
+			writer, _ := flate.NewWriter(nil, level)
 			return &recordedCompressor{writer: writer}
 		}
 	}
@@ -1020,36 +1054,42 @@ func compressorPool(level int) *sync.Pool {
 	return &recordedCompressorPools[level]
 }
 
-// recordedGzipFillLevel is the gzip level used when cached members are
+// recordedGzipFillLevel is the deflate level used when cached fragments are
 // compressed at fill (ENGINE-50): level 9 by default; CAMPFIRE_RECORDED_GZIP_LEVEL
 // configures it, and 6 is the pre-engine value kept for the A/B and rollback
 // switch. Compression is a one-time fill cost, so the higher level's CPU is
-// never on the request path; smaller members mean fewer socket-write bytes on
+// never on the request path; smaller fragments mean fewer socket-write bytes on
 // every gzip request.
 var recordedGzipFillLevel = 9
 
 func setRecordedGzipFillLevel(level int) { recordedGzipFillLevel = level }
 
-// compressGzip returns a complete gzip member of raw at the configured fill
-// level. It is used when a piece is stored; the writer and buffer are reset
-// before use and the returned bytes are an independent copy, so a pooled
+// compressFragment returns a raw deflate fragment of raw at the configured
+// fill level. It is used when a piece is stored; the writer and buffer are
+// reset before use and the returned bytes are an independent copy, so a pooled
 // buffer can never leak one caller's bytes into another's response.
-func compressGzip(raw []byte) []byte { return compressGzipLevel(raw, recordedGzipFillLevel) }
+//
+// The fragment is produced with Flush, not Close: it ends at a byte-aligned,
+// non-final block boundary, which is what lets the assembler splice one gzip
+// member from several fragments. A Closed (final-block) stream cannot be
+// concatenated.
+func compressFragment(raw []byte) []byte { return compressFragmentLevel(raw, recordedGzipFillLevel) }
 
-// compressGzipLevel is compressGzip at an explicit level (benchmarks and the
-// legacy level-6 A/B).
-func compressGzipLevel(raw []byte, level int) []byte { return compressGzipInto(nil, raw, level) }
+// compressFragmentLevel is compressFragment at an explicit level (benchmarks
+// and the legacy level-6 A/B).
+func compressFragmentLevel(raw []byte, level int) []byte {
+	return compressFragmentInto(nil, raw, level)
+}
 
-// compressGzipInto appends a gzip member of raw to dst at level, reusing the
-// pooled writer of that level. dst may alias the caller's own buffer; the
-// member is fully rewritten from index len(dst) onwards.
-func compressGzipInto(dst, raw []byte, level int) []byte {
+// compressFragmentInto appends a deflate fragment of raw to dst at level,
+// reusing the pooled writer of that level. dst may alias the caller's own
+// buffer; the fragment is fully rewritten from index len(dst) onwards.
+func compressFragmentInto(dst, raw []byte, level int) []byte {
 	c := compressorPool(level).Get().(*recordedCompressor)
 	c.buf.Reset()
 	c.writer.Reset(&c.buf)
-	c.writer.Header.OS = 3
 	_, _ = c.writer.Write(raw)
-	_ = c.writer.Close()
+	_ = c.writer.Flush()
 	c.writer.Reset(nil)
 	dst = append(dst, c.buf.Bytes()...)
 	if c.buf.Cap() <= 1<<20 {
@@ -1125,19 +1165,20 @@ func (a *recordedAssemblyBuffer) release() {
 	recordedAssemblyBuffers.Put(a)
 }
 
-// loadedAtScratch caches one (timestamp value -> members) conversion per
+// loadedAtScratch caches one (timestamp value -> encodings) conversion per
 // pooled scratch: the room page's loadedAt changes at most once per
-// millisecond, so a burst of requests reuses the members. Comparing the value
-// makes a stale pooled member impossible. raw is the value's bytes (the
-// identity path's part), member is the gzip member, zstd the zstd frame when
-// enabled. Digest is deliberately zero: the loadedAt slot is excluded from the
-// response ETag, and only the assembled bytes ever read the piece.
+// millisecond, so a burst of requests reuses the fragments. Comparing the
+// value makes a stale pooled fragment impossible. raw is the value's bytes
+// (the identity path's part), fragment is the raw deflate fragment, zstd the
+// zstd frame when enabled. Digest is deliberately zero: the loadedAt slot is
+// excluded from the response ETag, and only the assembled bytes ever read the
+// piece.
 type loadedAtScratch struct {
-	value  string
-	raw    []byte
-	member []byte
-	zstd   []byte
-	entry  piececache.Entry
+	value    string
+	raw      []byte
+	fragment []byte
+	zstd     []byte
+	entry    piececache.Entry
 }
 
 var loadedAtScratches = sync.Pool{New: func() any { return &loadedAtScratch{} }}
@@ -1150,16 +1191,16 @@ var loadedAtScratches = sync.Pool{New: func() any { return &loadedAtScratch{} }}
 // will hand the member out.
 func borrowLoadedAt(value string, wantZstd bool) *loadedAtScratch {
 	scratch := loadedAtScratches.Get().(*loadedAtScratch)
-	if scratch.member == nil || scratch.value != value {
+	if scratch.fragment == nil || scratch.value != value {
 		scratch.raw = append(scratch.raw[:0], value...)
-		scratch.member = compressGzipInto(scratch.member[:0], scratch.raw, recordedGzipFillLevel)
+		scratch.fragment = compressFragmentInto(scratch.fragment[:0], scratch.raw, recordedGzipFillLevel)
 		scratch.zstd = scratch.zstd[:0]
 		scratch.value = value
 	}
 	if wantZstd && len(scratch.zstd) == 0 && len(scratch.raw) > 0 {
 		scratch.zstd = compressZstdInto(scratch.zstd[:0], scratch.raw)
 	}
-	scratch.entry = piececache.Entry{Raw: scratch.raw, Member: scratch.member, Zstd: scratch.zstd}
+	scratch.entry = piececache.Entry{Raw: scratch.raw, Fragment: scratch.fragment, Zstd: scratch.zstd, CRC: crc32.ChecksumIEEE(scratch.raw), ZerosOp: piececache.ZerosOp(len(scratch.raw))}
 	return scratch
 }
 

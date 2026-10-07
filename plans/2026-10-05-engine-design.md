@@ -137,23 +137,28 @@ and the legacy handler only as fallback.
 
 A response is an ordered list of *pieces*. Each piece is one of:
 
-- **cached member piece**: an immutable gzip member (own header/CRC/ISIZE) and
-  its raw bytes and digest, already in memory;
+- **cached fragment piece**: an immutable raw DEFLATE fragment of its raw
+  bytes (a block-stream ended at a byte-aligned non-final boundary by a
+  Flush, not a closed stream), the raw bytes, and its digest, already in
+  memory;
 - **cached raw piece**: raw bytes only (used for identity encoding);
 - **dynamic piece**: small per-request bytes (e.g. `loadedAt`), compressed on
   the fly only when gzip is required.
 
-Assembly for gzip is the concatenation of member bytes — every client
-implementation, `net/http`'s own `gzip.Reader` included, decodes
-multi-member gzip by concatenation (RFC 1952 §2.2), so no raw-deflate window
-bookkeeping or CRC combining is needed. Identity assembly is raw-piece
-concatenation. Both go into a single output buffer and one `Write`.
-
-This is deliberately coarser than Rust's per-fragment raw-deflate splice: three
-or so member boundaries per page instead of per-fragment back-reference
-optimization. The tradeoff is +a few KB per response against a much simpler,
-allocation-free assembler; §6 measures response bytes, and if size costs
-throughput the finer variant is a plan item, not an assumption.
+Assembly for gzip is the Rust port's splice: one RFC 1952 member built as
+header + concatenated fragments + a final empty stored block + the CRC32/ISIZE
+trailer of the whole raw concatenation, with per-piece CRCs stored at fill
+time and combined in GF(2) (zlib's `crc32_combine`) so the trailer scans no
+raw bytes and the whole assembly is allocation-free. The earlier design
+concatenated complete gzip members, which every decoder the corpus uses (Go,
+Python, curl, the Rust loadgen) handles — but Chromium decodes only the FIRST
+member of a multi-member stream, so browsers rendered the page shell without
+its messages. The splice is the browser-safe wire form and drops the per-piece
+header/trailer bytes; identity assembly is raw-piece concatenation. Both go
+into a single output buffer and one `Write`. The same probe showed Chromium
+decodes only the first zstd frame of a multi-frame stream, so the zstd frame
+variant is off by default and multi-piece responses always take the gzip
+splice (the multi-frame zstd assembly remains for non-browser clients).
 
 ### 3.5 Version registry
 

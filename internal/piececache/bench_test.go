@@ -34,7 +34,7 @@ func BenchmarkGet(b *testing.B) {
 	}
 	for i, key := range keys {
 		raw := benchRaw(16<<10, int64(i+1))
-		if _, ok := cache.Put(key, raw, mustMember(b, raw)); !ok {
+		if _, ok := cache.Put(key, raw, mustFragment(b, raw)); !ok {
 			b.Fatalf("Put(%s) rejected", key)
 		}
 	}
@@ -57,7 +57,7 @@ func BenchmarkAssemble(b *testing.B) {
 	pieces := make([]*Entry, 3)
 	for i, size := range []int{30 << 10, 28 << 10, 22 << 10} {
 		raw := benchRaw(size, int64(i+1))
-		entry, ok := cache.Put(keys[i], raw, mustMember(b, raw))
+		entry, ok := cache.Put(keys[i], raw, mustFragment(b, raw))
 		if !ok {
 			b.Fatalf("Put(%s) rejected", keys[i])
 		}

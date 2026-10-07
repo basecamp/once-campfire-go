@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"io"
+	"math/rand"
 	"os/exec"
 	"strings"
 	"testing"
@@ -52,7 +54,7 @@ func fixturePieces(tb testing.TB) ([]*Entry, [][]byte) {
 	parts := [][]byte{fixtureBefore, fixturePayload, fixtureAfter}
 	pieces := make([]*Entry, len(parts))
 	for i, part := range parts {
-		pieces[i] = NewEntry(part, mustMember(tb, part), nil)
+		pieces[i] = NewEntry(part, mustFragment(tb, part), nil)
 	}
 	return pieces, parts
 }
@@ -117,7 +119,7 @@ func TestAssembleZstdRoundTrip(t *testing.T) {
 	}
 	pieces := make([]*Entry, len(rawParts))
 	for i, part := range rawParts {
-		pieces[i] = NewEntry(part, mustMember(t, part), mustZstdFrame(t, part))
+		pieces[i] = NewEntry(part, mustFragment(t, part), mustZstdFrame(t, part))
 	}
 
 	want := legacyETag(rawParts, sha256.Sum256(rawParts[1]))
@@ -161,7 +163,7 @@ func TestAssembleGzipRoundTrip(t *testing.T) {
 	}
 	pieces := make([]*Entry, len(rawParts))
 	for i, part := range rawParts {
-		pieces[i] = NewEntry(part, mustMember(t, part), nil)
+		pieces[i] = NewEntry(part, mustFragment(t, part), nil)
 	}
 
 	assembled, etag, err := Assemble(nil, Gzip, pieces...)
@@ -171,8 +173,8 @@ func TestAssembleGzipRoundTrip(t *testing.T) {
 	if !bytes.HasPrefix(assembled, []byte{0x1f, 0x8b}) {
 		t.Fatalf("assembled bytes do not start with the gzip magic: % x", assembled[:min(len(assembled), 2)])
 	}
-	if len(assembled) != len(pieces[0].Member)+len(pieces[1].Member)+len(pieces[2].Member) {
-		t.Fatal("gzip assembly is not the concatenation of members")
+	if len(assembled) != 10+len(pieces[0].Fragment)+len(pieces[1].Fragment)+len(pieces[2].Fragment)+5+8 {
+		t.Fatalf("gzip assembly length %d, want header+fragments+final block+trailer (%d)", len(assembled), 10+len(pieces[0].Fragment)+len(pieces[1].Fragment)+len(pieces[2].Fragment)+5+8)
 	}
 	want := bytes.Join(rawParts, nil)
 	zr, err := gzip.NewReader(bytes.NewReader(assembled))
@@ -187,39 +189,90 @@ func TestAssembleGzipRoundTrip(t *testing.T) {
 		t.Fatalf("decoded %d bytes, want %d", len(got), len(want))
 	}
 
-	// Exactly three members, each decoding to its own part (Multistream(false)
-	// walks one member at a time; default readers concatenate them).
+	// The trailer carries the CRC-32 and ISIZE of the whole raw
+	// concatenation, and every byte after the fragments belongs to this one
+	// member: the final empty stored block (01 00 00 ff ff) followed by the
+	// 8-byte trailer.
+	trailer := assembled[len(assembled)-8:]
+	if crc := binary.LittleEndian.Uint32(trailer[0:4]); crc != crc32.ChecksumIEEE(want) {
+		t.Fatalf("trailer CRC = %08x, want %08x", crc, crc32.ChecksumIEEE(want))
+	}
+	if size := binary.LittleEndian.Uint32(trailer[4:8]); size != uint32(len(want)) {
+		t.Fatalf("trailer ISIZE = %d, want %d", size, len(want))
+	}
+	final := assembled[10+len(pieces[0].Fragment)+len(pieces[1].Fragment)+len(pieces[2].Fragment) : len(assembled)-8]
+	if !bytes.Equal(final, []byte{0x01, 0x00, 0x00, 0xff, 0xff}) {
+		t.Fatalf("final block = % x, want the empty stored final block", final)
+	}
+	if etag != legacyETag(rawParts, sha256.Sum256(rawParts[1])) {
+		t.Fatal("gzip ETag is not the raw identity-record digest")
+	}
+}
+
+// TestAssembleGzipSingleMember is the browser-safety contract: the assembled
+// body must be exactly one gzip member. Chromium decodes only the first
+// member of a multi-member stream, so a body with trailing bytes after the
+// first member would render the shell without its messages. Multistream(false)
+// stops after the first member, and with a bytes.Reader the reader is left
+// exactly at the end of the stream, so zero remaining bytes is the
+// single-member proof.
+func TestAssembleGzipSingleMember(t *testing.T) {
+	rawParts := [][]byte{
+		[]byte("<!doctype html><html><body><main>"),
+		bytes.Repeat([]byte(`<div class="message">hello</div>`), 64),
+		[]byte("</main></body></html>"),
+	}
+	pieces := make([]*Entry, len(rawParts))
+	for i, part := range rawParts {
+		pieces[i] = NewEntry(part, mustFragment(t, part), nil)
+	}
+	assembled, _, err := Assemble(nil, Gzip, pieces...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	reader := bytes.NewReader(assembled)
+	zr, err := gzip.NewReader(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr.Multistream(false)
+	got, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("single-member read: %v", err)
+	}
+	if want := bytes.Join(rawParts, nil); !bytes.Equal(got, want) {
+		t.Fatalf("single-member decode = %d bytes, want %d", len(got), len(want))
+	}
+	if remaining := reader.Len(); remaining != 0 {
+		t.Fatalf("assembled body has %d trailing bytes after member 1: more than one gzip member", remaining)
+	}
+	if err := zr.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Negative control: a two-member stream must fail the same check, so the
+	// test above really does catch the multi-member wire form.
+	member0, _, err := Assemble(nil, Gzip, pieces[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	member1, _, err := Assemble(nil, Gzip, pieces[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := append(append([]byte{}, member0...), member1...)
+	reader = bytes.NewReader(control)
 	zr, err = gzip.NewReader(reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	zr.Multistream(false)
-	for i := 0; ; i++ {
-		member, err := io.ReadAll(zr)
-		if err != nil {
-			t.Fatalf("member %d read: %v", i, err)
-		}
-		if i >= len(rawParts) {
-			t.Fatalf("found more than %d members", len(rawParts))
-		}
-		if !bytes.Equal(member, rawParts[i]) {
-			t.Fatalf("member %d = %q, want %q", i, member, rawParts[i])
-		}
-		if err := zr.Reset(reader); err != nil {
-			if err == io.EOF {
-				if i != len(rawParts)-1 {
-					t.Fatalf("assembled member count = %d, want %d", i+1, len(rawParts))
-				}
-				break
-			}
-			t.Fatalf("member %d reset: %v", i, err)
-		}
-		// Reset restores Multistream to true; re-pin one member at a time.
-		zr.Multistream(false)
+	if _, err := io.ReadAll(zr); err != nil {
+		t.Fatal(err)
 	}
-	if etag != legacyETag(rawParts, sha256.Sum256(rawParts[1])) {
-		t.Fatal("gzip ETag is not the raw identity-record digest")
+	if remaining := reader.Len(); remaining == 0 {
+		t.Fatal("negative control failed: a two-member stream left zero bytes, the check is not sensitive")
 	}
 }
 
@@ -227,7 +280,7 @@ func TestAssembleIdentityConcatenatesRaw(t *testing.T) {
 	raw := [][]byte{[]byte("one;"), nil, []byte("three")}
 	pieces := make([]*Entry, len(raw))
 	for i, part := range raw {
-		pieces[i] = NewEntry(part, mustMember(t, part), nil)
+		pieces[i] = NewEntry(part, mustFragment(t, part), nil)
 	}
 	got, _, err := Assemble(nil, Identity, pieces...)
 	if err != nil {
@@ -242,8 +295,8 @@ func TestAssembleIdentityConcatenatesRaw(t *testing.T) {
 // kept, and callers reuse a response buffer with dst[:0].
 func TestAssembleAppendsToDst(t *testing.T) {
 	pieces := []*Entry{
-		NewEntry([]byte("one"), mustMember(t, []byte("one")), nil),
-		NewEntry([]byte("two"), mustMember(t, []byte("two")), nil),
+		NewEntry([]byte("one"), mustFragment(t, []byte("one")), nil),
+		NewEntry([]byte("two"), mustFragment(t, []byte("two")), nil),
 	}
 	prefix := make([]byte, 0, 64)
 	prefix = append(prefix, "prefix:"...)
@@ -285,7 +338,7 @@ func TestAssembleEmptyIsError(t *testing.T) {
 }
 
 func TestAssembleNilPieceIsError(t *testing.T) {
-	good := NewEntry([]byte("x"), mustMember(t, []byte("x")), nil)
+	good := NewEntry([]byte("x"), mustFragment(t, []byte("x")), nil)
 	out, etag, err := Assemble([]byte("keep"), Identity, good, nil)
 	if err == nil {
 		t.Fatal("Assemble with a nil piece succeeded, want error")
@@ -304,7 +357,7 @@ func TestAssembleNilPieceIsError(t *testing.T) {
 // renders the piece; an empty raw with a nil member is a no-op under both.
 func TestAssembleGzipRejectsRawOnlyPiece(t *testing.T) {
 	rawOnly := NewEntry([]byte("raw only"), nil, nil)
-	tail := NewEntry([]byte("tail"), mustMember(t, []byte("tail")), nil)
+	tail := NewEntry([]byte("tail"), mustFragment(t, []byte("tail")), nil)
 
 	dst := []byte("keep")
 	out, etag, err := Assemble(dst, Gzip, rawOnly, tail)
@@ -331,8 +384,14 @@ func TestAssembleGzipRejectsRawOnlyPiece(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assemble(Gzip) with an empty piece: %v", err)
 	}
-	if !bytes.Equal(gzipOut, tail.Member) {
-		t.Fatal("an empty piece changed the gzip assembly")
+	// The empty piece contributes no bytes; the member decodes to "tail" and
+	// is still exactly one member.
+	decoded, err := decodeMember(gzipOut)
+	if err != nil {
+		t.Fatalf("Assemble(Gzip, empty, tail) does not decode: %v", err)
+	}
+	if want := []byte("tail"); !bytes.Equal(decoded, want) {
+		t.Fatalf("Assemble(Gzip, empty, tail) = %q, want %q", decoded, want)
 	}
 	identityOut, _, err := Assemble(nil, Identity, empty, tail)
 	if err != nil {
@@ -340,6 +399,83 @@ func TestAssembleGzipRejectsRawOnlyPiece(t *testing.T) {
 	}
 	if !bytes.Equal(identityOut, []byte("tail")) {
 		t.Fatalf("Identity = %q, want %q", identityOut, "tail")
+	}
+}
+
+// TestCrc32Combine pins the trailer's CRC combination against crc32.Update
+// over random data and random partitions, plus the sequential chain form the
+// assembly uses and the fixed edge lengths (powers of two, byte boundaries).
+// The assembly must not re-scan raw bytes, so the combine is the only source
+// of the whole-body CRC.
+func TestCrc32Combine(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	crc := func(data []byte) uint32 { return crc32.ChecksumIEEE(data) }
+	combine := func(crc1, crc2 uint32, len2 int) uint32 {
+		return crc32Combine(crc1, crc2, len2)
+	}
+
+	for iter := 0; iter < 2000; iter++ {
+		n := rng.Intn(64 << 10)
+		cut := rng.Intn(n + 1)
+		data := make([]byte, n)
+		rng.Read(data)
+		got := combine(crc(data[:cut]), crc(data[cut:]), n-cut)
+		if want := crc(data); got != want {
+			t.Fatalf("partition n=%d cut=%d: combine = %08x, want %08x", n, cut, got, want)
+		}
+	}
+	// The assembly chain: combine the running CRC with each piece's CRC and
+	// length in order.
+	for iter := 0; iter < 500; iter++ {
+		var data []byte
+		got := uint32(0)
+		for p := 0; p < 1+rng.Intn(6); p++ {
+			chunk := make([]byte, rng.Intn(5000))
+			rng.Read(chunk)
+			got = combine(got, crc(chunk), len(chunk))
+			data = append(data, chunk...)
+		}
+		if want := crc(data); got != want {
+			t.Fatalf("chain iter=%d: combine = %08x, want %08x", iter, got, want)
+		}
+	}
+	for _, n := range []int{0, 1, 2, 3, 7, 8, 15, 16, 31, 32, 33, 128, 255, 256, 257, 1024, 65535, 65536, 1 << 20, 1<<20 + 7, 1 << 24} {
+		data := make([]byte, n)
+		rng.Read(data)
+		for _, cut := range []int{0, 1, n / 2, n - 1, n} {
+			if cut < 0 || cut > n {
+				continue
+			}
+			got := combine(crc(data[:cut]), crc(data[cut:]), n-cut)
+			if want := crc(data); got != want {
+				t.Fatalf("edge n=%d cut=%d: combine = %08x, want %08x", n, cut, got, want)
+			}
+		}
+	}
+	// The fill-time zero-operator path the assembly actually uses: combining
+	// with the stored op must equal the len-based combine for the same
+	// lengths (a full x2nmodp per piece at assembly would be ~8x slower, so
+	// NewEntry stores ZerosOp per entry).
+	for iter := 0; iter < 1000; iter++ {
+		n := rng.Intn(1 << 18)
+		cut := rng.Intn(n + 1)
+		data := make([]byte, n)
+		rng.Read(data)
+		op := ZerosOp(n - cut)
+		got := multmodp(op, crc(data[:cut])) ^ crc(data[cut:])
+		if want := crc(data); got != want {
+			t.Fatalf("op path n=%d cut=%d: combine = %08x, want %08x", n, cut, got, want)
+		}
+		if entry := NewEntry(data, nil, nil); entry.ZerosOp != ZerosOp(len(data)) {
+			t.Fatalf("NewEntry ZerosOp = %08x, want %08x", entry.ZerosOp, ZerosOp(len(data)))
+		}
+	}
+	// The degenerate cases the assembly relies on for empty pieces.
+	if got := combine(0x12345678, 0x9abcdef0, 0); got != 0x12345678 {
+		t.Fatalf("combine(len2=0) = %08x, want crc1", got)
+	}
+	if got := combine(0, 0, 0); got != 0 {
+		t.Fatalf("combine(0,0,0) = %08x, want 0", got)
 	}
 }
 
@@ -398,7 +534,7 @@ func TestETagStableAcrossDynamicPieces(t *testing.T) {
 	keys := []string{"room/1/shell/v7", "room/1/messages/v42", "room/1/tail/v7"}
 	cached := make([]*Entry, len(raws))
 	for i, raw := range raws {
-		entry, ok := cache.Put(keys[i], raw, mustMember(t, raw))
+		entry, ok := cache.Put(keys[i], raw, mustFragment(t, raw))
 		if !ok {
 			t.Fatalf("Put(%s) rejected", keys[i])
 		}
@@ -407,7 +543,7 @@ func TestETagStableAcrossDynamicPieces(t *testing.T) {
 
 	loadedAt := func(stamp string) *Entry {
 		raw := []byte(`<span data-loaded-at="` + stamp + `"></span>`)
-		return NewEntry(raw, mustMember(t, raw), nil)
+		return NewEntry(raw, mustFragment(t, raw), nil)
 	}
 	scene := func(dynamic *Entry) []*Entry {
 		return []*Entry{cached[0], dynamic, cached[1], cached[2]}
@@ -451,7 +587,7 @@ func TestETagStableAcrossDynamicPieces(t *testing.T) {
 }
 
 func TestAssembleUnknownEncodingIsError(t *testing.T) {
-	good := NewEntry([]byte("x"), mustMember(t, []byte("x")), nil)
+	good := NewEntry([]byte("x"), mustFragment(t, []byte("x")), nil)
 	if _, _, err := Assemble(nil, Encoding(99), good); err == nil {
 		t.Fatal("Assemble with unknown encoding succeeded, want error")
 	}
@@ -467,7 +603,7 @@ func TestAssembleNinePieces(t *testing.T) {
 		if i != 4 {
 			raw = []byte(fmt.Sprintf("part-%d;", i))
 		}
-		pieces[i] = NewEntry(raw, mustMember(t, raw), nil)
+		pieces[i] = NewEntry(raw, mustFragment(t, raw), nil)
 		want = append(want, raw...)
 	}
 	out, etag, err := Assemble(nil, Identity, pieces...)
@@ -500,7 +636,7 @@ func TestAssembleGzipFromCache(t *testing.T) {
 	keys := []string{"shell/v1", "messages/v2", "tail/v1"}
 	pieces := make([]*Entry, len(raws))
 	for i := range raws {
-		entry, ok := cache.Put(keys[i], raws[i], mustMember(t, raws[i]))
+		entry, ok := cache.Put(keys[i], raws[i], mustFragment(t, raws[i]))
 		if !ok {
 			t.Fatalf("Put(%s) rejected", keys[i])
 		}

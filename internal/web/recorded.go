@@ -19,8 +19,9 @@ import (
 // the cached message list without copying it through template/fmt/page buffers.
 
 // recordedPayload is a rendered message list in whichever representation the
-// active path uses: one immutable piece (raw+gzip member+digest) when
-// CAMPFIRE_RECORDED_PIECES is on, or the legacy HTML fragment when it is off.
+// active path uses: one immutable piece (raw+deflate fragment+zstd frame+
+// digest) when CAMPFIRE_RECORDED_PIECES is on, or the legacy HTML fragment
+// when it is off.
 type recordedPayload struct {
 	piece    *piececache.Entry
 	fragment fragmentEntry
@@ -79,14 +80,14 @@ func (s *Server) recordedMessageList(ctx context.Context, messages []database.Me
 		body.WriteString(string(view.Fragment))
 	}
 	raw := []byte(body.String())
-	var member, zstdMember []byte
+	var fragment, zstdMember []byte
 	if needGzip || s.pieces.Enabled() {
-		member = compressGzip(raw)
+		fragment = compressFragment(raw)
 	}
 	if s.zstdPieces && (needZstd || s.pieces.Enabled()) {
 		zstdMember = compressZstd(raw)
 	}
-	entry, _ := s.pieces.PutDigestZstd(identity, raw, member, zstdMember)
+	entry, _ := s.pieces.PutDigestZstd(identity, raw, fragment, zstdMember)
 	return recordedPayload{piece: entry}, nil
 }
 
