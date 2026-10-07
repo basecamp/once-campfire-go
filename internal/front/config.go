@@ -14,6 +14,13 @@ type Config struct {
 	TargetPort, HTTPPort, HTTPSPort                           int
 	CacheSize, MaxCacheItemSize, MaxRequestBody               int64
 	Gzip, DisableGzipOnAuth, H2C, ForwardHeaders, LogRequests bool
+	// AccessLog receives one access-log record (method, path, duration) after
+	// each request when LogRequests is on; nil keeps the slog default line.
+	// cmd/campfire wires it to the async access-log pipeline (a bounded queue
+	// drained and formatted by a dedicated goroutine; see
+	// cmd/campfire/accesslog.go), so neither the formatting lock nor the log
+	// pipe write lands on the request path in production.
+	AccessLog func(method, path string, duration time.Duration)
 	// ServerLoop selects the owned server loop (internal/fastserve) for the
 	// internal target listener and, when TLS is not configured, the public
 	// plain-HTTP listener instead of net/http's conn loop. It is on by
