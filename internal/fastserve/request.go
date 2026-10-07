@@ -68,7 +68,7 @@ func (c *conn) newRequest(parsed *http1.Request, br *bufio.Reader, ctx context.C
 	header := make(http.Header, len(parsed.Headers))
 	for i := range parsed.Headers {
 		h := &parsed.Headers[i]
-		key := textproto.CanonicalMIMEHeaderKey(string(h.Name))
+		key := canonicalHeaderKey(h.Name)
 		header[key] = append(header[key], string(h.Value))
 	}
 	if len(header["Host"]) > 1 {
@@ -112,6 +112,126 @@ func (c *conn) newRequest(parsed *http1.Request, br *bufio.Reader, ctx context.C
 
 func hasPrefix(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
+// canonicalHeaderKey returns the canonical spelling of a request header name
+// without textproto's per-byte validation pass and allocation for the names
+// the application actually sees (ENGINE-62: the public listener's hot paths
+// carry the same dozen names). eqFold compares ASCII case-insensitively (the
+// parser guarantees token bytes); anything unknown falls back to
+// textproto.CanonicalMIMEHeaderKey, whose output is identical.
+func canonicalHeaderKey(name []byte) string {
+	switch len(name) {
+	case 4:
+		if eqFold(name, "host") {
+			return "Host"
+		}
+		if eqFold(name, "date") {
+			return "Date"
+		}
+	case 5:
+		if eqFold(name, "range") {
+			return "Range"
+		}
+	case 6:
+		if eqFold(name, "accept") {
+			return "Accept"
+		}
+		if eqFold(name, "cookie") {
+			return "Cookie"
+		}
+		if eqFold(name, "expect") {
+			return "Expect"
+		}
+		if eqFold(name, "origin") {
+			return "Origin"
+		}
+		if eqFold(name, "pragma") {
+			return "Pragma"
+		}
+	case 7:
+		if eqFold(name, "referer") {
+			return "Referer"
+		}
+		if eqFold(name, "upgrade") {
+			return "Upgrade"
+		}
+	case 9:
+		if eqFold(name, "forwarded") {
+			return "Forwarded"
+		}
+	case 10:
+		if eqFold(name, "connection") {
+			return "Connection"
+		}
+		if eqFold(name, "user-agent") {
+			return "User-Agent"
+		}
+	case 12:
+		if eqFold(name, "content-type") {
+			return "Content-Type"
+		}
+		if eqFold(name, "x-csrf-token") {
+			return "X-Csrf-Token" // textproto's canonical spelling
+		}
+	case 13:
+		if eqFold(name, "cache-control") {
+			return "Cache-Control"
+		}
+		if eqFold(name, "authorization") {
+			return "Authorization"
+		}
+		if eqFold(name, "if-none-match") {
+			return "If-None-Match"
+		}
+	case 14:
+		if eqFold(name, "content-length") {
+			return "Content-Length"
+		}
+	case 15:
+		if eqFold(name, "accept-encoding") {
+			return "Accept-Encoding"
+		}
+		if eqFold(name, "x-forwarded-for") {
+			return "X-Forwarded-For"
+		}
+		if eqFold(name, "x-request-start") {
+			return "X-Request-Start"
+		}
+	case 16:
+		if eqFold(name, "x-forwarded-host") {
+			return "X-Forwarded-Host"
+		}
+		if eqFold(name, "x-forwarded-port") {
+			return "X-Forwarded-Port"
+		}
+	case 17:
+		if eqFold(name, "transfer-encoding") {
+			return "Transfer-Encoding"
+		}
+		if eqFold(name, "if-modified-since") {
+			return "If-Modified-Since"
+		}
+		if eqFold(name, "x-forwarded-proto") {
+			return "X-Forwarded-Proto"
+		}
+	}
+	return textproto.CanonicalMIMEHeaderKey(string(name))
+}
+
+// eqFold reports whether b equals lower, ASCII case-insensitively, assuming
+// both are the same length and b contains only header token bytes.
+func eqFold(b []byte, lower string) bool {
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != lower[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // continueReader sends the 100-continue interim response before the first

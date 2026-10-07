@@ -121,7 +121,9 @@ func (c *conn) serve() {
 			if _, err := c.br.Peek(4); err != nil {
 				return // silent close: timeout, EOF, or reset
 			}
-			c.rwc.SetReadDeadline(time.Time{})
+			// The header deadline set below replaces the idle deadline
+			// immediately; nothing reads between the two sets, so net/http's
+			// intermediate clear was a dead syscall (ENGINE-62).
 		}
 		first = false
 		// RFC 7230 tolerance for old buggy clients: up to four CR/LF bytes

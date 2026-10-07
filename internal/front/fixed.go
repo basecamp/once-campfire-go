@@ -75,7 +75,12 @@ func fixedEntry(capture *recordResponse) *cacheEntry {
 			return nil
 		}
 	}
-	return &cacheEntry{header: capture.header, body: bytes.Clone(capture.body.Bytes()), status: capture.status, size: int64(len(capture.body.Bytes()) + 512)}
+	body := bytes.Clone(capture.body.Bytes())
+	entry := &cacheEntry{header: capture.header, body: body, status: capture.status, size: int64(len(body) + 512)}
+	// The fixed replay keeps its captured X-Cache value (the fill's miss
+	// marker), so no substitution is applied.
+	entry.recorded = newRecordedResponse(capture.wire(), capture.status, body, "")
+	return entry
 }
 
 // captureSink absorbs a synthesized capture run: its own header map and body,

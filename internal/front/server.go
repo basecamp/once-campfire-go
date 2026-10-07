@@ -29,6 +29,22 @@ func (c Config) server(address string, handler http.Handler) *http.Server {
 	protocols.SetUnencryptedHTTP2(c.H2C)
 	return &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: headerTimeout, ReadTimeout: c.ReadTimeout, WriteTimeout: c.WriteTimeout, IdleTimeout: c.IdleTimeout, MaxHeaderBytes: 64 << 10, Protocols: protocols}
 }
+
+// newLoop builds the owned server loop for one listener, mirroring the
+// net/http server it replaces: the same handler, the same timing envelope, the
+// same MaxHeaderBytes and, for the upgrade/h2c handoff server, the same
+// protocol configuration.
+func newLoop(server *http.Server, maxBody int64) *fastserve.Server {
+	loop := fastserve.New(server.Handler)
+	loop.ReadTimeout = server.ReadTimeout
+	loop.ReadHeaderTimeout = server.ReadHeaderTimeout
+	loop.WriteTimeout = server.WriteTimeout
+	loop.IdleTimeout = server.IdleTimeout
+	loop.MaxHeaderBytes = int64(server.MaxHeaderBytes)
+	loop.MaxBodySize = maxBody
+	loop.Protocols = server.Protocols
+	return loop
+}
 func bodyLimit(next http.Handler, limit int64) http.Handler {
 	if limit <= 0 {
 		return next
@@ -124,21 +140,24 @@ func Serve(ctx context.Context, c Config, app http.Handler) error {
 			// The owned loop takes over the internal listener. It gets the
 			// same timing envelope, the same handler, and the same protocol
 			// configuration for its upgrade/h2c handoff server.
-			loop := fastserve.New(app)
-			loop.ReadTimeout = target.ReadTimeout
-			loop.ReadHeaderTimeout = target.ReadHeaderTimeout
-			loop.WriteTimeout = target.WriteTimeout
-			loop.IdleTimeout = target.IdleTimeout
-			loop.MaxHeaderBytes = int64(target.MaxHeaderBytes)
-			loop.MaxBodySize = c.MaxRequestBody
-			loop.Protocols = target.Protocols
-			loops[len(loops)-1] = loop
+			loops[len(loops)-1] = newLoop(target, c.MaxRequestBody)
 			slog.Info("internal listener on fastserve loop", "address", listeners[len(listeners)-1].Addr())
 		}
 	}
 	if len(c.Domains) == 0 {
-		if err := add(c.server(":"+strconv.Itoa(c.HTTPPort), public)); err != nil {
+		publicServer := c.server(":"+strconv.Itoa(c.HTTPPort), public)
+		if err := add(publicServer); err != nil {
 			return err
+		}
+		if c.ServerLoop {
+			// Plain HTTP public listener: the owned loop serves the public
+			// chain (forward, PublicCompression, the response cache and the
+			// precomposed replay lane) directly. Upgrade-headed connections
+			// (WebCable) and h2c prefaces are handed off to the same net/http
+			// handoff server the internal listener uses, so hijacking is
+			// unchanged. TLS/ACME listeners below always stay on net/http.
+			loops[len(loops)-1] = newLoop(publicServer, c.MaxRequestBody)
+			slog.Info("public listener on fastserve loop", "address", listeners[len(listeners)-1].Addr())
 		}
 	} else {
 		manager := &autocert.Manager{Prompt: autocert.AcceptTOS, Cache: autocert.DirCache(c.StoragePath), HostPolicy: autocert.HostWhitelist(c.Domains...), Client: &acme.Client{DirectoryURL: c.ACMEDirectory}}

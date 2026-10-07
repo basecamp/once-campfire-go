@@ -46,6 +46,12 @@ func bodyAllowedForStatus(status int) bool {
 	return true
 }
 
+// BodyAllowedForStatus reports whether the status admits a response body, the
+// way net/http's bodyAllowedForStatus does. The front cache's recorded-replay
+// builder uses it to refuse a precomposed entry whose body the map path would
+// have suppressed.
+func BodyAllowedForStatus(status int) bool { return bodyAllowedForStatus(status) }
+
 // suppressedHeaders mirrors net/http's transfer.go: 304 drops the entity
 // headers; 204 (and every other bodyless status) drops CL and TE.
 func suppressedHeaders(status int) []string {
@@ -335,9 +341,10 @@ func (w *response) WritePrecomposed(status int, head []byte, body [][]byte) erro
 	h = append(h, c.nowDate(time.Now())...)
 	h = append(h, '\r', '\n')
 	// Mirror the map path's close decision: a request that asked for
-	// Connection: close (or wants the connection closed) gets the close
-	// header in the same extras position (after Date).
-	closeConn := w.wantsClose || w.req.Header.Get("Connection") == "close"
+	// Connection: close (or wants the connection closed), or a response
+	// served while Shutdown is in progress, gets the close header in the
+	// same extras position (after Date).
+	closeConn := w.wantsClose || w.req.Header.Get("Connection") == "close" || c.srv.shuttingDown()
 	if closeConn {
 		w.closeAfterReply = true
 		h = append(h, "Connection: close\r\n"...)
@@ -353,6 +360,86 @@ func (w *response) WritePrecomposed(status int, head []byte, body [][]byte) erro
 	}
 	err := c.flushOut()
 	// The emission consumed h; keep its backing array for the next response.
+	c.headBuf = h[:0]
+	return err
+}
+
+// WriteRecorded emits a fully recorded response: head is the header block
+// rendered by AppendHeaderLines (sorted header lines; no status line, Date or
+// framing extras) and body is the complete recorded body. The receiver makes
+// the same framing decisions the single-write map path makes for a completed
+// handler response:
+//
+//   - HEAD and bodyless statuses emit the head only, with no Content-Length
+//     and no Transfer-Encoding (net/http's auto-Content-Length gate);
+//   - a body of at most bufferBeforeChunkingSize is emitted once with an
+//     automatic Content-Length;
+//   - a larger body is framed as one chunk plus the terminating zero chunk
+//     (the front cache only records HTTP/1.1 responses).
+//
+// The head, Date and body are emitted as one writev. The close decision
+// mirrors the map path: the request's close flag, a Connection: close request
+// header, or an in-progress Shutdown append Connection: close. The caller must
+// only use this for requests with no unread body: the map path's drain and
+// 100-continue rules do not run here (the front cache lane restricts the
+// recorded path to ContentLength 0 with no Transfer-Encoding). The head block
+// must not carry Date, Content-Length, Transfer-Encoding, Trailer or
+// Connection lines — the front's builder refuses such entries and falls back
+// to the map path.
+func (w *response) WriteRecorded(status int, head []byte, body []byte) error {
+	if w.wroteHeader {
+		return nil
+	}
+	w.wroteHeader = true
+	w.cw.wroteHeader = true
+	w.status = status
+	c := w.c
+	h := c.headBuf[:0]
+	h = append(h, w.statusLine(status)...)
+	h = append(h, head...)
+	h = append(h, "Date: "...)
+	h = append(h, c.nowDate(time.Now())...)
+	h = append(h, '\r', '\n')
+	headOnly := w.req.Method == "HEAD" || !bodyAllowedForStatus(status)
+	chunked := false
+	if !headOnly {
+		if len(body) <= bufferBeforeChunkingSize {
+			w.contentLength = int64(len(body))
+			w.written = int64(len(body))
+			h = append(h, "Content-Length: "...)
+			h = strconv.AppendInt(h, int64(len(body)), 10)
+			h = append(h, '\r', '\n')
+		} else {
+			chunked = true
+			w.contentLength = -1
+			w.written = int64(len(body))
+		}
+	}
+	closeConn := w.wantsClose || w.req.Header.Get("Connection") == "close" || c.srv.shuttingDown()
+	if closeConn {
+		w.closeAfterReply = true
+		h = append(h, "Connection: close\r\n"...)
+	}
+	if chunked {
+		h = append(h, "Transfer-Encoding: chunked\r\n"...)
+	}
+	h = append(h, '\r', '\n')
+	c.emit(h)
+	if !headOnly {
+		if chunked {
+			chunk := strconv.AppendInt(c.chunkScratch[:0], int64(len(body)), 16)
+			c.emit(append(chunk, '\r', '\n'))
+			c.emit(body)
+			c.emit(crlf)
+			c.emit(zeroChunk)
+		} else if len(body) > 0 {
+			c.emit(body)
+		}
+	}
+	err := c.flushOut()
+	if err != nil {
+		w.brokeConn = true
+	}
 	c.headBuf = h[:0]
 	return err
 }
@@ -702,30 +789,7 @@ func (w *response) shouldKeepAlive() bool {
 func (c *conn) composeHead(status []byte, h http.Header, exclude map[string]bool, set *eheader) []byte {
 	head := c.headBuf[:0]
 	head = append(head, status...)
-	keys := c.sortKeys[:0]
-	for k := range h {
-		if exclude[k] {
-			continue
-		}
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		if !validHeaderName(k) {
-			continue // net/http drops invalid names silently
-		}
-		for _, v := range h[k] {
-			head = append(head, k...)
-			head = append(head, ':', ' ')
-			// Values are written as strings: append([]{byte}, string...)
-			// copies in place without an intermediate []byte allocation,
-			// and the common no-transform case of the sanitizer returns
-			// its input unchanged (net/http's writeSubset writes the
-			// string the same way).
-			head = append(head, sanitizeHeaderValue(v)...)
-			head = append(head, '\r', '\n')
-		}
-	}
+	head, keys := appendHeaderLines(head, c.sortKeys[:0], h, exclude)
 	// extraHeader order: Date, Content-Length, Content-Type, Connection,
 	// Transfer-Encoding.
 	if set != nil {
@@ -758,6 +822,53 @@ func (c *conn) composeHead(status []byte, h http.Header, exclude map[string]bool
 	c.headBuf = head[:0]
 	c.sortKeys = keys[:0]
 	return head
+}
+
+// appendHeaderLines appends h's header lines into dst in the exact order and
+// spelling composeHead writes: keys sorted (StringOrder), invalid field names
+// dropped silently, one line per value, values sanitized the way net/http's
+// writeSubset does. keys is caller scratch, returned reset for reuse; exclude
+// drops keys entirely (the map path's delHeader). No status line, Date or
+// other server extras are included.
+func appendHeaderLines(dst []byte, keys []string, h http.Header, exclude map[string]bool) ([]byte, []string) {
+	keys = keys[:0]
+	for k := range h {
+		if exclude[k] {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if !validHeaderName(k) {
+			continue // net/http drops invalid names silently
+		}
+		for _, v := range h[k] {
+			dst = append(dst, k...)
+			dst = append(dst, ':', ' ')
+			// Values are written as strings: append([]{byte}, string...)
+			// copies in place without an intermediate []byte allocation,
+			// and the common no-transform case of the sanitizer returns
+			// its input unchanged (net/http's writeSubset writes the
+			// string the same way).
+			dst = append(dst, sanitizeHeaderValue(v)...)
+			dst = append(dst, '\r', '\n')
+		}
+	}
+	return dst, keys
+}
+
+// AppendHeaderLines renders h into dst exactly as the wire would (the
+// composeHead line pass, minus the status line and server extras) and returns
+// the extended slice. The front cache uses it to build the head block of a
+// recorded replay once per cache entry; the block is handed back through
+// response.WriteRecorded, which appends the status line, Date and the framing
+// extras. Rendering is done at entry-creation time, so the per-request replay
+// path does no map, sort or sanitize work.
+func AppendHeaderLines(dst []byte, h http.Header, exclude map[string]bool) []byte {
+	keys := make([]string, 0, len(h))
+	dst, _ = appendHeaderLines(dst, keys, h, exclude)
+	return dst
 }
 
 // sanitizeHeaderValue mirrors net/http's headerNewlineToSpace and
