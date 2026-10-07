@@ -55,9 +55,7 @@ func (f *authzFixture) join(t testing.TB, user database.User, roomID int64) (*cl
 	identifier := `{"channel":"RoomMessagesChannel","room_id":` + strconv.FormatInt(roomID, 10) + `}`
 	sub := subscription{Channel: "RoomMessagesChannel", Room: roomID}
 	c := simulateClient(t, user, token, identifier, sub)
-	f.hub.mu.Lock()
-	f.hub.clients[c] = struct{}{}
-	f.hub.mu.Unlock()
+	f.hub.register(c)
 	return c, token
 }
 
@@ -65,12 +63,7 @@ func (f *authzFixture) join(t testing.TB, user database.User, roomID int64) (*cl
 // expires (nil then). Use it only where a delivery is guaranteed.
 func receive(t testing.TB, ctx context.Context, c *client) *websocket.PreparedMessage {
 	t.Helper()
-	select {
-	case f := <-c.out:
-		return f
-	case <-ctx.Done():
-		return nil
-	}
+	return testRecv(ctx, c)
 }
 
 // expectNone asserts the client's queue is empty right now: nothing is
@@ -78,10 +71,8 @@ func receive(t testing.TB, ctx context.Context, c *client) *websocket.PreparedMe
 // A revoked client must never have a frame present.
 func expectNone(t testing.TB, c *client) {
 	t.Helper()
-	select {
-	case f := <-c.out:
+	if f := testGrab(t, c); f != nil {
 		t.Fatalf("unexpected delivery of %q", f.Data())
-	default:
 	}
 }
 
@@ -91,10 +82,8 @@ func expectNone(t testing.TB, c *client) {
 func expectDelivery(t testing.TB, ctx context.Context, c *client, markup string, want bool) {
 	t.Helper()
 	if !want {
-		select {
-		case f := <-c.out:
+		if f := testGrab(t, c); f != nil {
 			t.Fatalf("unexpected delivery of %q: %q", markup, f.Data())
-		default:
 		}
 		return
 	}
@@ -270,7 +259,6 @@ func TestConcurrentPublishEveryRecipient(t *testing.T) {
 	identifier := `{"channel":"RoomMessagesChannel","room_id":` + strconv.FormatInt(roomID, 10) + `}`
 	sub := subscription{Channel: "RoomMessagesChannel", Room: roomID}
 	var clients []*client
-	hub.mu.Lock()
 	for i := 0; i < clientsN; i++ {
 		token, err := db.StartSession(ctx, user.ID, "concurrent", "127.0.0.1")
 		if err != nil {
@@ -278,9 +266,8 @@ func TestConcurrentPublishEveryRecipient(t *testing.T) {
 		}
 		c := simulateClient(t, user, token, identifier, sub)
 		clients = append(clients, c)
-		hub.clients[c] = struct{}{}
+		hub.register(c)
 	}
-	hub.mu.Unlock()
 	payloads := make([]string, publishers*perPublisher)
 	var wg sync.WaitGroup
 	for p := 0; p < publishers; p++ {
@@ -300,7 +287,7 @@ func TestConcurrentPublishEveryRecipient(t *testing.T) {
 		for range payloads {
 			f := receive(t, ctx, c)
 			if f == nil {
-				t.Fatalf("client %p missing deliveries: got %d of %d (queue len %d)", c, len(seen), len(payloads), len(c.out))
+				t.Fatalf("client %p missing deliveries: got %d of %d (queue len %d)", c, len(seen), len(payloads), testQueueLen(c))
 			}
 			var frame struct{ Message string }
 			if err := json.Unmarshal(f.Data(), &frame); err != nil {
@@ -342,15 +329,7 @@ func stormClients(members []stormMember) []*client {
 
 func drainAll(clients []*client) {
 	for _, c := range clients {
-	drained:
-		for {
-			select {
-			case <-c.out:
-				continue
-			default:
-				break drained
-			}
-		}
+		c.q.clear()
 	}
 }
 
@@ -386,9 +365,7 @@ func TestConcurrentPublishWithRevocation(t *testing.T) {
 		}
 		c := simulateClient(t, m, token, identifier, sub)
 		members = append(members, stormMember{c, m})
-		hub.mu.Lock()
-		hub.clients[c] = struct{}{}
-		hub.mu.Unlock()
+		hub.register(c)
 	}
 	total := publishers * perPublisher
 	payloads := make(map[string]bool, total)
@@ -406,14 +383,18 @@ func TestConcurrentPublishWithRevocation(t *testing.T) {
 		go func(c *client) {
 			defer drainWG.Done()
 			for {
-				select {
-				case f := <-c.out:
-					var frame struct{ Message string }
-					if err := json.Unmarshal(f.Data(), &frame); err != nil || !payloads[frame.Message] {
-						t.Errorf("client %p received non-publication frame %q", c, f.Data())
+				f := testRecvNow(c)
+				if f == nil {
+					select {
+					case <-stormOver:
+						return
+					case <-time.After(time.Millisecond):
+						continue
 					}
-				case <-stormOver:
-					return
+				}
+				var frame struct{ Message string }
+				if err := json.Unmarshal(f.Data(), &frame); err != nil || !payloads[frame.Message] {
+					t.Errorf("client %p received non-publication frame %q", c, f.Data())
 				}
 			}
 		}(m.client)

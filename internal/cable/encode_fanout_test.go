@@ -73,23 +73,16 @@ func TestPublishFrameBytesMatchLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hub.mu.Lock()
+	nastyIdent := `{"channel":"RoomMessagesChannel","signed_stream_name":"a\b"<c>&d` + "\u2028" + `e"}`
 	// Identifier containing every escapable character: identifiers are
 	// client-supplied strings, so the frame encoder must escape them exactly
 	// like the old struct marshal did.
-	nastyIdent := `{"channel":"RoomMessagesChannel","signed_stream_name":"a\b"<c>&d` + "\u2028" + `e"}`
 	c := simulateClient(t, user, token, nastyIdent, subscription{Channel: "RoomMessagesChannel", Room: roomID})
-	hub.clients[c] = struct{}{}
-	hub.mu.Unlock()
+	hub.register(c)
 
 	for i, markup := range escapeCorpus {
 		hub.Publish(ctx, roomID, markup)
-		var f *websocket.PreparedMessage
-		select {
-		case f = <-c.out:
-		case <-time.After(10 * time.Second):
-			t.Fatalf("corpus %d: no delivery", i)
-		}
+		f := testRecvTimeout(t, c)
 		if !bytes.Equal(f.Data(), legacyFrameBytes(nastyIdent, markup)) {
 			t.Fatalf("corpus %d frame bytes differ:\n got %q\nwant %q", i, f.Data(), legacyFrameBytes(nastyIdent, markup))
 		}
@@ -99,14 +92,9 @@ func TestPublishFrameBytesMatchLegacy(t *testing.T) {
 	msg := map[string]any{"action": "append", "target": "shared_rooms", "markup": "<div>&amp;</div>", "n": 7}
 	ident := `{"channel":"Turbo::StreamsChannel","signed_stream_name":"abc"}`
 	c2 := simulateClient(t, user, token, ident, subscription{Stream: "rooms"})
-	hub.clients[c2] = struct{}{}
+	hub.register(c2)
 	hub.PublishStream(ctx, "rooms", msg)
-	var f *websocket.PreparedMessage
-	select {
-	case f = <-c2.out:
-	case <-time.After(10 * time.Second):
-		t.Fatal("stream publish: no delivery")
-	}
+	f := testRecvTimeout(t, c2)
 	if !bytes.Equal(f.Data(), legacyFrameBytes(ident, msg)) {
 		t.Fatalf("map-payload frame bytes differ:\n got %q\nwant %q", f.Data(), legacyFrameBytes(ident, msg))
 	}
@@ -124,50 +112,34 @@ func TestPublishSharedFramesAcrossSubscribersAndPublishes(t *testing.T) {
 		t.Fatal(err)
 	}
 	identifier := `{"channel":"RoomMessagesChannel","room_id":` + strconv.FormatInt(roomID, 10) + `}`
-	hub.mu.Lock()
 	var clients []*client
 	for i := 0; i < 5; i++ {
 		c := simulateClient(t, user, token, identifier, subscription{Channel: "RoomMessagesChannel", Room: roomID})
 		clients = append(clients, c)
-		hub.clients[c] = struct{}{}
+		hub.register(c)
 	}
-	hub.mu.Unlock()
 
 	markup := "<turbo-stream action=\"append\"><template>one</template></turbo-stream>"
 	hub.Publish(ctx, roomID, markup)
 	var first *websocket.PreparedMessage
 	for _, c := range clients {
-		select {
-		case f := <-c.out:
-			if first == nil {
-				first = f
-			} else if f != first {
-				t.Fatal("subscribers of the same publish received different frames")
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("missing delivery")
+		f := testRecvTimeout(t, c)
+		if first == nil {
+			first = f
+		} else if f != first {
+			t.Fatal("subscribers of the same publish received different frames")
 		}
 	}
 	// Same payload across publishes: the frame cache returns the retained
 	// frame, so a later broadcast shares the pointer, too.
 	hub.Publish(ctx, roomID, markup)
-	select {
-	case f := <-clients[0].out:
-		if f != first {
-			t.Fatal("same payload across publishes did not reuse the retained frame")
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("missing delivery")
+	if f := testRecvTimeout(t, clients[0]); f != first {
+		t.Fatal("same payload across publishes did not reuse the retained frame")
 	}
 	// Different payload: a distinct frame (exact-payload cache semantics).
 	hub.Publish(ctx, roomID, "<turbo-stream action=\"append\"><template>two</template></turbo-stream>")
-	select {
-	case f := <-clients[0].out:
-		if f == first {
-			t.Fatal("different payload reused the same frame")
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("missing delivery")
+	if f := testRecvTimeout(t, clients[0]); f == first {
+		t.Fatal("different payload reused the same frame")
 	}
 }
 
@@ -182,14 +154,12 @@ func TestPublishStreamSharesOneFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	identifier := `{"channel":"Turbo::StreamsChannel","signed_stream_name":"rooms-signed"}`
-	hub.mu.Lock()
 	var clients []*client
 	for i := 0; i < 4; i++ {
 		c := simulateClient(t, user, token, identifier, subscription{Stream: "rooms"})
 		clients = append(clients, c)
-		hub.clients[c] = struct{}{}
+		hub.register(c)
 	}
-	hub.mu.Unlock()
 
 	// Unread/push-style broadcast: one map payload, shared by every member
 	// (no per-member map construction in the cable path; where content
@@ -200,15 +170,11 @@ func TestPublishStreamSharesOneFrame(t *testing.T) {
 	hub.PublishStream(ctx, "rooms", msg)
 	var first *websocket.PreparedMessage
 	for _, c := range clients {
-		select {
-		case f := <-c.out:
-			if first == nil {
-				first = f
-			} else if f != first {
-				t.Fatal("stream members received different frames for one payload")
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("missing delivery")
+		f := testRecvTimeout(t, c)
+		if first == nil {
+			first = f
+		} else if f != first {
+			t.Fatal("stream members received different frames for one payload")
 		}
 	}
 	var got struct {
@@ -234,7 +200,6 @@ func TestPublishMemoOverflowFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	const n = frameMemoLen + 3 // 11 distinct identifiers, one per client
-	hub.mu.Lock()
 	var clients []*client
 	for i := 0; i < n; i++ {
 		ident := `{"channel":"RoomChannel","room_id":` + strconv.FormatInt(int64(i+1), 10) + `}`
@@ -243,35 +208,30 @@ func TestPublishMemoOverflowFallback(t *testing.T) {
 		// text; subscription matching and authorization use sub.Room).
 		c := simulateClient(t, user, token, ident, subscription{Room: 1, Stream: "RoomChannel:1"})
 		clients = append(clients, c)
-		hub.clients[c] = struct{}{}
+		hub.register(c)
 	}
-	hub.mu.Unlock()
 
 	hub.PublishStream(ctx, "RoomChannel:1", "hello")
 	frames := make(map[string]*websocket.PreparedMessage, n)
 	for _, c := range clients {
-		select {
-		case f := <-c.out:
-			var got struct {
-				Identifier string `json:"identifier"`
-				Message    string `json:"message"`
+		f := testRecvTimeout(t, c)
+		var got struct {
+			Identifier string `json:"identifier"`
+			Message    string `json:"message"`
+		}
+		if err := json.Unmarshal(f.Data(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Message != "hello" {
+			t.Fatalf("wrong payload %q", got.Message)
+		}
+		key := got.Identifier
+		if prev, dup := frames[key]; dup {
+			if prev != f {
+				t.Fatal("same identifier produced two frames in one publish")
 			}
-			if err := json.Unmarshal(f.Data(), &got); err != nil {
-				t.Fatal(err)
-			}
-			if got.Message != "hello" {
-				t.Fatalf("wrong payload %q", got.Message)
-			}
-			key := got.Identifier
-			if prev, dup := frames[key]; dup {
-				if prev != f {
-					t.Fatal("same identifier produced two frames in one publish")
-				}
-			} else {
-				frames[key] = f
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("missing delivery")
+		} else {
+			frames[key] = f
 		}
 	}
 	if len(frames) != n {
@@ -281,19 +241,15 @@ func TestPublishMemoOverflowFallback(t *testing.T) {
 	// the same payload returns the identical pointers.
 	hub.PublishStream(ctx, "RoomChannel:1", "hello")
 	for _, c := range clients {
-		select {
-		case f := <-c.out:
-			var got struct {
-				Identifier string `json:"identifier"`
-			}
-			if err := json.Unmarshal(f.Data(), &got); err != nil {
-				t.Fatal(err)
-			}
-			if frames[got.Identifier] != f {
-				t.Fatal("fallback frame not reused across publishes")
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("missing delivery")
+		f := testRecvTimeout(t, c)
+		var got struct {
+			Identifier string `json:"identifier"`
+		}
+		if err := json.Unmarshal(f.Data(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if frames[got.Identifier] != f {
+			t.Fatal("fallback frame not reused across publishes")
 		}
 	}
 }
@@ -310,12 +266,10 @@ func TestPublishAllocsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	roomIdent := `{"channel":"RoomMessagesChannel","room_id":` + strconv.FormatInt(roomID, 10) + `}`
-	hub.mu.Lock()
 	c := simulateClient(t, user, token, roomIdent, subscription{Channel: "RoomMessagesChannel", Room: roomID})
-	hub.clients[c] = struct{}{}
+	hub.register(c)
 	c2 := simulateClient(t, user, token, `{"channel":"Turbo::StreamsChannel","signed_stream_name":"r"}`, subscription{Stream: "rooms"})
-	hub.clients[c2] = struct{}{}
-	hub.mu.Unlock()
+	hub.register(c2)
 
 	markup := "<turbo-stream action=\"append\"><template>alloc-pin</template></turbo-stream>"
 	hub.Publish(ctx, roomID, markup)        // prime authz + frame cache + pool
@@ -369,14 +323,12 @@ func TestConcurrentMixedPublishesDeliverExactPayloads(t *testing.T) {
 		per     = 48
 		total   = posters * per
 	)
-	hub.mu.Lock()
 	var clientList []*client
 	for i := 0; i < clients; i++ {
 		c := simulateClient(t, user, token, identifier, subscription{Channel: "RoomMessagesChannel", Room: roomID})
 		clientList = append(clientList, c)
-		hub.clients[c] = struct{}{}
+		hub.register(c)
 	}
-	hub.mu.Unlock()
 
 	errc := make(chan error, clients)
 	var wg sync.WaitGroup
@@ -386,29 +338,30 @@ func TestConcurrentMixedPublishesDeliverExactPayloads(t *testing.T) {
 			defer wg.Done()
 			counts := make(map[string]int, total)
 			for seen := 0; seen < total; {
-				select {
-				case f := <-c.out:
-					var fr struct {
-						Identifier string `json:"identifier"`
-						Message    string `json:"message"`
-					}
-					if err := json.Unmarshal(f.Data(), &fr); err != nil {
-						errc <- fmt.Errorf("client %p undecodable frame %q: %v", c, f.Data(), err)
-						return
-					}
-					if fr.Identifier != identifier {
-						errc <- fmt.Errorf("client %p wrong identifier %q", c, fr.Identifier)
-						return
-					}
-					if counts[fr.Message]++; counts[fr.Message] > 1 {
-						errc <- fmt.Errorf("client %p duplicate payload %q", c, fr.Message)
-						return
-					}
-					seen++
-				case <-time.After(30 * time.Second):
+				recvCtx, recvCancel := context.WithTimeout(ctx, 30*time.Second)
+				f := testRecv(recvCtx, c)
+				recvCancel()
+				if f == nil {
 					errc <- fmt.Errorf("client %p saw %d/%d frames", c, seen, total)
 					return
 				}
+				var fr struct {
+					Identifier string `json:"identifier"`
+					Message    string `json:"message"`
+				}
+				if err := json.Unmarshal(f.Data(), &fr); err != nil {
+					errc <- fmt.Errorf("client %p undecodable frame %q: %v", c, f.Data(), err)
+					return
+				}
+				if fr.Identifier != identifier {
+					errc <- fmt.Errorf("client %p wrong identifier %q", c, fr.Identifier)
+					return
+				}
+				if counts[fr.Message]++; counts[fr.Message] > 1 {
+					errc <- fmt.Errorf("client %p duplicate payload %q", c, fr.Message)
+					return
+				}
+				seen++
 			}
 		}(c)
 	}

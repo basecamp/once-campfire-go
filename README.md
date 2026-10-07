@@ -337,8 +337,13 @@ identical CPU pinning, 3 rotating repetitions, c=16 medians, zero HTTP errors:
 | Avatar | 97,534 | 221,149 | 382,877 | 0.58× | — |
 | Static CSS | 137,157 | 329,394 | 442,263 | 0.74× | — |
 
-Cable fan-out (messages delivered to every client): 100 clients 5,049 vs
-4,033 (1.25×), 500 clients parity, 1,000 clients 520 vs 552 (0.94×).
+Cable fan-out (messages delivered to every client): 100 clients 5,084 vs
+4,261 (1.19×), 500 clients parity (1,085 vs 1,100), 1,000 clients 534 vs
+548 (0.98×; ENGINE-61 paired medians, same harness and pins as the table
+above; ENGINE-61 also cut the fan-out path's CPU by ~30 %). Saturated
+p50 at 1,000 stays faster than Rust (13.9 vs 16.1 ms). Earlier recording
+(ENGINE-60): 100 clients 5,049 vs 4,033 (1.25×), 500 parity, 1,000 520 vs
+552 (0.94×). See plans/wrong.md for the residual-gap analysis.
 
 Correctness: `bin/check` (gofmt, assets, vet, full `-race` suite), browser
 workflows, 178/178 applicable screen pixels and accessibility comparisons,

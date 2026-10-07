@@ -60,11 +60,10 @@ func simulateClient(t testing.TB, user database.User, token string, identifier s
 	_, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	c := &client{
-		disconnect:    make(chan bool, 1),
 		user:          user,
 		token:         token,
 		cancel:        cancel,
-		out:           make(chan *websocket.PreparedMessage, 256),
+		q:             newOutQueue(),
 		subscriptions: map[string]subscription{identifier: sub},
 	}
 	return c
@@ -87,14 +86,12 @@ func TestFanOutDeliveryCounters(t *testing.T) {
 			identifier := `{"channel":"RoomMessagesChannel","room_id":` + strconv.FormatInt(roomID, 10) + `}`
 			sub := subscription{Channel: "RoomMessagesChannel", Room: roomID}
 
-			hub.mu.Lock()
 			var clients []*client
 			for i := 0; i < n; i++ {
 				c := simulateClient(t, user, token, identifier, sub)
 				clients = append(clients, c)
-				hub.clients[c] = struct{}{}
+				hub.register(c)
 			}
-			hub.mu.Unlock()
 
 			markup := "<turbo-stream action=\"append\"><template>" + strings.Repeat("payload ", 50) + "</template></turbo-stream>"
 			hub.Publish(ctx, roomID, markup)
@@ -106,12 +103,7 @@ func TestFanOutDeliveryCounters(t *testing.T) {
 			results := make(chan got, n)
 			for _, c := range clients {
 				go func(c *client) {
-					select {
-					case f := <-c.out:
-						results <- got{c, f}
-					case <-ctx.Done():
-						results <- got{c, nil}
-					}
+					results <- got{c, testRecv(ctx, c)}
 				}(c)
 			}
 			var firstData []byte
@@ -556,7 +548,7 @@ func TestHeartbeatGateSkipsUnchangedSessions(t *testing.T) {
 func TestSlowClientBatchKeepsQueueBound(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c := &client{out: make(chan *websocket.PreparedMessage, 2), cancel: cancel, disconnect: make(chan bool, 1)}
+	c := &client{q: newOutQueueCap(2), cancel: cancel}
 	if !c.send("one") || !c.send("two") || c.send("three") {
 		t.Fatal("queue limit not enforced")
 	}

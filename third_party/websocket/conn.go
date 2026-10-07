@@ -304,6 +304,13 @@ func (m *mu) tryLock() bool {
 }
 
 func (m *mu) lock(ctx context.Context) error {
+	// ENGINE-61: uncontended acquisition is the common case (one writer per
+	// connection drains its own queue), so try the lock once without the
+	// three-case select's full scan. The blocking select below is unchanged
+	// for the contended and cancellation cases.
+	if m.tryLock() {
+		return m.checkAlive()
+	}
 	select {
 	case <-m.c.closed:
 		return net.ErrClosed
@@ -313,15 +320,21 @@ func (m *mu) lock(ctx context.Context) error {
 		// To make sure the connection is certainly alive.
 		// As it's possible the send on m.ch was selected
 		// over the receive on closed.
-		select {
-		case <-m.c.closed:
-			// Make sure to release.
-			m.unlock()
-			return net.ErrClosed
-		default:
-		}
-		return nil
+		return m.checkAlive()
 	}
+}
+
+// checkAlive is the post-acquisition liveness check; the caller holds the lock
+// and must unlock (or let its defer do so) if it returns an error.
+func (m *mu) checkAlive() error {
+	select {
+	case <-m.c.closed:
+		// Make sure to release.
+		m.unlock()
+		return net.ErrClosed
+	default:
+	}
+	return nil
 }
 
 func (m *mu) unlock() {

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
@@ -26,6 +27,15 @@ import (
 func fastFromEnv() bool {
 	return os.Getenv("CAMPFIRE_CABLE_FAST") != "off"
 }
+
+// Write bounds for the hub's per-wake batch write. cableWriteDeadline bounds
+// one stalled write; cableDeadlineRearm is how much budget an armed socket
+// deadline must still have before a write can use it without re-arming (see
+// the writer loop in Serve).
+const (
+	cableWriteDeadline = 30 * time.Second
+	cableDeadlineRearm = cableWriteDeadline / 2
+)
 
 // Frame-cache bounds. Bounded FIFO retention: an eviction always drops the
 // oldest entries, per key and globally, so a stream alternating between a
@@ -211,21 +221,165 @@ type Hub struct {
 	heartbeat time.Duration
 	mu        sync.RWMutex
 	clients   map[*client]struct{}
-	cache     *frameCache
-	authz     *authzCache
+	// roomStreams / namedStreams are the publish recipient index (ENGINE-61):
+	// subscribers keyed by RoomMessagesChannel room, respectively by exact
+	// stream name, each entry listing the client's matching subscription
+	// identifiers. publish() snapshots these instead of scanning every
+	// client's full subscription map (6 subscriptions × 1000 clients per
+	// publish before; one list of the actual recipients after). The index is
+	// maintained under mu next to clients/subscriptions, so a publish's
+	// snapshot is consistent with the client set, and the matching rules are
+	// literally the subscribe-time mirror of publish()'s old match.
+	roomStreams  map[int64]map[*client][]string
+	namedStreams map[string]map[*client][]string
+	cache        *frameCache
+	authz        *authzCache
 }
 type client struct {
-	disconnect    chan bool
 	user          database.User
 	token         string
 	cancel        context.CancelFunc
-	out           chan *websocket.PreparedMessage
+	q             *outQueue
 	subscriptions map[string]subscription
+	// dying is set by stop() when the connection is torn down; the writer
+	// reads it before parking and after each wake. discPending/discReconnect
+	// carry a Disconnect request to the writer (see requestDisconnect).
+	dying         atomic.Bool
+	discPending   atomic.Bool
+	discReconnect atomic.Bool
 	// sessVer/userVer are the (SessionVersion, UserVersion) generations the
 	// last heartbeat session check ran under; an unchanged pair skips the
 	// re-check (ENGINE-54).
 	sessVer int64
 	userVer int64
+}
+
+// outQueueCap is the slow-client bound: a client whose undelivered frames
+// reach this many is dropped, exactly the historical 256-frame channel
+// policy.
+const outQueueCap = 256
+
+// outQueue is the per-client delivery queue (ENGINE-61). The hub's publish
+// loop appends into a fixed ring under one mutex and signals the parked
+// writer once per wake; the writer pops up to BatchMaxFrames per wake under
+// a single lock acquisition. The channel it replaced cost a mutex pair plus
+// a ring-buffer copy per send on the publisher and a per-frame receive on
+// the writer; with ~500k client deliveries per second at 1000 clients those
+// were the dominant per-delivery costs after the write itself. The queue
+// bound, ordering, and overflow-stop are unchanged.
+type outQueue struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	frames []*websocket.PreparedMessage // ring, len(outQueueCap) for live clients
+	head   int
+	len    int
+	parked bool
+}
+
+func newOutQueue() *outQueue { return newOutQueueCap(outQueueCap) }
+
+func newOutQueueCap(capacity int) *outQueue {
+	q := &outQueue{frames: make([]*websocket.PreparedMessage, capacity)}
+	q.cond = sync.NewCond(&q.mu)
+	return q
+}
+
+// send appends one frame, stopping the client when the ring is full (the
+// 256-frame slow-client policy). It returns whether the frame was queued.
+// The writer is signalled only when it is parked, so a running writer (or
+// one about to drain what it already saw) is not woken again.
+func (q *outQueue) send(c *client, data *websocket.PreparedMessage) bool {
+	q.mu.Lock()
+	if q.len == len(q.frames) {
+		q.mu.Unlock()
+		c.stop()
+		return false
+	}
+	q.frames[(q.head+q.len)%len(q.frames)] = data
+	q.len++
+	wake := q.parked
+	q.mu.Unlock()
+	if wake {
+		q.cond.Signal()
+	}
+	return true
+}
+
+// register adds a client and its existing subscriptions to the hub and the
+// recipient index under one lock; used by tests with simulated clients and by
+// nothing in the production path (Serve maintains the index incrementally).
+func (h *Hub) register(c *client) {
+	h.mu.Lock()
+	h.clients[c] = struct{}{}
+	for identifier, sub := range c.subscriptions {
+		h.indexAddLocked(c, identifier, sub)
+	}
+	h.mu.Unlock()
+}
+
+// indexAddLocked mirrors one subscription into the publish index; the caller
+// holds h.mu (write).
+func (h *Hub) indexAddLocked(c *client, identifier string, sub subscription) {
+	if sub.Channel == "RoomMessagesChannel" && sub.Room != 0 {
+		m := h.roomStreams[sub.Room]
+		if m == nil {
+			m = make(map[*client][]string)
+			h.roomStreams[sub.Room] = m
+		}
+		m[c] = append(m[c], identifier)
+	}
+	if sub.Stream != "" {
+		m := h.namedStreams[sub.Stream]
+		if m == nil {
+			m = make(map[*client][]string)
+			h.namedStreams[sub.Stream] = m
+		}
+		m[c] = append(m[c], identifier)
+	}
+}
+
+// indexRemoveLocked drops one subscription from the publish index; the
+// caller holds h.mu (write).
+func (h *Hub) indexRemoveLocked(c *client, identifier string, sub subscription) {
+	if sub.Channel == "RoomMessagesChannel" && sub.Room != 0 {
+		if m := h.roomStreams[sub.Room]; m != nil {
+			m[c] = removeIdentifier(m[c], identifier)
+			if len(m[c]) == 0 {
+				delete(m, c)
+				if len(m) == 0 {
+					delete(h.roomStreams, sub.Room)
+				}
+			}
+		}
+	}
+	if sub.Stream != "" {
+		if m := h.namedStreams[sub.Stream]; m != nil {
+			m[c] = removeIdentifier(m[c], identifier)
+			if len(m[c]) == 0 {
+				delete(m, c)
+				if len(m) == 0 {
+					delete(h.namedStreams, sub.Stream)
+				}
+			}
+		}
+	}
+}
+
+// removeIdentifier drops id from ids, leaving the slice order of the rest.
+func removeIdentifier(ids []string, id string) []string {
+	for i, x := range ids {
+		if x == id {
+			return append(ids[:i], ids[i+1:]...)
+		}
+	}
+	return ids
+}
+
+// clear drops every queued frame; used only by tests.
+func (q *outQueue) clear() {
+	q.mu.Lock()
+	q.head, q.len = 0, 0
+	q.mu.Unlock()
 }
 
 type subscription struct {
@@ -236,7 +390,7 @@ type subscription struct {
 }
 
 func New(db *database.DB, secrets *rails.Secrets) *Hub {
-	return &Hub{db: db, secrets: secrets, fast: fastFromEnv(), heartbeat: 3 * time.Second, clients: map[*client]struct{}{}, cache: newFrameCache(), authz: newAuthzCache()}
+	return &Hub{db: db, secrets: secrets, fast: fastFromEnv(), heartbeat: 3 * time.Second, clients: map[*client]struct{}{}, roomStreams: map[int64]map[*client][]string{}, namedStreams: map[string]map[*client][]string{}, cache: newFrameCache(), authz: newAuthzCache()}
 }
 func (c *client) send(value any) bool {
 	data, err := json.Marshal(value)
@@ -246,13 +400,36 @@ func (c *client) send(value any) bool {
 	return c.sendFrame(websocket.NewPreparedMessage(websocket.MessageText, data))
 }
 func (c *client) sendFrame(data *websocket.PreparedMessage) bool {
-	select {
-	case c.out <- data:
-		return true
-	default:
+	return c.q.send(c, data)
+}
+
+// stop tears the connection down: the writer returns without writing any
+// queued frame, and the request context cancels so the read loop exits too.
+// It is idempotent and safe to call from any goroutine. The cond signal
+// wakes a writer parked on an empty queue; a running writer sees dying at
+// its next loop turn instead.
+func (c *client) stop() {
+	if c.dying.CompareAndSwap(false, true) {
 		c.cancel()
-		return false
+		c.q.mu.Lock()
+		c.q.cond.Signal()
+		c.q.mu.Unlock()
 	}
+}
+
+// requestDisconnect asks the writer to send the Action Cable disconnect frame
+// and then exit, exactly the former c.disconnect channel handoff. A second
+// request while one is pending (or while stopping) tears down immediately,
+// like the former buffered-channel default.
+func (c *client) requestDisconnect(reconnect bool) {
+	if c.dying.Load() || !c.discPending.CompareAndSwap(false, true) {
+		c.stop()
+		return
+	}
+	c.discReconnect.Store(reconnect)
+	c.q.mu.Lock()
+	c.q.cond.Signal()
+	c.q.mu.Unlock()
 }
 func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, token string) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"actioncable-v1-json"}, CompressionMode: websocket.CompressionNoContextTakeover, CompressionThreshold: 256})
@@ -267,13 +444,16 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 	conn.SetReadLimit(1 << 20)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	c := &client{disconnect: make(chan bool, 1), user: user, token: token, cancel: cancel, out: make(chan *websocket.PreparedMessage, 256), subscriptions: map[string]subscription{}}
+	c := &client{user: user, token: token, cancel: cancel, q: newOutQueue(), subscriptions: map[string]subscription{}}
 	h.mu.Lock()
 	h.clients[c] = struct{}{}
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()
 		delete(h.clients, c)
+		for identifier, sub := range c.subscriptions {
+			h.indexRemoveLocked(c, identifier, sub)
+		}
 		subs := c.subscriptions
 		h.mu.Unlock()
 		for _, sub := range subs {
@@ -288,20 +468,99 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 	go func() {
 		defer close(done)
 		defer cancel()
+		var batch [websocket.BatchMaxFrames]*websocket.PreparedMessage
+		q := c.q
+		// deadlineArmedAt is when the socket write deadline last moved, local
+		// to this writer. See the write below and cableDeadlineRearm.
+		var deadlineArmedAt time.Time
+		writeBatch := func(n int) error {
+			if h.fast {
+				// ENGINE-54: bound the wake's write with an absolute socket
+				// deadline instead of a per-wake context. The context armed
+				// and stopped two runtime timers and allocated per wake (the
+				// write's own WithTimeout plus the connection's AfterFunc),
+				// the dominant per-wake cost at 1000 clients. ENGINE-61: the
+				// deadline is armed only when it no longer has at least
+				// cableDeadlineRearm of budget left. Arming costs a netpoll
+				// timer lock plus a timer modify, and clearing costs the
+				// same again; a wake-with-frames at 1000 clients arrives
+				// every couple of milliseconds, and both calls were pure
+				// overhead on the ~500k-writes-per-second path. Re-arming
+				// every cableDeadlineRearm still bounds every stalled write
+				// at <= cableWriteDeadline: the unarmed branch is only taken
+				// while the armed deadline is at least cableDeadlineRearm in
+				// the future, so no write can start against an expired or
+				// about-to-expire deadline. The legacy path below keeps the
+				// historical per-write context behaviour.
+				now := time.Now()
+				if deadlineArmedAt.IsZero() || now.Sub(deadlineArmedAt) >= cableDeadlineRearm {
+					err := conn.WritePreparedBatchDeadline(now.Add(cableWriteDeadline), batch[:n])
+					deadlineArmedAt = now
+					return err
+				}
+				return conn.WritePreparedBatch(context.Background(), batch[:n])
+			}
+			timeout, stop := context.WithTimeout(ctx, cableWriteDeadline)
+			err := conn.WritePrepared(timeout, batch[0])
+			stop()
+			return err
+		}
+		for {
+			// Park until a frame is queued or a terminal request lands. The
+			// request flags are checked before parking, so a stop or
+			// disconnect is honoured even while the queue stays full and the
+			// writer keeps draining: no wakeup can be lost.
+			q.mu.Lock()
+			for q.len == 0 && !c.dying.Load() && !c.discPending.Load() {
+				q.parked = true
+				q.cond.Wait()
+			}
+			q.parked = false
+			if c.dying.Load() {
+				q.mu.Unlock()
+				return
+			}
+			if c.discPending.Load() {
+				q.mu.Unlock()
+				data, _ := json.Marshal(map[string]any{"type": "disconnect", "reason": "remote", "reconnect": c.discReconnect.Load()})
+				batch[0] = websocket.NewPreparedMessage(websocket.MessageText, data)
+				writeBatch(1)
+				return
+			}
+			// ENGINE-40 fast path: pop what is queued (bounded batch) under
+			// one lock acquisition and write it in one vectored write per
+			// wake. The ring preserves FIFO. Slow-client policy is
+			// untouched: sendFrame still drops into the 256-frame queue and
+			// stops the client on overflow. The legacy path keeps its
+			// one-frame-per-wake behaviour.
+			bound := 1
+			if h.fast {
+				bound = websocket.BatchMaxFrames
+			}
+			n := min(q.len, bound)
+			for i := 0; i < n; i++ {
+				batch[i] = q.frames[(q.head+i)%len(q.frames)]
+			}
+			q.head = (q.head + n) % len(q.frames)
+			q.len -= n
+			q.mu.Unlock()
+			if err := writeBatch(n); err != nil {
+				return
+			}
+		}
+	}()
+	// The heartbeat owns the session re-check and the ping; it runs on its
+	// own goroutine so the writer parks on the frame queue alone (ENGINE-61:
+	// the four-case select per wake was the largest receiver-side cost). The
+	// ping is written directly rather than queued so it never counts against
+	// the 256-frame slow-client bound, exactly as before.
+	go func() {
 		ticker := time.NewTicker(h.heartbeat)
 		defer ticker.Stop()
-		var batch [websocket.BatchMaxFrames]*websocket.PreparedMessage
 		for {
-			var data []byte
-			var frame *websocket.PreparedMessage
-			closeAfter := false
 			select {
 			case <-ctx.Done():
 				return
-			case reconnect := <-c.disconnect:
-				data, _ = json.Marshal(map[string]any{"type": "disconnect", "reason": "remote", "reconnect": reconnect})
-				closeAfter = true
-			case frame = <-c.out:
 			case <-ticker.C:
 				// ENGINE-54: the session check runs only when a sessions-row
 				// or users.status write committed since the last check (the
@@ -314,58 +573,28 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 				// still sent every tick.
 				if sv, uv := h.db.SessionVersion(), h.db.UserVersion(); sv != c.sessVer || uv != c.userVer {
 					if _, err := h.db.SessionUser(ctx, c.token); err != nil {
+						c.stop()
 						return
 					}
 					c.sessVer, c.userVer = sv, uv
 				}
-				data, _ = json.Marshal(map[string]any{"type": "ping", "message": time.Now().Unix()})
-			}
-			// ENGINE-40 fast path: coalesce the wake's frame with everything
-			// queued (bounded batch) into one write per wake. The select above
-			// took the queue's oldest frame, so drain order preserves FIFO.
-			// Slow-client policy is untouched: sendFrame still drops into the
-			// 256-frame queue and cancels on overflow.
-			n := 1
-			if frame == nil {
-				frame = websocket.NewPreparedMessage(websocket.MessageText, data)
-			}
-			batch[0] = frame
-			if h.fast && !closeAfter {
-			drain:
-				for n < len(batch) {
-					select {
-					case f := <-c.out:
-						batch[n] = f
-						n++
-					default:
-						break drain
-					}
-				}
-			}
-			var err error
-			if h.fast {
-				// ENGINE-54: bound the wake's write with an absolute socket
-				// deadline instead of a per-wake context. The context armed
-				// and stopped two runtime timers and allocated per wake (the
-				// write's own WithTimeout plus the connection's AfterFunc),
-				// the dominant per-wake cost at 1000 clients; the deadline is
-				// set before the vectored write and cleared after, so a
-				// stalled socket still errors at 30 s and the connection is
-				// reaped the same way (the writer returns, the request
-				// context cancels, Serve closes the conn). The legacy path
-				// below keeps the historical per-write context behaviour.
-				err = conn.WritePreparedBatchDeadline(time.Now().Add(30*time.Second), batch[:n])
-			} else {
-				timeout, stop := context.WithTimeout(ctx, 30*time.Second)
-				err = conn.WritePrepared(timeout, batch[0])
+				data, _ := json.Marshal(map[string]any{"type": "ping", "message": time.Now().Unix()})
+				frame := websocket.NewPreparedMessage(websocket.MessageText, data)
+				// A single prepared write, not a batch: the batch path reuses
+				// per-connection scratch before taking the frame lock, so it
+				// is reserved for the writer goroutine. The context bound
+				// keeps a stalled ping from holding this goroutine forever.
+				timeout, stop := context.WithTimeout(ctx, cableWriteDeadline)
+				err := conn.WritePrepared(timeout, frame)
 				stop()
-			}
-			if err != nil || closeAfter {
-				return
+				if err != nil {
+					c.stop()
+					return
+				}
 			}
 		}
 	}()
-	defer func() { cancel(); <-done }()
+	defer func() { c.stop(); <-done }()
 	c.send(map[string]string{"type": "welcome"})
 	for {
 		kind, data, err := conn.Read(ctx)
@@ -399,6 +628,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 					h.mu.Lock()
 					if !exists {
 						c.subscriptions[command.Identifier] = sub
+						h.indexAddLocked(c, command.Identifier, sub)
 					}
 					h.mu.Unlock()
 					c.send(map[string]string{"type": "confirm_subscription", "identifier": command.Identifier})
@@ -413,6 +643,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 			h.mu.Lock()
 			sub := c.subscriptions[command.Identifier]
 			delete(c.subscriptions, command.Identifier)
+			h.indexRemoveLocked(c, command.Identifier, sub)
 			h.mu.Unlock()
 			if sub.Present {
 				h.db.Presence(ctx, c.user.ID, sub.Room, "absent")
@@ -473,11 +704,7 @@ func (h *Hub) disconnect(user int64, reconnect bool) {
 	defer h.mu.RUnlock()
 	for c := range h.clients {
 		if c.user.ID == user {
-			select {
-			case c.disconnect <- reconnect:
-			default:
-				c.cancel()
-			}
+			c.requestDisconnect(reconnect)
 		}
 	}
 }
@@ -485,7 +712,7 @@ func (h *Hub) Close() {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for c := range h.clients {
-		c.cancel()
+		c.stop()
 	}
 }
 func (h *Hub) Publish(ctx context.Context, room int64, markup string) {
@@ -597,11 +824,41 @@ func (h *Hub) authorize(ctx context.Context, recipients []recipient) {
 	}
 	var misses []miss
 	h.authz.mu.Lock()
+	// ENGINE-61: the recipients of one publish overwhelmingly share a few
+	// (room, token) keys (at 1000 clients a room publish is one token), and
+	// hashing each token for the cache map is ~100ns a recipient. The stack
+	// memo resolves repeated keys from the first hit, so the pass touches the
+	// map once per distinct key instead of once per recipient. Entries are
+	// only ever filled from cache hits read under the same lock section, so a
+	// later store (it needs the lock) cannot alias a memo entry; misses still
+	// fall through to the map as before.
+	var memo [4]struct {
+		key  authzKey
+		user int64
+	}
+	memoLen := 0
 	for i := range recipients {
 		r := &recipients[i]
 		key := authzKey{room: r.room, token: r.client.token}
+		j := 0
+		for ; j < memoLen; j++ {
+			if memo[j].key == key {
+				r.user = memo[j].user
+				break
+			}
+		}
+		if j < memoLen {
+			continue
+		}
 		if e := h.authz.m[key]; e != nil && e.sess == sess && e.member == member && e.userVersion == userVersion {
 			r.user = e.userID
+			if memoLen < len(memo) {
+				memo[memoLen] = struct {
+					key  authzKey
+					user int64
+				}{key, e.userID}
+				memoLen++
+			}
 			continue
 		}
 		misses = append(misses, miss{i, key})
@@ -687,22 +944,30 @@ func (h *Hub) publish(ctx context.Context, room int64, name string, message any)
 		scratch.wrap, scratch.recips = wrap, recipients
 		publishScratchPool.Put(scratch)
 	}()
-	// Snapshot the recipients under the hub lock only; authorization and
-	// delivery run without it (ENGINE-40b). The pooled slice is grown to
-	// the client count when smaller, so the snapshot is one amortized
-	// allocation with no growth.
+	// Snapshot the recipients from the publish index under the hub lock only;
+	// authorization and delivery run without it (ENGINE-40b). The pooled
+	// slice is grown to the recipient count when smaller, so the snapshot is
+	// one amortized allocation with no growth.
 	h.mu.RLock()
-	if cap(recipients) < len(h.clients) {
-		recipients = make([]recipient, 0, len(h.clients))
+	if room != 0 {
+		m := h.roomStreams[room]
+		if cap(recipients) < len(m) {
+			recipients = make([]recipient, 0, len(m))
+		}
+		for c, ids := range m {
+			for _, identifier := range ids {
+				recipients = append(recipients, recipient{c, identifier, room, roomScope, 0})
+			}
+		}
 	}
-	for c := range h.clients {
-		for identifier, sub := range c.subscriptions {
-			if room != 0 && sub.Room == room && sub.Channel == "RoomMessagesChannel" || name != "" && sub.Stream == name {
-				scope := name
-				if sub.Channel == "RoomMessagesChannel" {
-					scope = roomScope
-				}
-				recipients = append(recipients, recipient{c, identifier, sub.Room, scope, 0})
+	if name != "" {
+		m := h.namedStreams[name]
+		if len(recipients) == 0 && cap(recipients) < len(m) {
+			recipients = make([]recipient, 0, len(m))
+		}
+		for c, ids := range m {
+			for _, identifier := range ids {
+				recipients = append(recipients, recipient{c, identifier, 0, name, 0})
 			}
 		}
 	}
@@ -764,7 +1029,7 @@ func (h *Hub) publish(ctx context.Context, room int64, name string, message any)
 	for i := range recipients {
 		r := &recipients[i]
 		if r.user != r.client.user.ID {
-			r.client.cancel()
+			r.client.stop()
 			continue
 		}
 		ident := r.identifier

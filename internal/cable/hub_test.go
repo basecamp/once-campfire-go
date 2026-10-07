@@ -138,7 +138,7 @@ func TestRoomAuthorizationAndDelivery(t *testing.T) {
 func TestSlowClientQueueIsBounded(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c := &client{out: make(chan *websocket.PreparedMessage, 2), cancel: cancel}
+	c := &client{q: newOutQueueCap(2), cancel: cancel}
 	if !c.send("one") || !c.send("two") || c.send("three") {
 		t.Fatal("queue limit not enforced")
 	}

@@ -22,7 +22,6 @@ func BenchmarkPublishFanout(b *testing.B) {
 			identifier := `{"channel":"RoomMessagesChannel","room_id":` + strconv.FormatInt(roomID, 10) + `}`
 			sub := subscription{Channel: "RoomMessagesChannel", Room: roomID}
 			var clients []*client
-			hub.mu.Lock()
 			for i := 0; i < n; i++ {
 				// One real session per client: the authorization query and
 				// the cache key are per (room, token).
@@ -32,23 +31,14 @@ func BenchmarkPublishFanout(b *testing.B) {
 				}
 				c := simulateClient(b, user, token, identifier, sub)
 				clients = append(clients, c)
-				hub.clients[c] = struct{}{}
+				hub.register(c)
 			}
-			hub.mu.Unlock()
 			markup := "<turbo-stream action=\"append\"><template>" + strings.Repeat("payload ", 50) + "</template></turbo-stream>"
 			// drain empties every client queue so sendFrame always takes the
 			// send arm and the 256-frame slow-client bound is never hit.
 			drain := func() {
 				for _, c := range clients {
-				empty:
-					for {
-						select {
-						case <-c.out:
-							continue
-						default:
-							break empty
-						}
-					}
+					c.q.clear()
 				}
 			}
 			hub.Publish(ctx, roomID, markup)
