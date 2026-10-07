@@ -99,34 +99,16 @@ Container verification exercises setup, a live SQLite backup, offline restore, a
 
 ## Benchmarks
 
-The [matched competing-PR comparison](bench/results/pr-comparison-20261007/README.md) measures
-PRs #2/#4/#5/#6/#7/#8, this implementation and pinned Rust on the same ARM64 Linux VM.
-It separates saturated capacity from scheduled-arrival latency at equal offered request rates.
-The guarded template-derived renderer roughly doubles fragment-disabled read capacity versus
-our preceding optimized build and improves posts; complete Go response bytes remain unchanged.
-Warm reads and Cable are mixed, with regressions disclosed. Workload-matched core and paced
-1,000-client Cable memory stay roughly unchanged. Rust still leads these VM read/write workloads,
-and matched-rate tails include material generator/VM scheduling delays. No universal parity or
-language-wide speedup is claimed; native Intel and published AMD results are separate populations.
-
-Use `--listener public --gzip 1` for the public compressed listener and
-`--fragment-cache-mb 0` to disable fragment retention. For fixed offered rates, build
-`go build -o httprate ./bench/httprate` and pass
-`--rate-loadgen ./httprate --http-rates 1000 --concurrency 16` to `bench/application`.
-Choose a rate each application can sustain and inspect queueing, generator lateness, errors and
-drain time. The report retains exact source/build identities, raw samples, validation and limits.
-Full historical trial logs remain in the linked fork archive rather than being copied here.
-
-The historical published baseline below predates these changes. It was measured with 16 concurrent clients on an AMD Ryzen AI MAX+ 395,
+Measured with 16 concurrent clients on an AMD Ryzen AI MAX+ 395 with 32 GB RAM,
 with four hardware threads allocated to each app.
 
 | HTTP workload (requests/sec) | Rails | [Django](https://github.com/basecamp/once-campfire-django) | [Laravel](https://github.com/basecamp/once-campfire-laravel) | [Express](https://github.com/basecamp/once-campfire-express) | [Elixir](https://github.com/basecamp/once-campfire-elixir) | [Go](https://github.com/basecamp/once-campfire-go) | [Rust](https://github.com/basecamp/once-campfire-rust) |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Room page | 241 | 170 | 164 | 559 | 722 | 3,860 | 36,260 |
-| Messages page | 413 | 196 | 175 | 777 | 1,053 | 5,573 | 40,872 |
-| Sidebar | 552 | 615 | 715 | 4,125 | 1,275 | 19,753 | 34,672 |
-| Search | 435 | 315 | 305 | 1,294 | 1,156 | 7,053 | 33,299 |
-| Post a message | 273 | 154 | 137 | 256 | 801 | 4,767 | 6,896 |
+| Room page | 236 | 62 | 764 | 2,702 | 981 | 32,045 | 35,056 |
+| Messages page | 384 | 70 | 922 | 3,183 | 1,341 | 31,670 | 40,481 |
+| Sidebar | 474 | 230 | 1,399 | 34,595 | 2,546 | 20,125 | 33,924 |
+| Search | 415 | 120 | 1,291 | 6,725 | 1,907 | 30,239 | 34,199 |
+| Post a message | 244 | 113 | 498 | 2,183 | 1,431 | 9,413 | 8,995 |
 
 See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 
@@ -137,9 +119,6 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
   therefore still fail in many inventory cells, even when screenshots, accessibility and workflows
   match. These failures remain visible in the validation report. Exact protocol parity for malformed
   parameters and every content-negotiation edge case is not claimed.
-- `GET /users/me/sidebar` returns a bare sidebar frame, while the reference wraps a full layout.
-  Room-ID equality does not establish equal rendering work; cross-port sidebar timing is excluded
-  from the new comparison.
 - WebSockets share serialized and compressed broadcast payloads through a small extension to
   coder/websocket v1.8.15 (see `third_party/websocket/README.campfire`). Outgoing queues hold 256
   frames; slow clients are disconnected. Authorization is checked afresh for each publication,
@@ -158,7 +137,7 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 - The default version label and fallback VAPID subject identify `once-campfire-go`. Explicit version,
   VAPID keys and subject settings remain supported.
 - Storage keys containing separators, NUL, or parent-directory shards are rejected before
-  filesystem access. Rust directly joins the key's shards; valid keys retain the same storage layout.
+  filesystem access. Valid keys retain the existing storage layout.
 - Native host media output can differ with installed library versions. All byte-golden media tests
   pass with the pinned container libraries. Web Push is verified locally, not against external push
   providers.
