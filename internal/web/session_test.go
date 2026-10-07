@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -94,5 +95,30 @@ func TestEncryptedLoginReturnAndSessionRefresh(t *testing.T) {
 	response = request("GET", "/rooms/1", "")
 	if response.StatusCode != 302 {
 		t.Fatal("logout did not revoke session")
+	}
+}
+
+func TestTransferPageHasOneCompleteAutoSubmitForm(t *testing.T) {
+	_, server, _, _ := testApp(t)
+	response, body := perform(t, server, http.MethodGet, "/session/transfers/example", "", nil, nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("transfer GET: %s", response.Status)
+	}
+	html := string(body)
+	if strings.Count(html, "<form ") != strings.Count(html, "</form>") || strings.Count(html, `data-controller="auto-submit"`) != 1 {
+		t.Fatal("transfer response must contain one balanced auto-submit form")
+	}
+	if !regexp.MustCompile(`<form\b[^>]*data-controller="auto-submit"[^>]*>(?:\s*<input\b[^>]*>)*\s*</form>`).MatchString(html) {
+		t.Fatal("transfer form must close after its hidden fields")
+	}
+	if !strings.Contains(html, `action="/session/transfers/example"`) ||
+		!strings.Contains(html, `data-controller="auto-submit"`) ||
+		!strings.Contains(html, `name="_method" value="put"`) {
+		t.Fatal("transfer form must auto-submit PUT to its own URL")
+	}
+	for _, cookie := range response.Cookies() {
+		if cookie.Name == "session_token" {
+			t.Fatal("transfer GET must not establish an authenticated session")
+		}
 	}
 }
