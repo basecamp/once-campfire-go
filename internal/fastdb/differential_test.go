@@ -380,6 +380,94 @@ func TestDifferentialSessionUser(t *testing.T) {
 	}
 }
 
+// TestDifferentialSessionActive pins the auth fast path's joined read
+// (ENGINE-42): SessionActive must return exactly the user SessionUser returns
+// plus the session row's last_active_at, from one query, with the same
+// ErrNoRows semantics (including a banned user) and the same zero-dst shape on
+// error.
+func TestDifferentialSessionActive(t *testing.T) {
+	path := fixtureDB(t)
+	d, c := openBoth(t, path)
+	ctx := context.Background()
+
+	rows, err := d.Read.QueryContext(ctx, "SELECT token FROM sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	sessions := 0
+	for rows.Next() {
+		var token string
+		if err := rows.Scan(&token); err != nil {
+			t.Fatal(err)
+		}
+		sessions++
+		want, err := d.SessionUser(ctx, token)
+		if err != nil {
+			t.Fatalf("database.SessionUser: %v", err)
+		}
+		var wantActive time.Time
+		var stamp string
+		if err := d.Read.QueryRowContext(ctx, "SELECT last_active_at FROM sessions WHERE token=?", token).Scan(&stamp); err != nil {
+			t.Fatalf("read last_active_at: %v", err)
+		}
+		for _, layout := range []string{"2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05.999999999-07:00", time.RFC3339Nano} {
+			if wantActive, err = time.Parse(layout, stamp); err == nil {
+				break
+			}
+		}
+		if err != nil {
+			t.Fatalf("parse last_active_at %q: %v", stamp, err)
+		}
+		var got User
+		gotActive, err := c.SessionActive(&got, token)
+		if err != nil {
+			t.Fatalf("fastdb.SessionActive: %v", err)
+		}
+		if !reflect.DeepEqual(got.record(), recordOfUser(want)) {
+			t.Errorf("SessionActive(%q): fastdb %+v != database %+v", token, got.record(), recordOfUser(want))
+		}
+		if !gotActive.Equal(wantActive) {
+			t.Errorf("SessionActive(%q): last_active %v != database %v", token, gotActive, wantActive)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if sessions == 0 {
+		t.Fatal("fixture has no sessions")
+	}
+
+	// Unknown token: ErrNoRows and a zero dst, like SessionUser.
+	var missing User
+	if _, err := c.SessionActive(&missing, "no-such-token"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("missing session: got %v, want ErrNoRows", err)
+	}
+	if missing.ID != 0 {
+		t.Errorf("missing session left dst %+v, want zero", missing)
+	}
+
+	// Banned user: u.status=0 drops the join, so ErrNoRows on both readers.
+	banned, err := d.CreateUser(ctx, "Banned", "banned@example.test", "digest", "", 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := d.StartSession(ctx, banned.ID, "test", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.BanUser(ctx, banned.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	var want User
+	if _, err := d.SessionUser(ctx, token); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("database.SessionUser for banned user: got %v, want ErrNoRows", err)
+	}
+	if _, err := c.SessionActive(&want, token); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("SessionActive for banned user: got %v, want ErrNoRows", err)
+	}
+}
+
 func TestDifferentialSidebarRooms(t *testing.T) {
 	path := fixtureDB(t)
 	d, c := openBoth(t, path)

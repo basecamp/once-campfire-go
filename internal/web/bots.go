@@ -40,8 +40,7 @@ func (s *Server) botRequest(w http.ResponseWriter, r *http.Request) bool {
 	var err error
 	fromCookie := false
 	if cookie, e := r.Cookie("session_token"); e == nil {
-		var token string
-		if s.Secrets.VerifyCookie("session_token", rails.UnescapeCookie(cookie.Value), s.DB.Now(), &token) == nil {
+		if token, err := s.verifiedSessionToken(rails.UnescapeCookie(cookie.Value), s.DB.Now()); err == nil {
 			user, err = s.DB.SessionUser(r.Context(), token)
 			fromCookie = err == nil
 		}

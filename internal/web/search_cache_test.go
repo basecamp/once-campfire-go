@@ -59,11 +59,11 @@ func testSearchCachePair(t *testing.T) (*Server, *Server, *httptest.Server, *htt
 	if err != nil {
 		t.Fatal(err)
 	}
-	return on, off, onServer, offServer, sessionCookie(t, secrets, db, user.ID), user
+	return on, off, onServer, offServer, newSessionCookie(t, secrets, db, user.ID), user
 }
 
-// sessionCookie starts a session for user and returns the signed cookie.
-func sessionCookie(t *testing.T, secrets *rails.Secrets, db *database.DB, user int64) *http.Cookie {
+// newSessionCookie starts a session for user and returns the signed cookie.
+func newSessionCookie(t *testing.T, secrets *rails.Secrets, db *database.DB, user int64) *http.Cookie {
 	t.Helper()
 	token, err := db.StartSession(context.Background(), user, "test", "127.0.0.1")
 	if err != nil {
@@ -342,7 +342,7 @@ func TestSearchCacheMembershipInvalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobCookie := sessionCookie(t, secrets, app.DB, bob.ID)
+	bobCookie := newSessionCookie(t, secrets, app.DB, bob.ID)
 	burrow, err := app.DB.CreateRoom(ctx, alice.ID, "Rooms::Closed", "Burrow", []int64{alice.ID})
 	if err != nil {
 		t.Fatal(err)

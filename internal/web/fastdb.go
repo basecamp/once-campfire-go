@@ -154,6 +154,24 @@ func (s *Server) sessionUser(c *fastdb.Conn, ctx context.Context, token string) 
 	return userOf(u), nil
 }
 
+// sessionState returns the active user for a session token together with the
+// session's last_active_at, from one joined fastdb read when the auth fast
+// path is enabled and the pool can serve the borrow. Otherwise it falls back
+// to the legacy two-step shape — database.DB.SessionUser plus a zero
+// lastActive, which the auth middleware treats as "always refresh", so the
+// legacy RefreshSession-on-every-request behaviour is preserved exactly.
+// ErrNoRows means the token is unknown or the user inactive, exactly like
+// database.DB.SessionUser.
+func (s *Server) sessionState(c *fastdb.Conn, ctx context.Context, token string) (database.User, time.Time, error) {
+	if s.authFast && c != nil {
+		var u fastdb.User
+		lastActive, err := c.SessionActive(&u, token)
+		return userOf(u), lastActive, err
+	}
+	u, err := s.DB.SessionUser(ctx, token)
+	return u, time.Time{}, err
+}
+
 // invitation mirrors the raw room-page probe in Server.room: true when the
 // room is the account's first room and holds no more than 40 messages.
 func (s *Server) invitation(c *fastdb.Conn, ctx context.Context, room int64) (bool, error) {
