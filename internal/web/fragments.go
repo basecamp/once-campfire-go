@@ -116,15 +116,17 @@ func messageListCacheKey(messages []database.Message) string {
 // An older in-flight render cannot populate a newer generation after a commit.
 func (s *Server) fragmentKey(ctx context.Context, key string) string {
 	version := uint64(0)
+	var host, origin string
 	if info := requestMetadata(ctx); info != nil {
 		version = info.databaseVersion
+		host, origin = info.host, info.origin
 	} else {
 		version, _ = s.DB.ResponseVersion(ctx)
 	}
 	if version == 0 {
 		return "uncached/" + rand.Text() + "/" + key
 	}
-	return strconv.FormatUint(version, 10) + "/" + key
+	return strconv.FormatUint(version, 10) + "/" + strconv.Quote(host) + "/" + strconv.Quote(origin) + "/" + key
 }
 
 func (s *Server) messageItems(ctx context.Context, messages []database.Message) ([]messageView, error) {

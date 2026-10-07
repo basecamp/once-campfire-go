@@ -336,3 +336,24 @@ func TestResponseCacheForeignFragmentEditsWithoutTimestamps(t *testing.T) {
 		t.Fatal("stale edited boost fragment")
 	}
 }
+
+func TestNestedMessageCachePreservesRequestHostFiltering(t *testing.T) {
+	app, _, cookie, user := testApp(t)
+	ctx := context.Background()
+	rooms, _ := app.DB.Rooms(ctx, user.ID)
+	body := `<action-text-attachment content-type="application/vnd.actiontext.opengraph-embed" href="https://same.example/story" filename="Story"></action-text-attachment>`
+	if _, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "host-filter", body, "Story"); err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []string{fmt.Sprintf("/rooms/%d", rooms[0].ID), fmt.Sprintf("/rooms/%d/messages", rooms[0].ID)} {
+		for _, host := range []string{"same.example", "other.example", "same.example", "other.example"} {
+			request := httptest.NewRequest("GET", "http://"+host+endpoint, nil)
+			request.AddCookie(cookie)
+			response := httptest.NewRecorder()
+			front.Deflate(app).ServeHTTP(response, request)
+			if response.Code != 200 || strings.Contains(response.Body.String(), `href="https://same.example/story"`) != (host != "same.example") {
+				t.Fatal("stale host-scoped message fragment", host, response.Code, response.Body.String())
+			}
+		}
+	}
+}
