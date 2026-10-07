@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/basecamp/once-campfire-go/internal/fastserve"
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -87,6 +88,10 @@ func Serve(ctx context.Context, c Config, app http.Handler) error {
 	public := forward(PublicCompression(NewCache(c.CacheSize, c.MaxCacheItemSize).Handler(app), c), c)
 	var servers []*http.Server
 	var listeners []net.Listener
+	// loops holds the owned-loop servers replacing a net/http target
+	// listener (CAMPFIRE_SERVER_LOOP=on); the same shutdown lifecycle runs
+	// on them.
+	var loops []*fastserve.Server
 	add := func(server *http.Server) error {
 		listener, err := net.Listen("tcp", server.Addr)
 		if err != nil {
@@ -94,6 +99,7 @@ func Serve(ctx context.Context, c Config, app http.Handler) error {
 		}
 		servers = append(servers, server)
 		listeners = append(listeners, listener)
+		loops = append(loops, nil) // index-aligned; the loop replaces this server
 		return nil
 	}
 	defer func() {
@@ -107,6 +113,21 @@ func Serve(ctx context.Context, c Config, app http.Handler) error {
 		target.Protocols.SetUnencryptedHTTP2(false)
 		if err := add(target); err != nil {
 			return err
+		}
+		if c.ServerLoop {
+			// The owned loop takes over the internal listener. It gets the
+			// same timing envelope, the same handler, and the same protocol
+			// configuration for its upgrade/h2c handoff server.
+			loop := fastserve.New(app)
+			loop.ReadTimeout = target.ReadTimeout
+			loop.ReadHeaderTimeout = target.ReadHeaderTimeout
+			loop.WriteTimeout = target.WriteTimeout
+			loop.IdleTimeout = target.IdleTimeout
+			loop.MaxHeaderBytes = int64(target.MaxHeaderBytes)
+			loop.MaxBodySize = c.MaxRequestBody
+			loop.Protocols = target.Protocols
+			loops[len(loops)-1] = loop
+			slog.Info("internal listener on fastserve loop", "address", listeners[len(listeners)-1].Addr())
 		}
 	}
 	if len(c.Domains) == 0 {
@@ -145,8 +166,13 @@ func Serve(ctx context.Context, c Config, app http.Handler) error {
 	results := make(chan error, len(servers))
 	for i, server := range servers {
 		listener := listeners[i]
-		slog.Info("listening", "address", listener.Addr(), "tls", server.TLSConfig != nil)
+		loop := loops[i]
+		slog.Info("listening", "address", listener.Addr(), "tls", server.TLSConfig != nil, "loop", loop != nil)
 		go func() {
+			if loop != nil {
+				results <- loop.Serve(listener)
+				return
+			}
 			if server.TLSConfig != nil {
 				results <- server.ServeTLS(listener, "", "")
 			} else {
@@ -162,8 +188,12 @@ func Serve(ctx context.Context, c Config, app http.Handler) error {
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	stopped := make(chan error, len(servers))
-	for _, server := range servers {
+	for i, server := range servers {
 		go func() {
+			if loop := loops[i]; loop != nil {
+				stopped <- loop.Shutdown(shutdown)
+				return
+			}
 			err := server.Shutdown(shutdown)
 			if err != nil {
 				server.Close()
