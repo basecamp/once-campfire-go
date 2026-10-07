@@ -51,7 +51,13 @@ func shellPage(p page) layoutShellPage {
 	// that timestamp. The fresh refresh cursor is inserted by roomParts.
 	room.UpdatedAt = time.Time{}
 	return layoutShellPage{
-		User: layoutUser{ID: p.User.ID, Name: p.User.Name, Bio: p.User.Bio, UpdatedAt: p.User.UpdatedAt, Role: p.User.Role},
+		User: layoutUser{
+			ID:        p.User.ID,
+			Name:      p.User.Name,
+			Bio:       p.User.Bio,
+			UpdatedAt: p.User.UpdatedAt,
+			Role:      p.User.Role,
+		},
 		Room: room, Account: p.Account, Platform: p.Platform,
 		Title: p.Title, BodyClass: p.BodyClass, Screen: p.Screen,
 		Origin: p.Origin, Stream: p.Stream, VAPIDPublicKey: p.VAPIDPublicKey,

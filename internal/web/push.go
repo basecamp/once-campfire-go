@@ -31,7 +31,8 @@ func (s *Server) initJobs() {
 	s.Jobs = jobs.New(concurrency, "push", "webhook", "purge", "ban", "analyze")
 	s.initCleanup()
 	var vapid *integrations.VAPID
-	if public, private := os.Getenv("VAPID_PUBLIC_KEY"), os.Getenv("VAPID_PRIVATE_KEY"); public != "" && private != "" {
+	if public, private := os.Getenv("VAPID_PUBLIC_KEY"), os.Getenv("VAPID_PRIVATE_KEY"); public != "" &&
+		private != "" {
 		subject := os.Getenv("VAPID_SUBJECT")
 		if subject == "" {
 			domain := strings.TrimSpace(strings.Split(os.Getenv("TLS_DOMAIN"), ",")[0])
@@ -50,9 +51,16 @@ func (s *Server) initJobs() {
 	s.Push = integrations.NewPushSender(vapid)
 	s.mux.HandleFunc("GET /users/{user}/push_subscriptions", s.auth(s.pushSubscriptions))
 	s.mux.HandleFunc("POST /users/{user}/push_subscriptions", s.auth(s.pushSubscriptions))
-	s.mux.HandleFunc("DELETE /users/{user}/push_subscriptions/{subscription}", s.auth(s.deletePushSubscription))
-	s.mux.HandleFunc("POST /users/{user}/push_subscriptions"+"/{subscription}/test_notifications", s.auth(s.testPushNotification))
+	s.mux.HandleFunc(
+		"DELETE /users/{user}/push_subscriptions/{subscription}",
+		s.auth(s.deletePushSubscription),
+	)
+	s.mux.HandleFunc(
+		"POST /users/{user}/push_subscriptions"+"/{subscription}/test_notifications",
+		s.auth(s.testPushNotification),
+	)
 }
+
 func subscriptionParams(r *http.Request) (map[string]*string, error) {
 	attrs := map[string]*string{}
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
@@ -95,6 +103,7 @@ func subscriptionParams(r *http.Request) (map[string]*string, error) {
 	}
 	return attrs, nil
 }
+
 func (s *Server) pushSubscriptions(w http.ResponseWriter, r *http.Request, u database.User) {
 	if r.Method == "GET" || r.Method == "HEAD" {
 		list, err := s.DB.PushSubscriptions(r.Context(), u.ID)
@@ -102,7 +111,13 @@ func (s *Server) pushSubscriptions(w http.ResponseWriter, r *http.Request, u dat
 			s.fail(w, err)
 			return
 		}
-		s.render(w, r, "push-subscriptions", 200, page{User: u, Title: "Push notification subscriptions", Subscriptions: list})
+		s.render(
+			w,
+			r,
+			"push-subscriptions",
+			200,
+			page{User: u, Title: "Push notification subscriptions", Subscriptions: list},
+		)
 		return
 	}
 	attrs, err := subscriptionParams(r)
@@ -136,6 +151,7 @@ func (s *Server) pushSubscriptions(w http.ResponseWriter, r *http.Request, u dat
 	}
 	w.WriteHeader(200)
 }
+
 func (s *Server) deletePushSubscription(w http.ResponseWriter, r *http.Request, u database.User) {
 	id, _ := strconv.ParseInt(r.PathValue("subscription"), 10, 64)
 	if err := s.DB.DeletePushSubscription(r.Context(), u.ID, id); err != nil {
@@ -144,6 +160,7 @@ func (s *Server) deletePushSubscription(w http.ResponseWriter, r *http.Request, 
 	}
 	http.Redirect(w, r, s.origin(r)+pushPath, 302)
 }
+
 func notificationJSON(title, body, path string, badge int64) []byte {
 	var b bytes.Buffer
 	e := json.NewEncoder(&b)
@@ -172,6 +189,7 @@ func notificationJSON(title, body, path string, badge int64) []byte {
 	encoded, _ := rails.CanonicalJSON(bytes.TrimSpace(b.Bytes()), false)
 	return encoded
 }
+
 func (s *Server) testPushNotification(w http.ResponseWriter, r *http.Request, u database.User) {
 	id, _ := strconv.ParseInt(r.PathValue("subscription"), 10, 64)
 	subscription, err := s.DB.PushSubscription(r.Context(), u.ID, id)
@@ -184,13 +202,20 @@ func (s *Server) testPushNotification(w http.ResponseWriter, r *http.Request, u 
 		s.fail(w, err)
 		return
 	}
-	err = s.Push.Send(r.Context(), subscription.Endpoint, subscription.Key, subscription.Auth, notificationJSON("Campfire Test", uuid.NewV4().String(), s.origin(r)+pushPath, badge))
+	err = s.Push.Send(
+		r.Context(),
+		subscription.Endpoint,
+		subscription.Key,
+		subscription.Auth,
+		notificationJSON("Campfire Test", uuid.NewV4().String(), s.origin(r)+pushPath, badge),
+	)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 	http.Redirect(w, r, s.origin(r)+pushPath, 302)
 }
+
 func (s *Server) messageCreated(message database.Message, room database.Room) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -215,7 +240,9 @@ func (s *Server) messageCreated(message database.Message, room database.Room) {
 		return
 	}
 	body := s.plainText(ctx, message.Body)
-	if attachment, err := s.Storage.Attached(ctx, "Message", message.ID, "attachment"); err == nil && attachment.ID != 0 && strings.TrimSpace(body) == "" {
+	if attachment, err := s.Storage.Attached(ctx, "Message", message.ID, "attachment"); err == nil &&
+		attachment.ID != 0 &&
+		strings.TrimSpace(body) == "" {
 		body = attachment.Filename
 	}
 	title := room.Name
@@ -234,8 +261,15 @@ func (s *Server) messageCreated(message database.Message, room database.Room) {
 		}
 		payload := notificationJSON(title, body, fmt.Sprintf("/rooms/%d", room.ID), badge)
 		s.Jobs.Enqueue("push", func(ctx context.Context) error {
-			err := s.Push.Send(ctx, subscription.Endpoint, subscription.Key, subscription.Auth, payload)
-			if errors.Is(err, integrations.ErrPushGone) || errors.Is(err, integrations.ErrPushPoint) {
+			err := s.Push.Send(
+				ctx,
+				subscription.Endpoint,
+				subscription.Key,
+				subscription.Auth,
+				payload,
+			)
+			if errors.Is(err, integrations.ErrPushGone) ||
+				errors.Is(err, integrations.ErrPushPoint) {
 				return s.DB.DeletePushSubscription(ctx, subscription.UserID, subscription.ID)
 			}
 			return err

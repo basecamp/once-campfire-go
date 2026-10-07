@@ -13,7 +13,15 @@ import (
 
 func TestRoomShellPreservesBytesAndRequestData(t *testing.T) {
 	app, _, _, user := testApp(t)
-	base := page{User: user, Room: database.Room{ID: 1, Name: "Room & <name>", Type: "Rooms::Open"}, Chat: true, Screen: "room", Origin: "https://example.test", LoadedAt: "1234567890", MessagesHTML: template.HTML("<div>message one</div>")}
+	base := page{
+		User:         user,
+		Room:         database.Room{ID: 1, Name: "Room & <name>", Type: "Rooms::Open"},
+		Chat:         true,
+		Screen:       "room",
+		Origin:       "https://example.test",
+		LoadedAt:     "1234567890",
+		MessagesHTML: template.HTML("<div>message one</div>"),
+	}
 	check := func(t *testing.T, p page) {
 		t.Helper()
 		var expected bytes.Buffer
@@ -76,10 +84,22 @@ func TestRoomShellPreservesBytesAndRequestData(t *testing.T) {
 		"account logo":           func(p *page) { p.Account.HasLogo = true; p.Account.UpdatedAt = time.Unix(1700000000, 0) },
 		"vapid":                  func(p *page) { p.VAPIDPublicKey = "new-public-key" },
 		"platform": func(p *page) {
-			p.Platform = useragent.Platform{IOS: true, Safari: true, Mobile: true, Browser: "Safari", OperatingSystem: "iPhone"}
+			p.Platform = useragent.Platform{
+				IOS:             true,
+				Safari:          true,
+				Mobile:          true,
+				Browser:         "Safari",
+				OperatingSystem: "iPhone",
+			}
 		},
 		"desktop platform": func(p *page) {
-			p.Platform = useragent.Platform{Windows: true, Chrome: true, Desktop: true, Browser: "Chrome", OperatingSystem: "Windows"}
+			p.Platform = useragent.Platform{
+				Windows:         true,
+				Chrome:          true,
+				Desktop:         true,
+				Browser:         "Chrome",
+				OperatingSystem: "Windows",
+			}
 		},
 		"stream": func(p *page) { p.Stream = "new-stream" },
 	}
