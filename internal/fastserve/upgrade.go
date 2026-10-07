@@ -27,6 +27,15 @@ func newPrefixReplayConn(c net.Conn, prefix []byte) *prefixReplayConn {
 	return &prefixReplayConn{Conn: c, prefix: bytes.NewReader(prefix)}
 }
 
+// Unwrap exposes the wrapped connection, following the errors-style Unwrap
+// convention. The prefix exists only on the read side: every Write through
+// this conn is a pure delegation, so consumers may peel to the underlying
+// socket without losing bytes. The websocket fork's batch writer does
+// exactly that to keep its vectored write a single writev — net.Buffers
+// dispatches the batch on *net.TCPConn's unexported writeBuffers, and a
+// wrapped conn would otherwise fall back to one write(2) per segment.
+func (c *prefixReplayConn) Unwrap() net.Conn { return c.Conn }
+
 func (c *prefixReplayConn) Read(p []byte) (int, error) {
 	if !c.done && c.prefix.Len() > 0 {
 		n, err := c.prefix.Read(p)

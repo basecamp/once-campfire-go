@@ -19,6 +19,12 @@ Campfire additions (all under ENGINE-40, behind the hub's
   hand off to the unchanged streaming reader with identical wire behavior.
 - Frame-level bytes are identical to v1.8.15 for every case (verified by
   byte-for-byte batch-vs-sequential tests and the whole upstream suite).
+- ENGINE-60: the batch write resolves its target through transparent
+  write-delegating wrappers before the vectored write, so a wrapped conn
+  (fastserve's upgrade-handoff `prefixReplayConn`, exposed via the
+  errors-style `Unwrap() net.Conn`) still reaches the TCP conn's writev
+  instead of degrading to one write(2) per segment; targets with no TCP
+  conn underneath (TLS, pipes, test doubles) keep the per-segment path.
 
 Behavioral notes:
 - A 30s write deadline now bounds a whole batch (one wake) rather than each

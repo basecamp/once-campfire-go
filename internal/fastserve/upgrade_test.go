@@ -132,6 +132,68 @@ func TestPrefaceWithoutH2(t *testing.T) {
 	}
 }
 
+// TestPrefixReplayConnUnwrap: the handoff wrapper must expose the wrapped
+// conn (errors-style Unwrap) so write-side consumers (the websocket fork's
+// vectored batch writer) can peel to the TCP connection, and the peel must
+// be byte-transparent: writes through the wrapper reach the wire untouched,
+// and reads replay exactly the consumed prefix before the wire.
+func TestPrefixReplayConnUnwrap(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			accepted <- c
+		}
+	}()
+	peer, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	raw := <-accepted
+	if raw == nil {
+		t.Fatal("accept failed")
+	}
+	defer raw.Close()
+
+	prefix := []byte("GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+	wrapped := newPrefixReplayConn(raw, prefix)
+	if unwrapped := wrapped.Unwrap(); unwrapped != raw {
+		t.Fatalf("Unwrap() = %T %v, want the original conn", unwrapped, unwrapped)
+	}
+
+	// Writes are pure delegation.
+	peer.Write([]byte("replay-me"))
+	wr := make(chan error, 1)
+	go func() { _, err := wrapped.Write([]byte("server-bytes")); wr <- err }()
+	got := make([]byte, len("server-bytes"))
+	if _, err := io.ReadFull(peer, got); err != nil {
+		t.Fatalf("wire read: %v", err)
+	}
+	if err := <-wr; err != nil {
+		t.Fatalf("wrapped write: %v", err)
+	}
+	if string(got) != "server-bytes" {
+		t.Fatalf("wire bytes %q, want %q", got, "server-bytes")
+	}
+
+	// Reads replay the prefix first, then the wire.
+	wrapped.SetReadDeadline(time.Now().Add(5 * time.Second))
+	want := "GET / HTTP/1.1\r\nHost: x\r\n\r\nreplay-me"
+	buf := make([]byte, len(want))
+	if _, err := io.ReadFull(wrapped, buf); err != nil {
+		t.Fatalf("wrapped read: %v", err)
+	}
+	if string(buf) != want {
+		t.Fatalf("read %q, want the prefix and wire bytes", buf)
+	}
+}
+
 // TestPrefaceFragmented sends the preface one byte at a time; the loop must
 // neither 400 a fragment nor stall, and must deliver the same answer as a
 // single-shot preface.

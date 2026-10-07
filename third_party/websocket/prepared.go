@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -219,8 +220,45 @@ func (c *Conn) writePreparedBatchCore(ctx context.Context, deadline time.Time, m
 		}
 	}
 
-	_, err = c.batchBufs.WriteTo(c.rwc)
+	// The batch is one vectored write: net.Buffers.WriteTo dispatches on
+	// *net.TCPConn's unexported writeBuffers and emits a single writev
+	// syscall. Wrappers that delegate Write transparently (fastserve's
+	// upgrade-handoff replay conn) are peeled to the TCP connection first,
+	// or the batch degrades to one write(2) per segment; anything without
+	// an underlying TCP conn keeps the wrapped-conn fallback.
+	_, err = c.batchBufs.WriteTo(writevTarget(c.rwc))
 	return err
+}
+
+// writevTarget resolves the writer a vectored frame batch should go to.
+//
+// A raw *net.TCPConn accepts the batch as one writev syscall: net.Buffers
+// dispatches on its unexported writeBuffers method, which no other type can
+// provide. Transparent write-delegating wrappers (fastserve's
+// prefixReplayConn ahead of the upgrade handoff) must be peeled or every
+// segment becomes its own write(2), which at Campfire's cable fan-out
+// (one batch per client per message) is a ~25 % throughput regression.
+// Wrappers expose the underlying conn through the errors-style
+// Unwrap() net.Conn convention; the peel is bounded so a degenerate wrapper
+// cycle cannot loop. Targets that never resolve to a TCP conn (TLS conns,
+// test doubles, pipes) keep the historical per-segment fallback, written
+// through the wrapped conn itself.
+func writevTarget(w io.Writer) io.Writer {
+	for hops := 0; hops < 16; hops++ {
+		if _, ok := w.(*net.TCPConn); ok {
+			return w
+		}
+		u, ok := w.(interface{ Unwrap() net.Conn })
+		if !ok {
+			return w
+		}
+		next := u.Unwrap()
+		if next == nil {
+			return w
+		}
+		w = next
+	}
+	return w
 }
 
 // BatchMaxFrames bounds a single coalesced write. The hub drains at most
