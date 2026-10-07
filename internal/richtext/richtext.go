@@ -2,8 +2,9 @@
 package richtext
 
 import (
-	xhtml "github.com/basecamp/once-campfire-go/internal/html"
 	"strings"
+
+	xhtml "github.com/basecamp/once-campfire-go/internal/html"
 )
 
 // Render is the context-free entry point for messages without user attachments.
@@ -15,21 +16,25 @@ func Render(body string) (string, string) {
 // Canonical mirrors assignment to an Action Text body. Parse failures retain the
 // original input, as the Rust controller does; presentation still sanitizes it.
 func Canonical(body string) string {
-	root, err := load(body)
+	a := acquireArena()
+	defer releaseArena(a)
+	root, err := load(a, body)
 	if err != nil {
 		return body
 	}
-	return serialize(root)
+	return strings.Clone(serialize(a, root))
 }
 
 // StripTags matches Rails' FullSanitizer followed by the default sanitizer.
 // Text nodes are concatenated without the block separators of to_plain_text.
 func StripTags(body string) (string, error) {
-	root, err := parse(body)
+	a := acquireArena()
+	defer releaseArena(a)
+	root, err := parse(a, body)
 	if err != nil {
 		return "", err
 	}
-	var text strings.Builder
+	text := a.NewBuilder()
 	var visit func(*xhtml.Node)
 	visit = func(n *xhtml.Node) {
 		if n.Type == xhtml.TextNode {
@@ -40,5 +45,9 @@ func StripTags(body string) (string, error) {
 		}
 	}
 	visit(root)
-	return sanitizeString(escapeText(text.String()))
+	sanitized, err := sanitizeString(a, escapeText(text.String()))
+	if err != nil {
+		return "", err
+	}
+	return strings.Clone(sanitized), nil
 }
