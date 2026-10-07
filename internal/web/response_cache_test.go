@@ -300,9 +300,22 @@ func TestResponseCacheForeignFragmentEditsWithoutTimestamps(t *testing.T) {
 	path := fmt.Sprintf("/rooms/%d", rooms[0].ID)
 	cachedRequest(t, app, cookie, "GET", path, nil)
 	cachedRequest(t, app, cookie, "GET", path, nil)
+	messagePath := path + "/messages"
+	warmMessages := cachedRequest(t, app, cookie, "GET", messagePath, nil)
+	oldEtag := warmMessages.Header().Get("ETag")
 	foreign := foreignWriter(t, app)
 	execForeign(t, foreign, "UPDATE action_text_rich_texts SET body='<p>Foreign unchanged timestamp body</p>' WHERE record_type='Message' AND record_id=?", id)
 	fresh := cachedRequest(t, app, cookie, "GET", path, nil)
+	conditional := cachedRequest(t, app, cookie, "GET", messagePath, map[string]string{"If-None-Match": oldEtag})
+	if conditional.Code != 200 || conditional.Header().Get("ETag") == oldEtag || !strings.Contains(conditional.Body.String(), "Foreign unchanged timestamp body") {
+		t.Fatal("false304 for foreign body edit")
+	}
+	bodyEtag := conditional.Header().Get("ETag")
+	execForeign(t, foreign, "UPDATE sessions SET last_active_at='2026-10-07 12:00:00.000000'")
+	unchanged := cachedRequest(t, app, cookie, "GET", messagePath, map[string]string{"If-None-Match": bodyEtag})
+	if unchanged.Code != 304 {
+		t.Fatal("auth-only commit changed presentation validator", unchanged.Code)
+	}
 	if !strings.Contains(fresh.Body.String(), "Foreign unchanged timestamp body") {
 		t.Fatal("stale message fragment")
 	}

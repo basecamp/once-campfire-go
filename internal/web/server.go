@@ -885,9 +885,8 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.Use
 		w.WriteHeader(204)
 		return
 	}
-	if messageFreshness(w, r, messages) {
-		return
-	}
+	// The rendered representation, including related users and boosts, defines
+	// freshness. Timestamps alone miss external edits and association changes.
 	s.render(w, r, "messages", 200, page{messageRecords: messages})
 }
 

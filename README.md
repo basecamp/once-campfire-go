@@ -144,7 +144,9 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
   result body; misses rerun the scoped full query. Complete GET gzip representations have a bounded
   memo keyed by immutable part identities, not by wire ETags. Authorization, sessions and request
   observations stay fresh. Responses derive validators from part lengths and hashes, so ETag values
-  differ from both the original Go implementation and Rust.
+  differ from both the original Go implementation and Rust. Message pagination uses its
+  complete rendered body for ETags, including related-user and boost changes. It omits
+  Last-Modified because message timestamps cannot describe external presentation edits.
 - Completed room, messages, sidebar and search HTML/gzip responses share a per-process
   cache (`CAMPFIRE_RESPONSE_CACHE_MB`, default 64 MiB, 0 disables it). Every request checks
   its session and access before lookup. A dedicated SQLite reader observes local and foreign
