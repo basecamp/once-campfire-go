@@ -2,12 +2,13 @@ package web
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"fmt"
 
 	"net/http"
 	"strconv"
 	"sync"
+
+	"github.com/basecamp/once-campfire-go/internal/responsebody"
 )
 
 var responseBuffers = sync.Pool{New: func() any { return new(bytes.Buffer) }}
@@ -27,7 +28,7 @@ type responseBuffer struct {
 	body      *bytes.Buffer
 	status    int
 	exception bool
-	parts     [][]byte
+	parts     []responsebody.Part
 }
 
 func (w *responseBuffer) WriteHeader(status int) {
@@ -52,10 +53,15 @@ func (w *responseBuffer) finish(r *http.Request) {
 	if w.status == 0 {
 		w.status = 200
 	}
+	parts := w.parts
+	if len(parts) == 0 {
+		// The buffer is not recycled until all writes below have completed.
+		parts = []responsebody.Part{responsebody.NewPart(w.body.Bytes())}
+	}
 	h := w.Header()
 	digested := false
 	if !w.exception && (w.status == 200 || w.status == 201) && w.body.Len() > 0 && h.Get("ETag") == "" && h.Get("Last-Modified") == "" {
-		hash := sha256.Sum256(w.body.Bytes())
+		hash := parts[0].Digest()
 		h.Set("ETag", fmt.Sprintf("W/\"%x\"", hash[:16]))
 		digested = true
 	}
@@ -78,18 +84,22 @@ func (w *responseBuffer) finish(r *http.Request) {
 	if len(w.parts) > 0 && w.status != 204 && w.status != 304 {
 		size := 0
 		for _, part := range w.parts {
-			size += len(part)
+			size += part.Len()
 		}
 		h.Set("Content-Length", strconv.Itoa(size))
 	}
 	w.ResponseWriter.WriteHeader(w.status)
 	if r.Method != "HEAD" && w.status != 204 && w.status != 304 {
-		if len(w.parts) > 0 {
-			for _, part := range w.parts {
-				w.ResponseWriter.Write(part)
-			}
+		// Hand completed bytes to the compressor without joining recorded parts.
+		// Streaming/download writers do not use this optional contract.
+		if writer, ok := w.ResponseWriter.(interface {
+			WriteBody([]responsebody.Part) (int, error)
+		}); ok {
+			writer.WriteBody(parts)
 		} else {
-			w.ResponseWriter.Write(w.body.Bytes())
+			for _, part := range parts {
+				part.WriteTo(w.ResponseWriter)
+			}
 		}
 	}
 }

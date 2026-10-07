@@ -92,6 +92,31 @@ func TestCacheVariantsLimitsAndCookies(t *testing.T) {
 		t.Fatal("large URI was cached")
 	}
 }
+func TestPrivateCacheMissesKeepFreshHeaders(t *testing.T) {
+	for _, policy := range []string{"private, max-age=30", "public, no-cache, max-age=30"} {
+		t.Run(policy, func(t *testing.T) {
+			var calls int
+			cache := NewCache(2048, 1024)
+			handler := cache.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				value := strconv.Itoa(calls)
+				w.Header().Set("Cache-Control", policy)
+				w.Header().Set("Set-Cookie", "request="+value)
+				w.Header().Set("X-Request", value)
+				io.WriteString(w, value)
+			}))
+			for i := 1; i <= 2; i++ {
+				w := httptest.NewRecorder()
+				handler.ServeHTTP(w, httptest.NewRequest("GET", "/private", nil))
+				value := strconv.Itoa(i)
+				if w.Header().Get("Set-Cookie") != "request="+value || w.Header().Get("X-Request") != value || w.Body.String() != value {
+					t.Fatal("private response reused or stripped request data", w.Header(), w.Body.String())
+				}
+			}
+		})
+	}
+}
+
 func TestHTTP2AndShutdown(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

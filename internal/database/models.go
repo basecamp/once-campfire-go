@@ -276,24 +276,6 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 	}
 	return m, err
 }
-func (d *DB) Search(ctx context.Context, user int64, query string) ([]Message, error) {
-	words := strings.Fields(SearchQuery(query))
-	if len(words) == 0 {
-		return []Message{}, nil
-	}
-	for i, w := range words {
-		words[i] = "\"" + strings.ReplaceAll(w, "\"", "\"\"") + "\""
-	}
-	rows, err := d.Read.QueryContext(ctx, messageSelect+"JOIN message_search_index idx ON idx.rowid=m.id JOIN memberships member ON member.room_id=m.room_id WHERE member.user_id=? AND idx.body MATCH ? ORDER BY m.created_at DESC LIMIT 100", user, strings.Join(words, " "))
-	if err != nil {
-		return nil, err
-	}
-	messages, err := scanMessages(rows)
-	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-		messages[i], messages[j] = messages[j], messages[i]
-	}
-	return messages, err
-}
 
 // AuthorizedSessions checks a publication's distinct sessions in one snapshot.
 // json_each keeps the SQL shape stable and avoids SQLite's placeholder limit.

@@ -95,11 +95,15 @@ func inner(n *xhtml.Node, markup string) error {
 
 var voidTags = words("area base br col embed hr img input link meta param source track wbr")
 
+var textEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\u00a0", "&nbsp;")
+var attributeEscaper = strings.NewReplacer("&", "&amp;", "\"", "&quot;", "\u00a0", "&nbsp;")
+var attributeAngleEscaper = strings.NewReplacer("<", "&lt;", ">", "&gt;")
+
 func escapeText(s string) string {
-	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\u00a0", "&nbsp;").Replace(s)
+	return textEscaper.Replace(s)
 }
 func escapeAttr(s string) string {
-	return strings.NewReplacer("&", "&amp;", "\"", "&quot;", "\u00a0", "&nbsp;").Replace(s)
+	return attributeEscaper.Replace(s)
 }
 func serialize(n *xhtml.Node) string {
 	var b strings.Builder
@@ -130,7 +134,7 @@ func serializeTo(b *strings.Builder, n *xhtml.Node, raw, attributeAngles bool) {
 			b.WriteString(`="`)
 			value := escapeAttr(a.Val)
 			if attributeAngles {
-				value = strings.NewReplacer("<", "&lt;", ">", "&gt;").Replace(value)
+				value = attributeAngleEscaper.Replace(value)
 			}
 			b.WriteString(value)
 			b.WriteByte('"')

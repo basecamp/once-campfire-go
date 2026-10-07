@@ -31,7 +31,7 @@ func requireMessage(w http.ResponseWriter, r *http.Request) bool {
 // Matches MessagesController#update and Messages::ByBotsController#message_params.
 func (s *Server) updateMessageAttributes(r *http.Request, user database.User, message database.Message, bodyField, attachmentField string, rawBody *string) (database.Message, error) {
 	var body *string
-	plain := s.plainText(r.Context(), message.Body)
+	var plain string
 	if rawBody != nil || r.Form.Has(bodyField) && !nullParam(r, bodyField) {
 		value := r.Form.Get(bodyField)
 		if rawBody != nil {
@@ -39,6 +39,8 @@ func (s *Server) updateMessageAttributes(r *http.Request, user database.User, me
 		}
 		value, plain = s.canonicalMessage(r.Context(), value)
 		body = &value
+	} else {
+		plain = s.plainText(r.Context(), message.Body)
 	}
 	var attachment *int64
 	var uploaded *storage.Staged

@@ -100,8 +100,13 @@ func TestRustOracle(t *testing.T) {
 	for _, c := range corpus.Cases {
 		result, err := Process(c.Body, Context{Host: c.Host, Resolve: resolve})
 		display, displayErr := Display(c.Body, Context{Host: c.Host, Resolve: resolve})
-		if display.Presentation != result.Presentation || display.Plain != result.Plain {
+		if displayErr != nil || display.Presentation != result.Presentation || display.Plain != result.Plain || display.Filtered != result.Filtered {
 			t.Fatalf("%s: focused display differs: %v", c.Name, displayErr)
+		}
+		for _, field := range []string{"plain", "filtered"} {
+			if fmt.Sprint(display.Errors[field]) != fmt.Sprint(result.Errors[field]) {
+				t.Fatalf("%s: focused %s error differs", c.Name, field)
+			}
 		}
 		ids, _ := MentionIDs(c.Body, Context{Host: c.Host, Resolve: resolve})
 		if !reflect.DeepEqual(ids, result.Mentioned) {

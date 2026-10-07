@@ -48,14 +48,14 @@ func TestSchemaAndMessageTransaction(t *testing.T) {
 	if err != nil || len(messages) != 1 || messages[0].ID != m.ID || messages[0].Body != "<p>running dogs</p>" {
 		t.Fatalf("messages: %v %v", messages, err)
 	}
-	hits, err := d.Search(ctx, u.ID, "run")
+	hits, err := d.SearchReferences(ctx, u.ID, "run")
 	if err != nil || len(hits) != 1 {
 		t.Fatalf("porter search: %v %v", hits, err)
 	}
 	if _, err = d.CreateMessage(ctx, u.ID, 12345, "", "hidden", "hidden"); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("unauthorized write: %v", err)
 	}
-	if hits, err = d.Search(ctx, u.ID+1, "run"); err != nil || len(hits) != 0 {
+	if hits, err = d.SearchReferences(ctx, u.ID+1, "run"); err != nil || len(hits) != 0 {
 		t.Fatalf("private search leaked: %v %v", hits, err)
 	}
 	// An FTS failure must roll back the message and its rich text together.
