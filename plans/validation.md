@@ -251,3 +251,26 @@ the shared harness run is outside this task. Deliberate difference from legacy: 
 Differences vs legacy path verified byte-for-byte on a broadcast corpus (small,
 unicode, empty, compressed, repeated payloads) over a real socket: identical decoded
 payloads and identifiers with the fast path on and off.
+
+## Merged engine benchmark (2026-10-07, all ten branches)
+
+Native `bench/application`, 3 rotating reps, c=16, medians. `go-before` =
+pre-merge engine18 binary; `go` = merged `bc31205` (577beb7a). Validation:
+9 runs, 401,414 writes verified in messages+FTS, 0 HTTP errors, 0 incomplete
+deliveries.
+
+| Route | engine18 | Merged | Rust | Merged vs Rust |
+|---|---:|---:|---:|---:|
+| room_show | 27,957 | 41,216 | 30,959 | **1.33×** |
+| messages_page | 28,340 | 49,632 | 35,529 | **1.40×** |
+| sidebar | 31,607 | 126,859 | 40,478 | **3.13×** |
+| search | 27,695 | 72,759 | 32,832 | **2.22×** |
+| post_message | 5,263 | 6,570 | 7,873 | 0.83× |
+| Cable 100 d=1 | 2,428 | 3,088 | 3,347 | 0.92× |
+| Cable 100 d=0 | 2,265 | 3,589 | 4,273 | 0.84× |
+| Cable 1000 d=1 | ~305 | 329 | ~365 | ~0.90× |
+| Cable 1000 d=0 | ~307 | ~515 | ~548 | ~0.94× |
+
+Room p50 0.261 ms vs Rust 0.499; sidebar p50 0.097 vs 0.383. p99 tails for
+room/messages/post remain worse than Rust (2.55/2.31/13.0 ms vs 0.93/0.76/5.5).
+Raw: `bench/results/merged-20261007/`.
