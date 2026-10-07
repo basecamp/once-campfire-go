@@ -2,21 +2,30 @@ package web
 
 import (
 	"bytes"
-	"github.com/basecamp/once-campfire-go/internal/database"
 	"testing"
 	"time"
+
+	"github.com/basecamp/once-campfire-go/internal/database"
 )
 
 func TestSidebarCacheTracksRenderedChanges(t *testing.T) {
 	app, _, _, user := testApp(t)
 	makePage := func() page {
-		return page{User: user, CanCreateRooms: true, RoomsStream: "rooms", UserRoomsStream: "user",
-			SidebarRooms: []sidebarRoom{{Room: database.Room{ID: 1, Name: "Chat", Type: "Rooms::Open"}}, {Room: database.Room{ID: 2, Type: "Rooms::Direct"}, Members: []database.User{{ID: 2, Name: "Second Person"}}}},
-			Placeholders: []database.User{{ID: 3, Name: "Third Person"}}}
+		return page{
+			User: user, CanCreateRooms: true, RoomsStream: "rooms", UserRoomsStream: "user",
+			SidebarRooms: []sidebarRoom{
+				{Room: database.Room{ID: 1, Name: "Chat", Type: "Rooms::Open"}},
+				{
+					Room:    database.Room{ID: 2, Type: "Rooms::Direct"},
+					Members: []database.User{{ID: 2, Name: "Second Person"}},
+				},
+			},
+			Placeholders: []database.User{{ID: 3, Name: "Third Person"}},
+		}
 	}
 	render := func(p page) string {
 		var b bytes.Buffer
-		if err := app.templates.ExecuteTemplate(&b, "sidebar", p); err != nil {
+		if err := app.templates.ExecuteTemplate(&b, "sidebar-frame", p); err != nil {
 			t.Fatal(err)
 		}
 		return b.String()

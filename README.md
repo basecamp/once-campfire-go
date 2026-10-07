@@ -128,6 +128,10 @@ with four hardware threads allocated to each app.
 | Search | 435 | 315 | 305 | 1,294 | 1,156 | 7,053 | 33,299 |
 | Post a message | 273 | 154 | 137 | 256 | 801 | 4,767 | 6,896 |
 
+The historical Go sidebar results used a bare frame, not the reference's complete layout. The
+handler now renders an application or Turbo-Frame document around the cached frame; those historical
+numbers do not establish full-page sidebar performance.
+
 See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 
 ## Known differences
@@ -137,9 +141,6 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
   therefore still fail in many inventory cells, even when screenshots, accessibility and workflows
   match. These failures remain visible in the validation report. Exact protocol parity for malformed
   parameters and every content-negotiation edge case is not claimed.
-- `GET /users/me/sidebar` returns a bare sidebar frame, while the reference wraps a full layout.
-  Room-ID equality does not establish equal rendering work; cross-port sidebar timing is excluded
-  from the new comparison.
 - WebSockets share serialized and compressed broadcast payloads through a small extension to
   coder/websocket v1.8.15 (see `third_party/websocket/README.campfire`). Outgoing queues hold 256
   frames; slow clients are disconnected. Authorization is checked afresh for each publication,
