@@ -333,15 +333,14 @@ func (w *response) WritePrecomposed(status int, head []byte, body [][]byte) erro
 	h = append(h, head...)
 	h = append(h, "Date: "...)
 	h = append(h, c.nowDate(time.Now())...)
+	h = append(h, '\r', '\n')
 	// Mirror the map path's close decision: a request that asked for
 	// Connection: close (or wants the connection closed) gets the close
 	// header in the same extras position (after Date).
 	closeConn := w.wantsClose || w.req.Header.Get("Connection") == "close"
 	if closeConn {
 		w.closeAfterReply = true
-		h = append(h, '\r', '\n')
-		h = append(h, "Connection: close"...)
-		h = append(h, '\r', '\n')
+		h = append(h, "Connection: close\r\n"...)
 	}
 	h = append(h, '\r', '\n') // the blank line ending the head
 	c.emit(h)

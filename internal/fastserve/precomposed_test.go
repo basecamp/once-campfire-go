@@ -1,6 +1,9 @@
 package fastserve
 
 import (
+	"bufio"
+	"bytes"
+	"io"
 	"net"
 	"net/http"
 	"sync"
@@ -56,6 +59,48 @@ func TestWritePrecomposedBytes(t *testing.T) {
 	}
 	if !contains(out, "\r\nConnection: close\r\n\r\nhello") {
 		t.Fatalf("close/terminator/body wrong: %q", out)
+	}
+}
+
+// A keep-alive precomposed response must terminate the head with a blank line
+// after Date. The close variant above hid a missing CRLF here because its
+// first CRLF doubles as the Date line terminator (regression: the search page
+// reached real browsers through the proxy with no blank line).
+func TestWritePrecomposedKeepAliveBlankLine(t *testing.T) {
+	srv := New(http.NotFoundHandler())
+	conn := &memConn{done: make(chan struct{})}
+	c := newConn(srv, conn)
+	req, err := http.NewRequest("GET", "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ProtoMajor, req.ProtoMinor = 1, 1
+	req.Close = false
+	res := c.newResponse(req)
+	if err := res.WritePrecomposed(200, []byte("X-Test: 1\r\n"), [][]byte{[]byte("hello")}); err != nil {
+		t.Fatal(err)
+	}
+	out := string(conn.buf)
+	if contains(out, "Connection: close") {
+		t.Fatalf("keep-alive response must not carry Connection: close: %q", out)
+	}
+	if !contains(out, "X-Test: 1\r\nDate: ") {
+		t.Fatalf("head missing: %q", out)
+	}
+	if !contains(out, "\r\n\r\nhello") {
+		t.Fatalf("missing blank line before body: %q", out)
+	}
+	// The emitted bytes must parse as a real HTTP/1.1 response.
+	parsed, err := http.ReadResponse(bufio.NewReader(bytes.NewReader([]byte(out))), req)
+	if err != nil {
+		t.Fatalf("emitted response does not parse: %v (%q)", err, out)
+	}
+	body, err := io.ReadAll(parsed.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "hello" {
+		t.Fatalf("body = %q, want hello", body)
 	}
 }
 
