@@ -161,7 +161,7 @@ func maskDate(b []byte) []byte {
 }
 
 // TestServerLoopFlagEnv pins the CAMPFIRE_SERVER_LOOP parsing: on/off/1/0
-// and the default (off).
+// and the default (on, with "off" the documented rollback).
 func TestServerLoopFlagEnv(t *testing.T) {
 	lookup := func(values map[string]string) func(string) (string, bool) {
 		return func(key string) (string, bool) {
@@ -173,7 +173,7 @@ func TestServerLoopFlagEnv(t *testing.T) {
 		value string
 		want  bool
 	}{
-		{"", false}, // unset
+		{"", true}, // unset: the loop is the default
 		{"on", true},
 		{"ON", true},
 		{"true", true},
@@ -181,7 +181,7 @@ func TestServerLoopFlagEnv(t *testing.T) {
 		{"off", false},
 		{"false", false},
 		{"0", false},
-		{"bogus", false}, // unrecognized keeps the default
+		{"bogus", true}, // unrecognized keeps the default
 	}
 	for _, c := range cases {
 		values := map[string]string{}

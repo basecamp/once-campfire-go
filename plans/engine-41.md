@@ -1,7 +1,9 @@
 # ENGINE-41 — owned server loop (fastserve)
 
-Status: implemented behind `CAMPFIRE_SERVER_LOOP=on`, default **off** until
-measured. Branch `engine-41`.
+Status: implemented; **default on** for the internal listener since
+ENGINE-53 (this branch, commit `fastserve: close adapter gaps and
+evidence-based default`). `CAMPFIRE_SERVER_LOOP=off` rolls the internal
+listener back to net/http. The public listeners never use the loop.
 
 ## Scope
 
@@ -47,6 +49,11 @@ same protocol configuration for its handoff server.
 - `internal/fastserve/conn_test.go` — timeouts, concurrency (`-race`),
   panics, 413 + drain + keep-alive reuse, shutdown.
 - `internal/fastserve/bench_test.go` — the loop-vs-net/http serving bench.
+- `internal/fastserve/ab_bench_test.go` — the ENGINE-53 in-app A/B: the
+  application request set (room page, sidebar, search, post) through both
+  loops on the same handler.
+- `internal/fastserve/soak_test.go` — concurrent keep-alive soak with
+  open-fd stability checks (/proc/self/fd before, during and after).
 - `internal/front/config.go`, `internal/front/server.go` — the flag and the
   wiring; `internal/front/server_loop_test.go` — flag-off vs flag-on wire
   parity through the real `front.Serve` composition (Deflate, bodyLimit).
@@ -122,22 +129,78 @@ the parser's documented contract):
   documented above; net/http's per-case texts are not all replicated.
 - Chunked response boundaries are not byte-compared (decoded comparison);
   fixed-length responses are byte-exact.
-- Concurrency is exercised by `-race` tests, not by a soak.
+- Concurrency is exercised by `-race` tests plus the fd-stability soak
+  (`TestSoakConcurrentKeepAlive`): 24 keep-alive clients x 150 mixed
+  requests with mid-soak and post-soak open-fd checks.
 - The benchmark below is a transport-only microbenchmark (one keep-alive
-  connection, no application work); production request cost is dominated by
-  the application, so the adoption decision needs interleaved A/B on the
-  real workload per the ENGINE-41 plan gate.
+  connection, no application work); the adoption decision (ENGINE-53) used
+  the interleaved A/B on application-shaped requests, below.
 - The h2c handoff path is tested with the stdlib client's prior-knowledge
   mode; the internal listener's production configuration has h2c off.
 
-## Measurement (this machine, connected bench, 3 runs, GOMAXPROCS=4, quiet)
+## ENGINE-53 measurement (this machine, GOMAXPROCS=4, quiet, CPUs 16-31)
 
-    BenchmarkServeNetHTTPSingleConn-4    ~8.2-8.8 µs/op   3331 B/op   30 allocs/op
-    BenchmarkServeFastSingleConn-4       ~6.2-6.4 µs/op   3877 B/op   34 allocs/op
+Transport microbench (one keep-alive connection, fixed 418-byte response),
+interleaved medians of 3 runs each:
 
-The loop is ~25% faster per exchange on this shape with a small allocation
-tax (+4/request): the `http.Header` bridge (map, value strings) is
-net/http-parity, and the remaining extras are the writev iovec and the
-adapter's string conversions. The head parse itself is 0 allocs (simdhttp);
-the per-request adapter costs are the reason the loop is not allocation-free
-end to end. Recorded before the ENGINE-41 interleaved-A/B adoption gate.
+    BenchmarkServeNetHTTPSingleConn-4    ~7.93-8.05 µs/op   3331 B/op   30 allocs/op
+    BenchmarkServeFastSingleConn-4       ~6.16-6.29 µs/op   3125 B/op   29 allocs/op
+
+The loop is ~23% faster with one fewer allocation and fewer bytes; the
+adapter tax recorded below is closed (ENGINE-53): the header-map bridge,
+the response head block and the body accumulation all reuse per-connection
+scratch (origin slices kept through the flush window), the Proto string
+comes from the parser's two accepted constants, WriteString appends in
+place, the drain scratch lives on the connection, and net.Buffers.WriteTo
+runs on the connection's own list so the writev dispatch allocates nothing.
+
+In-app A/B (same handler on both loops, interleaved min-of-7 medians,
+benchstat): recorded-piece room page (identity, 374 KiB in 4 parts),
+sidebar fragment, search results, form POST answering 302:
+
+    route     net/http     fastserve    speedup   allocs (net/http -> fast)
+    room      153.2 µs     48.2 µs      3.18x     29 -> 29
+    sidebar   15.20 µs     8.73 µs      1.74x     49 -> 32
+    search    10.92 µs     8.34 µs      1.31x     37 -> 32
+    post      8.42 µs      6.41 µs      1.31x     33 -> 35 (+2: per-request context)
+
+perf stat (room, per op): fastserve 67k cycles / 129k instructions vs
+net/http 243k / 446k; sidebar 15.8k / 38.5k vs 40.9k / 77.8k.
+
+Adoption verdict: default on. The differential corpus (above), the
+websocket/h2c handoff, keep-alive/pipelined reuse, malformed input and
+timeout suites are green under `-race`, the front-level
+`TestServerLoopFlagDiff` byte-compares the full `front.Serve` composition
+flag-on vs flag-off, and requests through the loop carry a per-request
+cancellable context like net/http's. Rollback: `CAMPFIRE_SERVER_LOOP=off`.
+
+ENGINE-53 also closed parity gaps found in this review: the response write
+deadline is cleared after each response (net/http parity, so a keep-alive
+connection outliving a short WriteTimeout is not cut by the stale
+deadline); the ReadTimeout budget is anchored at the head read start (head
+and body share one budget, as in net/http); the automatic Content-Length
+now respects a handler-set Transfer-Encoding (net/http's !hasTE gate);
+http.MaxBytesReader overflow marks the response requestTooLarge — the
+unexported-method interface net/http uses cannot cross the package
+boundary, so the loop detects the overflow at the post-handler drain and
+places Connection: close exactly where net/http's bytes put it; and
+responses served while Shutdown is in progress carry Connection: close
+(net/http's doKeepAlives gate).
+
+Additional deltas from ENGINE-53, narrower than the parse deltas above:
+
+- Request contexts are cancelled when the request completes (net/http
+  parity) but not on a client disconnect mid-request: net/http detects
+  that with a per-request background-read goroutine, which this loop does
+  not spawn (the write path still fails fast on a dead peer).
+- Response trailers (net/http's `Trailer:` pseudo-headers) are not
+  supported.
+- A handler that closes the request body early: net/http closes the
+  connection (unread bytes undeclared), this loop drains up to the
+  post-handler budget and can reuse it — a strictly wider keep-alive.
+- Requests whose head is already parsed when Shutdown starts are served
+  (net/http drops them); the response still carries Connection: close.
+- A body that trips http.MaxBytesReader after the handler already wrote
+  its header places Connection: close at the end of the header block
+  where net/http would interleave it inline; status, values and close all
+  match.

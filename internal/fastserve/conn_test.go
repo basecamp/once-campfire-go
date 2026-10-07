@@ -13,6 +13,41 @@ import (
 	"time"
 )
 
+// TestWriteTimeoutResetParity: net/http clears the write deadline after each
+// response (c.rwc.SetWriteDeadline(time.Time{}) in conn.serve), so a
+// keep-alive connection that idles past a short WriteTimeout must still serve
+// the next request. The deadline covers one handler+response, not the
+// connection's lifetime.
+func TestWriteTimeoutResetParity(t *testing.T) {
+	addr := startFast(t, corpusHandler(), func(s *Server) {
+		s.WriteTimeout = 100 * time.Millisecond
+	})
+	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := c.Write([]byte("GET /hello HTTP/1.1\r\nHost: h\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(c)
+	r1 := rawOneRead(t, br)
+	if !strings.Contains(r1, "hello world") {
+		t.Fatalf("first response %q", r1)
+	}
+	// Idle for three times the WriteTimeout, then ask again on the same
+	// connection: a stale write deadline would kill the second response.
+	time.Sleep(300 * time.Millisecond)
+	if _, err := c.Write([]byte("GET /json HTTP/1.1\r\nHost: h\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	r2 := rawOneRead(t, br)
+	if !strings.Contains(r2, `{"ok":1}`) {
+		t.Fatalf("second response after idle past WriteTimeout %q", r2)
+	}
+}
+
 // TestReadHeaderTimeout: a client that sends nothing must be dropped when
 // the header deadline passes, with no bytes written (net/http's silent-close
 // timeout path).

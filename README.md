@@ -235,12 +235,12 @@ on `HTTPS_PORT=443`. The internal application listener defaults to `TARGET_BIND=
 `TARGET_PORT=3000`. The front server provides HTTP/2, optional H2C, gzip/zstd with compression jitter,
 a bounded response cache and graceful shutdown. `campfire backup` writes an atomic SQLite snapshot;
 the image provides ONCE's `/hooks/pre-backup` and `/hooks/post-restore` hooks.
-`CAMPFIRE_SERVER_LOOP` (default `off`; also accepts `on`/`true`/`1` and `off`/`false`/`0`) replaces
-the internal listener's net/http conn loop with the experimental owned loop in `internal/fastserve`
-(simdhttp head parsing, vectored writes; upgrade and h2c connections are handed to an internal
-net/http server). It is off by default until measured; the public listeners never use it. The
-deliberate HTTP differences of that loop and its verification limits are recorded in
-`plans/engine-41.md`.
+The internal listener's conn loop is the owned loop in `internal/fastserve` by default (simdhttp head
+parsing, one vectored write per response flush; upgrade and h2c connections are handed to an internal
+net/http server). `CAMPFIRE_SERVER_LOOP` (default `on`; accepts `on`/`true`/`1` and `off`/`false`/`0`)
+rolls that listener back to net/http with `off`. The public listeners never use the owned loop. Its
+deliberate HTTP differences from net/http and its verification limits are recorded in
+`plans/engine-41.md`; the ENGINE-53 measurement that made it the default is in the same file.
 
 ## Validation
 
