@@ -495,3 +495,18 @@ replays (which would remove chunked framing) was deliberately not done:
 the application path emits no Content-Length, and the mandate is byte
 identity. A precomposed public-listener writer (fastserve) is the next
 step beyond this record.
+
+## Consolidation pass on the full 7-branch tree (2026-10-07)
+
+- `bin/check` (gofmt/assets/vet/full `-race` suite): EXIT=0
+- Browser workflows (full setup → live two-tab → edit → search → admin → bots →
+  transfers → pings): EXIT=0, PASS
+- Screen inventory `--only '**'`: 192 cells, 0 errors; **178/178 applicable
+  pixels and accessibility equal** (14 non-visual cells: fragments/JSON/PWA/
+  avatars); remaining strict DOM/network deltas are the documented pre-existing
+  differences.
+- Upgrade interop (Rust↔Go logins, Go-written message searched by Rust): EXIT=0
+- Regression found and fixed during this pass: precomposed framing omitted the
+  head-terminating blank line on keep-alive responses (search page reached real
+  browsers as a malformed header block; proxies returned 502). Fixed in
+  `35661c9` with a regression test pinning the keep-alive path.
