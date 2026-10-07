@@ -386,3 +386,21 @@ differences vs Rails (pre-existing upstream); single-process cache coherence;
 write-lane crash windows; frozen-time test artifacts. The engine's behaviour
 preservation is proven separately by on/off byte-parity, poisoning and
 invalidation-audit tests.
+
+## Final native verification run (2026-10-07, merged + browser-safe gzip fix)
+
+3 rotating reps, c=16, medians [min–max]; `go-before` = engine18 baseline.
+Validation: 9 runs, 394,573 acknowledged writes verified in messages+FTS,
+0 HTTP errors, 0 incomplete deliveries, 9 identical thumbnails.
+
+| Route c=16 | engine18 | Final | Rust | Final vs Rust |
+|---|---:|---:|---:|---:|
+| room_show | 27,936 | 47,916 | 30,813 | **1.56×** |
+| messages_page | 28,640 | 54,976 | 35,424 | **1.55×** |
+| sidebar | 32,044 | 129,331 | 40,227 | **3.21×** |
+| search | 27,704 | 92,451 | 32,702 | **2.83×** |
+| post_message | 5,266 | 6,282 | 7,842 | 0.80× |
+| Cable 1000 d=1 | ~305 | ~326 | ~364 | 0.90× |
+
+Room p99 1.99 ms vs Rust 0.94; sidebar p99 0.56 vs 0.71 (faster). Raw:
+`bench/results/final-native-20261007/`.
