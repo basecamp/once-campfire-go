@@ -18,6 +18,9 @@ import (
 
 var gzipPool = sync.Pool{New: func() any { writer, _ := gzip.NewWriterLevel(nil, 6); return writer }}
 
+// ResponseEncoding shares the application compressor's negotiation with body caching.
+func ResponseEncoding(header string) string { return encoding(header) }
+
 func encoding(header string) string {
 	type item struct {
 		name       string

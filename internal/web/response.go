@@ -29,6 +29,7 @@ type responseBuffer struct {
 	status    int
 	exception bool
 	parts     []responsebody.Part
+	server    *Server
 }
 
 func (w *responseBuffer) WriteHeader(status int) {
@@ -81,9 +82,12 @@ func (w *responseBuffer) finish(r *http.Request) {
 	if h.Get("Content-Type") == "" && w.status != 204 && w.status != 304 {
 		h.Set("Content-Type", "text/html; charset=utf-8")
 	}
-	if len(w.parts) > 0 && w.status != 204 && w.status != 304 {
+	if w.server != nil {
+		parts = w.server.cacheResponse(r, w, parts)
+	}
+	if len(parts) > 0 && w.status != 204 && w.status != 304 {
 		size := 0
-		for _, part := range w.parts {
+		for _, part := range parts {
 			size += part.Len()
 		}
 		h.Set("Content-Length", strconv.Itoa(size))

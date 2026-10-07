@@ -36,6 +36,7 @@ const (
 
 type Server struct {
 	fragments      *fragmentCache
+	responses      *responseCache
 	Webhooks       *integrations.WebhookClient
 	Jobs           *jobs.Runner
 	Push           *integrations.PushSender
@@ -154,8 +155,13 @@ func New(
 			return nil, fmt.Errorf("invalid CAMPFIRE_FRAGMENT_CACHE_MB %q", raw)
 		}
 	}
+	responseBytes, err := responseCacheBudget()
+	if err != nil {
+		return nil, fmt.Errorf("invalid CAMPFIRE_RESPONSE_CACHE_MB: %w", err)
+	}
 	s := &Server{
 		fragments:      newFragmentCache(cacheMB << 20),
+		responses:      newResponseCache(responseBytes),
 		Cable:          cable.New(db, secrets),
 		DB:             db,
 		Secrets:        secrets,
@@ -218,11 +224,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path != "/cable" && !strings.HasPrefix(r.URL.Path, "/rails/active_storage/") {
-		buffered := &responseBuffer{ResponseWriter: w}
+		buffered := &responseBuffer{ResponseWriter: w, server: s}
 		w = buffered
 		defer func() { buffered.finish(r) }()
 	}
 	w, r = s.withBrowserSession(w, r)
+	s.beginResponseCache(r)
 	defer func() {
 		if sw := w.(*sessionWriter); !sw.written {
 			sw.WriteHeader(200)
@@ -545,6 +552,9 @@ func (s *Server) auth(
 		if s.blockBrowser(w, r) {
 			return
 		}
+		if info := requestMetadata(r.Context()); info != nil && info.response != nil {
+			info.response.user = u.ID
+		}
 		next(w, r, u)
 	}
 }
@@ -808,6 +818,11 @@ func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
 		s.roomLookupFailure(w, r, err)
 		return
 	}
+	if hit := s.responseHit(r); hit != nil {
+		s.rememberRoom(w, r, strconv.FormatInt(room.ID, 10))
+		hit.serve(w)
+		return
+	}
 	anchor, _ := strconv.ParseInt(strings.TrimPrefix(r.PathValue("anchor"), "@"), 10, 64)
 	messages, err := s.DB.MessagePageReferences(r.Context(), room.ID, anchor, "around")
 	if errors.Is(err, sql.ErrNoRows) {
@@ -849,6 +864,10 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.Use
 	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
 	if err != nil {
 		s.fail(w, err)
+		return
+	}
+	if hit := s.responseHit(r); hit != nil {
+		hit.serve(w)
 		return
 	}
 	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
@@ -944,6 +963,10 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 }
 
 func (s *Server) sidebar(w http.ResponseWriter, r *http.Request, u database.User) {
+	if hit := s.responseHit(r); hit != nil {
+		hit.serve(w)
+		return
+	}
 	items, err := s.sidebarRooms(r.Context(), u)
 	if err != nil {
 		s.fail(w, err)
@@ -985,6 +1008,10 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 			return
 		}
 		http.Redirect(w, r, "/searches", 302)
+		return
+	}
+	if hit := s.responseHit(r); hit != nil {
+		hit.serve(w)
 		return
 	}
 	recent, err := s.DB.RecentSearches(r.Context(), u.ID)

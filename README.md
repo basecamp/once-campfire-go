@@ -145,6 +145,11 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
   memo keyed by immutable part identities, not by wire ETags. Authorization, sessions and request
   observations stay fresh. Responses derive validators from part lengths and hashes, so ETag values
   differ from both the original Go implementation and Rust.
+- Completed room, messages, sidebar and search HTML/gzip responses share a per-process
+  cache (`CAMPFIRE_RESPONSE_CACHE_MB`, default 64 MiB, 0 disables it). Every request checks
+  its session and access before lookup. A dedicated SQLite reader observes local and foreign
+  commits and invalidates all entries. Request variants remain separate; headers and cookies
+  stay fresh. GET and HEAD share bodies and preserve validators; flash responses bypass it.
 - The default version label and fallback VAPID subject identify `once-campfire-go`. Explicit version,
   VAPID keys and subject settings remain supported.
 - Storage keys containing separators, NUL, or parent-directory shards are rejected before

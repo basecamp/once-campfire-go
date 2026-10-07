@@ -14,6 +14,7 @@ type requestInfoKey struct{}
 // stays lazy for non-browser endpoints, and derived contexts share the result.
 type requestInfo struct {
 	host, origin string
+	response     *responseRound
 	agentOnce    sync.Once
 	agent        *useragent.Agent
 }
