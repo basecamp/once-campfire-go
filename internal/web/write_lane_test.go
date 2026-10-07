@@ -122,14 +122,18 @@ func parityPost(t *testing.T, server *httptest.Server, body string, cookie *http
 }
 
 // TestCreateMessageStatementCount pins the statement budget of one
-// POST /messages request (ENGINE-45): queue on, fast reads off so every read
-// is a counted database/sql statement, checkpoints off the clock, one plain
-// post. The number is part of the contract — the fresh-message view, the
-// reused room record and the in-line lane are what keep it at 12 instead of
-// 17 — so a change must update the count consciously.
+// POST /messages request on the database/sql write lane (ENGINE-45): queue
+// on, fast reads off so every read is a counted database/sql statement,
+// direct writes off so the create transaction's seven statements are
+// counted too, checkpoints off the clock, one plain post. The number is
+// part of the contract — the fresh-message view, the reused room record and
+// the in-line lane are what keep it at 12 instead of 17 — so a change must
+// update the count consciously. The direct lane's per-post stream is pinned
+// separately, in TestCreateMessageFastWriteStatementCount.
 func TestCreateMessageStatementCount(t *testing.T) {
 	t.Setenv("CAMPFIRE_WRITE_QUEUE", "on")
 	t.Setenv("CAMPFIRE_FASTDB", "off")
+	t.Setenv("CAMPFIRE_FASTDB_WRITE", "off")
 	t.Setenv("CAMPFIRE_CHECKPOINT_MS", "3600000")
 	t.Setenv("CAMPFIRE_FROZEN_TIME", "2026-01-02T03:04:05Z")
 	root := t.TempDir()
@@ -188,6 +192,81 @@ func TestCreateMessageStatementCount(t *testing.T) {
 	}
 	if got := count(); got != 12 {
 		t.Fatalf("POST /messages statements = %d, want 12\n%s", got, dump())
+	}
+}
+
+// TestCreateMessageFastWriteStatementCount pins the statement budget of one
+// POST /messages with the direct write lane on (the ENGINE-55 default): the
+// create transaction's seven statements run as prepared statements on the
+// fastdb connection, invisible to the counting driver, so the same request
+// counts exactly 12−7 = 5 (the view statements; the write-side statements
+// are pinned by text and order in the database package's
+// TestFastWriteStatementStream, which records the direct lane's stream). The
+// message still persists with its search row, so the count cut is not a
+// dropped statement.
+func TestCreateMessageFastWriteStatementCount(t *testing.T) {
+	t.Setenv("CAMPFIRE_WRITE_QUEUE", "on")
+	t.Setenv("CAMPFIRE_FASTDB", "off")
+	t.Setenv("CAMPFIRE_FASTDB_WRITE", "on")
+	t.Setenv("CAMPFIRE_CHECKPOINT_MS", "3600000")
+	t.Setenv("CAMPFIRE_FROZEN_TIME", "2026-01-02T03:04:05Z")
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "test.sqlite3")
+	db, count, reset, _, err := database.OpenCounting(dbPath, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	ctx := context.Background()
+	user, err := db.Setup(ctx, "Owner", "owner@test", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateUser(ctx, "Alice", "alice@test", "digest", "", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	rooms, err := db.Rooms(ctx, user.ID)
+	if err != nil || len(rooms) == 0 {
+		t.Fatalf("rooms: %v %v", rooms, err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := db.CreateMessage(ctx, user.ID, rooms[0].ID, fmt.Sprintf("seed-%d", i), fmt.Sprintf("<p>seed %d</p>", i), fmt.Sprintf("seed %d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	secrets, err := rails.NewSecrets("write-lane-parity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := db.StartSession(ctx, user.ID, "test", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := secrets.SignCookie("session_token", token, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := &http.Cookie{Name: "session_token", Value: rails.EscapeCookie(signed)}
+	app, err := New(db, secrets, false, dbPath, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
+
+	form := url.Values{"message[body]": {"hello lane"}, "message[client_message_id]": {"fast-count-1"}}.Encode()
+	reset()
+	response, data := parityPost(t, server, form, cookie)
+	if response.StatusCode != 406 {
+		t.Fatalf("post status %d body=%s, want 406-by-negotiation", response.StatusCode, data)
+	}
+	if got := count(); got != 5 {
+		t.Fatalf("direct-lane POST /messages statements = %d, want 5 (12 − 7 write-side)", got)
+	}
+	hits, err := db.Search(ctx, user.ID, "lane")
+	if err != nil || len(hits) != 1 {
+		t.Fatalf("search after direct-lane post: %v %v", hits, err)
 	}
 }
 

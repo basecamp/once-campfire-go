@@ -226,9 +226,11 @@ func (d *DB) CreateWebhookReply(ctx context.Context, user, room int64, body, pla
 }
 
 // BlobStager keeps file copying outside the SQLite writer while committing the blob
-// and its owning record together.
+// and its owning record together. Insert runs inside the record's transaction,
+// through UploadTx: *sql.Tx on the database/sql paths, the direct lane's
+// transaction on the fastdb path.
 type BlobStager interface {
-	Insert(context.Context, *sql.Tx) (int64, error)
+	Insert(context.Context, UploadTx) (int64, error)
 	Keep()
 	Discard()
 }
@@ -253,47 +255,46 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 	// room touch, body and attachment. The search index and unread bump run
 	// as after-commit work around it: inside the same transaction on the
 	// direct and in-line paths, after the shared commit on the queued path,
-	// exactly as the Rust port shapes the same Rails callbacks.
-	run := func(tx *sql.Tx) (Message, error) {
+	// exactly as the Rust port shapes the same Rails callbacks. The
+	// statements go through the lane's jobTx, so the two lanes run the same
+	// SQL in the same order (the statement-count tests pin both).
+	run := func(tx jobTx) (Message, error) {
 		created := m
 		if checkMembership {
-			var n int
-			if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.room_id=? AND m.user_id=? AND u.status=0", room, user).Scan(&n); err != nil {
+			n, err := tx.MembershipCount(ctx, room, user)
+			if err != nil {
 				return created, err
 			}
 			if n != 1 {
 				return created, ErrForbidden
 			}
 		}
-		if err := tx.QueryRowContext(ctx, "SELECT name FROM users WHERE id=?", user).Scan(&created.Creator); err != nil {
+		name, err := tx.CreatorName(ctx, user)
+		if err != nil {
 			return created, err
 		}
+		created.Creator = name
 		if staged != nil {
-			var err error
 			blob, err = staged.Insert(ctx, tx)
 			if err != nil {
 				return created, err
 			}
 		}
 		stamp := Stamp(now)
-		r, err := tx.ExecContext(ctx, "INSERT INTO messages(client_message_id,creator_id,room_id,created_at,updated_at) VALUES (?,?,?,?,?)", client, user, room, stamp, stamp)
+		created.ID, err = tx.InsertMessage(ctx, client, user, room, stamp)
 		if err != nil {
 			return created, err
 		}
-		created.ID, err = r.LastInsertId()
-		if err != nil {
-			return created, err
-		}
-		if _, err = tx.ExecContext(ctx, "UPDATE rooms SET updated_at=? WHERE id=?", stamp, room); err != nil {
+		if err := tx.TouchRoom(ctx, room, stamp); err != nil {
 			return created, err
 		}
 		if body != nil {
-			if _, err = tx.ExecContext(ctx, "INSERT INTO action_text_rich_texts(name,record_type,record_id,body,created_at,updated_at) VALUES ('body','Message',?,?,?,?)", created.ID, *body, stamp, stamp); err != nil {
+			if err := tx.InsertRichText(ctx, created.ID, *body, stamp); err != nil {
 				return created, err
 			}
 		}
 		if blob != 0 {
-			if _, err = tx.ExecContext(ctx, "INSERT INTO active_storage_attachments(blob_id,record_type,record_id,name,created_at) VALUES (?,'Message',?,'attachment',?)", blob, created.ID, stamp); err != nil {
+			if err := tx.InsertAttachment(ctx, blob, created.ID, stamp); err != nil {
 				return created, err
 			}
 		}
@@ -306,28 +307,21 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 	// transaction of its own, so the pair commits together behind the batch
 	// (ENGINE-45 batching) and the crash window ENGINE-31 documents — a
 	// committed message row without its index and unread rows — is unchanged.
-	afterCommit := func(ctx context.Context, conn execer, created Message) error {
+	afterCommit := func(ctx context.Context, conn jobTx, created Message) error {
 		stamp := Stamp(now)
-		for _, q := range []struct {
-			sql  string
-			args []any
-		}{
-			{"INSERT INTO message_search_index(rowid,body) VALUES (?,?)", []any{created.ID, plain}},
-			{"UPDATE memberships SET unread_at=?,updated_at=? WHERE room_id=? AND user_id!=? AND involvement!='invisible' AND (connected_at IS NULL OR connected_at < ?)", []any{stamp, stamp, room, user, Stamp(now.Add(-60 * time.Second))}},
-		} {
-			if _, err := conn.ExecContext(ctx, q.sql, q.args...); err != nil {
-				return err
-			}
+		if err := conn.InsertSearchIndex(ctx, created.ID, plain); err != nil {
+			return err
 		}
-		return nil
+		return conn.BumpUnread(ctx, room, user, stamp, Stamp(now.Add(-60*time.Second)))
 	}
 	if d.writer == nil {
 		err := d.Transaction(ctx, func(tx *sql.Tx) error {
+			lane := &sqlLaneTx{tx: tx}
 			var err error
-			if m, err = run(tx); err != nil {
+			if m, err = run(lane); err != nil {
 				return err
 			}
-			return afterCommit(ctx, tx, m)
+			return afterCommit(ctx, lane, m)
 		})
 		if err == nil {
 			// ENGINE-20/ENGINE-30 registries: bump after the commit so no
@@ -400,18 +394,18 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 	}
 	afterCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	// One transaction of the after-commit pair on the write pool: the two
+	// One transaction of the after-commit pair on the write lane: the two
 	// statements commit together instead of in two implicit transactions,
 	// halving the after-work's hold on the single write connection.
-	btx, err := d.Write.BeginTx(context.Background(), nil)
+	btx, err := d.lane.begin(context.Background())
 	if err != nil {
 		return result.message, err
 	}
 	if err := job.after(afterCtx, btx, result.message); err != nil {
-		btx.Rollback()
+		btx.rollback()
 		return result.message, err
 	}
-	if err := btx.Commit(); err != nil {
+	if err := btx.commit(); err != nil {
 		return result.message, err
 	}
 	return result.message, nil

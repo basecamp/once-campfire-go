@@ -127,7 +127,19 @@ type Conn struct {
 // reported here while a malformed database is reported by the first statement
 // (fastdb.OpenReadOnly runs its pragmas immediately).
 func OpenReadOnly(path string) (*Conn, error) {
-	flags := C.int(C.SQLITE_OPEN_READONLY | C.SQLITE_OPEN_NOMUTEX)
+	return open(path, C.SQLITE_OPEN_READONLY)
+}
+
+// OpenReadWrite opens path read-write, creating it when it does not exist
+// (SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE), with the same NOMUTEX and URI
+// conventions as OpenReadOnly. The write connection shares the same
+// single-owner contract: the caller serializes transactions in Go.
+func OpenReadWrite(path string) (*Conn, error) {
+	return open(path, C.SQLITE_OPEN_READWRITE|C.SQLITE_OPEN_CREATE)
+}
+
+func open(path string, extra C.int) (*Conn, error) {
+	flags := C.int(C.SQLITE_OPEN_NOMUTEX) | extra
 	if strings.HasPrefix(path, "file:") {
 		flags |= C.SQLITE_OPEN_URI
 	}
@@ -202,6 +214,21 @@ func (c *Conn) Exec(sql string) error {
 	return st.Finalize()
 }
 
+// LastInsertRowID returns the rowid of the most recent successful INSERT on
+// the connection, in the transaction the insert committed to. The value is
+// read immediately after the insert's Step, on the same connection, so it
+// always names this connection's last insert — the same value
+// database/sql's LastInsertId reports.
+func (c *Conn) LastInsertRowID() int64 {
+	return int64(C.sqlite3_last_insert_rowid(c.db))
+}
+
+// Changes returns the number of rows modified by the most recently completed
+// statement on the connection.
+func (c *Conn) Changes() int64 {
+	return int64(C.sqlite3_changes(c.db))
+}
+
 func (c *Conn) err(rc C.int) error {
 	if rc == C.SQLITE_OK {
 		return nil
@@ -269,6 +296,11 @@ func (s *Stmt) BindTextBytes(i int, v []byte) error {
 	rc := C.fastdb_bind_text(s.stmt, C.int(i), p, C.int(len(v)))
 	runtime.KeepAlive(v)
 	return s.conn.err(rc)
+}
+
+// BindNull binds parameter i (1-based) as SQL NULL.
+func (s *Stmt) BindNull(i int) error {
+	return s.conn.err(C.sqlite3_bind_null(s.stmt, C.int(i)))
 }
 
 // ClearBindings resets all parameters to NULL.

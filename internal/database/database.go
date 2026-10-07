@@ -18,6 +18,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/basecamp/once-campfire-go/internal/fastdb/write"
 )
 
 //go:embed schema.sql
@@ -53,9 +55,10 @@ type DB struct {
 	userVersion    atomic.Int64
 	writer         *messageWriter
 	checkpoints    *checkpointer
+	lane           laneConn
 	// afterMu/afterN/afterCV count callers still inside the write lane's
 	// after-commit work (search index insert + unread bump), which runs in
-	// the request goroutine on d.Write after the shared commit. DB.Close
+	// the request goroutine on the lane after the shared commit. DB.Close
 	// waits for the count to reach zero before closing Write so a committed
 	// write never fails its after() with "database is closed".
 	afterMu sync.Mutex
@@ -77,6 +80,13 @@ func parseWriteQueue(raw string) (enabled, valid bool) {
 		return true, false
 	}
 }
+
+// parseFastdbWrite maps a CAMPFIRE_FASTDB_WRITE value to its setting, with
+// the same value shapes (and warning policy) as CAMPFIRE_WRITE_QUEUE. The
+// default is on: the message create transaction runs as direct prepared
+// statements on the fastdb lane (ENGINE-55); off restores the database/sql
+// lane exactly.
+func parseFastdbWrite(raw string) (enabled, valid bool) { return parseWriteQueue(raw) }
 
 // checkpointIntervalMS reads CAMPFIRE_CHECKPOINT_MS (milliseconds, default
 // 1000): the schedule of the off-writer PASSIVE WAL checkpoint.
@@ -146,26 +156,51 @@ func open(driver, path string, readers int) (*DB, error) {
 			slog.Warn("invalid CAMPFIRE_WRITE_QUEUE; keeping the write queue on", "value", raw)
 		}
 	}
+	fastWrite := true
+	if raw, ok := os.LookupEnv("CAMPFIRE_FASTDB_WRITE"); ok {
+		var valid bool
+		fastWrite, valid = parseFastdbWrite(raw)
+		if !valid {
+			slog.Warn("invalid CAMPFIRE_FASTDB_WRITE; keeping the direct write lane on", "value", raw)
+		}
+	}
 	if queue {
 		// The writer connection never auto-checkpoints: the separate
 		// checkpointer pays the checkpoint fsyncs on its own schedule. The
 		// durability contract does not move — WAL mode, synchronous=NORMAL,
 		// journal_size_limit untouched (the default -1), so commits are not
 		// fsynced and what committed since the last checkpoint can be lost to
-		// a power failure, exactly as before.
+		// a power failure, exactly as before. The fastdb write lane sets the
+		// same pragma on its direct connection at open (ENGINE-55).
 		if _, err := w.Exec("PRAGMA wal_autocheckpoint=0"); err != nil {
 			r.Close()
 			return fail(err)
 		}
-		writer := newMessageWriter(w)
+		var lane laneConn
+		if fastWrite {
+			// The direct lane: the create transaction runs as prepared
+			// statements on one fastdb connection instead of database/sql
+			// (its single-connection serialization is reproduced by the
+			// connection's transaction mutex).
+			conn, err := write.OpenWriter(path, 64)
+			if err != nil {
+				r.Close()
+				return fail(err)
+			}
+			conn.SetRecorder(fastWriteRecord)
+			lane = &fastLaneConn{conn: conn}
+		} else {
+			lane = &sqlLaneConn{db: w}
+		}
+		writer := newMessageWriter(lane)
 		checkpoints, err := startCheckpointer(driver, uri+options, checkpointIntervalMS())
 		if err != nil {
 			writer.Close()
 			r.Close()
 			return fail(err)
 		}
-		db.writer, db.checkpoints = writer, checkpoints
-		slog.Info("write queue", "enabled", true, "group_commit", true)
+		db.writer, db.checkpoints, db.lane = writer, checkpoints, lane
+		slog.Info("write queue", "enabled", true, "group_commit", true, "fastdb_writes", fastWrite)
 	} else {
 		slog.Info("write queue", "enabled", false)
 	}
@@ -188,9 +223,9 @@ func (d *DB) Close() error {
 	if d.writer != nil {
 		d.writer.Close()
 		// Wait for in-flight after-commit work (search insert and unread
-		// bump on the write pool) so a write whose commit landed shares the
+		// bump on the write lane) so a write whose commit landed shares the
 		// close rather than failing its after() statements on the closed
-		// pool, which would report a committed write as failed.
+		// lane, which would report a committed write as failed.
 		d.afterMu.Lock()
 		for d.afterN > 0 {
 			d.afterCV.Wait()
@@ -199,6 +234,14 @@ func (d *DB) Close() error {
 	}
 	if d.checkpoints != nil {
 		d.checkpoints.Close()
+	}
+	// The direct lane's own connection closes after the writer drained and
+	// the after-commit count reached zero; the database/sql lane's pool is
+	// d.Write, closed below.
+	if d.lane != nil {
+		if err := d.lane.close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if err := d.Read.Close(); err != nil {
 		errs = append(errs, err)

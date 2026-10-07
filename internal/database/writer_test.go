@@ -64,6 +64,40 @@ func TestWriteQueueDurabilityPragmas(t *testing.T) {
 	if got := pragmaInt(t, d.Read.DB, "PRAGMA synchronous"); got != 1 {
 		t.Errorf("reader synchronous = %d, want NORMAL(1)", got)
 	}
+	// The direct lane's connection carries the same durability set (ENGINE-55):
+	// the writer never pays the checkpoint fsyncs, whichever lane runs.
+	if fc, ok := d.lane.(*fastLaneConn); ok {
+		ctx := context.Background()
+		tx, err := fc.conn.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		check := func(query, want string) {
+			t.Helper()
+			s, err := tx.Stmt(query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Reset()
+			if row, err := s.Step(); err != nil || !row {
+				t.Fatalf("%s: %v %v", query, row, err)
+			}
+			got, err := s.Text(0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Errorf("%s = %q, want %q", query, got, want)
+			}
+		}
+		check("PRAGMA journal_mode", "wal")
+		check("PRAGMA synchronous", "1")
+		check("PRAGMA wal_autocheckpoint", "0")
+		check("PRAGMA journal_size_limit", "-1")
+		check("PRAGMA busy_timeout", "5000")
+		check("PRAGMA foreign_keys", "1")
+	}
 	// A direct PASSIVE checkpoint on the checkpointer's connection must not
 	// error while the writer is idle.
 	d.checkpoints.passive()
@@ -116,6 +150,60 @@ func TestWriteQueueInvalidFlagKeepsDefault(t *testing.T) {
 	}
 }
 
+// TestFastWriteInvalidFlagKeepsDefault pins CAMPFIRE_FASTDB_WRITE parsing:
+// an unrecognised value keeps the direct lane on.
+func TestFastWriteInvalidFlagKeepsDefault(t *testing.T) {
+	t.Setenv("CAMPFIRE_FASTDB_WRITE", "nope")
+	d := testDB(t)
+	if _, ok := d.lane.(*fastLaneConn); !ok {
+		t.Fatal("unrecognised CAMPFIRE_FASTDB_WRITE turned the direct lane off")
+	}
+}
+
+// TestFastWriteOffPath pins the A/B switch: CAMPFIRE_FASTDB_WRITE=off
+// restores the database/sql lane exactly.
+func TestFastWriteOffPath(t *testing.T) {
+	t.Setenv("CAMPFIRE_FASTDB_WRITE", "off")
+	d := testDB(t)
+	if _, ok := d.lane.(*sqlLaneConn); !ok {
+		t.Fatal("CAMPFIRE_FASTDB_WRITE=off did not restore the database/sql lane")
+	}
+	ctx := context.Background()
+	u, err := d.Setup(ctx, "Legacy", "legacy@test", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rooms, err := d.Rooms(ctx, u.ID)
+	if err != nil || len(rooms) == 0 {
+		t.Fatalf("setup rooms: %v %v", rooms, err)
+	}
+	m, err := d.CreateMessage(ctx, u.ID, rooms[0].ID, "", "<p>legacy lane</p>", "legacy lane")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Body != "<p>legacy lane</p>" || m.ID == 0 {
+		t.Fatalf("message: %+v", m)
+	}
+	if hits, err := d.Search(ctx, u.ID, "legacy"); err != nil || len(hits) != 1 {
+		t.Fatalf("search after legacy write: %v %v", hits, err)
+	}
+}
+
+// runBothLanes runs the test body under both write-lane modes: the
+// database/sql lane (CAMPFIRE_FASTDB_WRITE=off) and the direct fastdb lane
+// (the production default). The lane-semantic tests below pin their contract
+// on both, so a change to either lane's statement shape or rollback
+// behaviour fails here.
+func runBothLanes(t *testing.T, fn func(t *testing.T)) {
+	t.Helper()
+	for _, mode := range []string{"off", "on"} {
+		t.Run("fastdb_writes="+mode, func(t *testing.T) {
+			t.Setenv("CAMPFIRE_FASTDB_WRITE", mode)
+			fn(t)
+		})
+	}
+}
+
 // seededWriterTest builds a database with an owner, an observer with a
 // membership in a closed room, the closed room, and a stranger with no
 // membership. Messages posted by the owner must bump unread_at for the
@@ -160,115 +248,119 @@ func (d *DB) readStamp(ctx context.Context, query string, args ...any) (time.Tim
 // every search-index row and the room's unread bump: the exact surface the
 // task's tests-first list names.
 func TestWriteQueueConcurrentWriters(t *testing.T) {
-	d, owner, observer, _, room := seededWriterTest(t)
-	ctx := context.Background()
-	const writers = 24
-	const perWriter = 5
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	messages := make([][]Message, writers)
-	errs := make([]error, writers)
-	for i := 0; i < writers; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			<-start
-			for j := 0; j < perWriter; j++ {
-				body := fmt.Sprintf("<p>writer %d message %d</p>", i, j)
-				// One FTS token per message: SearchQuery splits query words
-				// on '-' and '_', so hyphenated needles match every row that
-				// shares a token.
-				plain := fmt.Sprintf("wneedle%02d%02d", i, j)
-				m, err := d.CreateMessage(ctx, owner, room, fmt.Sprintf("client-%d-%d", i, j), body, plain)
-				if err != nil {
-					errs[i] = err
-					return
+	runBothLanes(t, func(t *testing.T) {
+		d, owner, observer, _, room := seededWriterTest(t)
+		ctx := context.Background()
+		const writers = 24
+		const perWriter = 5
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		messages := make([][]Message, writers)
+		errs := make([]error, writers)
+		for i := 0; i < writers; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				for j := 0; j < perWriter; j++ {
+					body := fmt.Sprintf("<p>writer %d message %d</p>", i, j)
+					// One FTS token per message: SearchQuery splits query words
+					// on '-' and '_', so hyphenated needles match every row that
+					// shares a token.
+					plain := fmt.Sprintf("wneedle%02d%02d", i, j)
+					m, err := d.CreateMessage(ctx, owner, room, fmt.Sprintf("client-%d-%d", i, j), body, plain)
+					if err != nil {
+						errs[i] = err
+						return
+					}
+					messages[i] = append(messages[i], m)
 				}
-				messages[i] = append(messages[i], m)
-			}
-		}(i)
-	}
-	close(start)
-	wg.Wait()
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("writer %d: %v", i, err)
+			}(i)
 		}
-	}
-
-	// Every request's own result: ids, room, creator, client id, body.
-	seen := make(map[int64]string, writers*perWriter)
-	for i, list := range messages {
-		if len(list) != perWriter {
-			t.Fatalf("writer %d got %d results", i, len(list))
-		}
-		for j, m := range list {
-			if m.RoomID != room || m.CreatorID != owner || m.Creator != "Owner" {
-				t.Fatalf("writer %d msg %d: bad record %+v", i, j, m)
-			}
-			if want := fmt.Sprintf("client-%d-%d", i, j); m.ClientID != want {
-				t.Fatalf("writer %d msg %d: client %q, want %q", i, j, m.ClientID, want)
-			}
-			if want := fmt.Sprintf("<p>writer %d message %d</p>", i, j); m.Body != want {
-				t.Fatalf("writer %d msg %d: body %q, want %q", i, j, m.Body, want)
-			}
-			seen[m.ID] = m.ClientID
-		}
-	}
-	if len(seen) != writers*perWriter {
-		t.Fatalf("distinct ids = %d, want %d", len(seen), writers*perWriter)
-	}
-
-	// All rows persisted through the group commits.
-	if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE room_id=?", room); err != nil || n != writers*perWriter {
-		t.Fatalf("messages rows = %d %v, want %d", n, err, writers*perWriter)
-	}
-	// The search index holds every message body; a query for each needle
-	// finds exactly its message.
-	for i := 0; i < writers; i++ {
-		for j := 0; j < perWriter; j++ {
-			needle := fmt.Sprintf("wneedle%02d%02d", i, j)
-			hits, err := d.Search(ctx, owner, needle)
+		close(start)
+		wg.Wait()
+		for i, err := range errs {
 			if err != nil {
-				t.Fatal(err)
-			}
-			if len(hits) != 1 || hits[0].Body != fmt.Sprintf("<p>writer %d message %d</p>", i, j) {
-				t.Fatalf("search %q: %v", needle, hits)
+				t.Fatalf("writer %d: %v", i, err)
 			}
 		}
-	}
-	if n, err := d.readInt(ctx, "SELECT count(*) FROM message_search_index"); err != nil || n != writers*perWriter {
-		t.Fatalf("search index rows = %d %v, want %d", n, err, writers*perWriter)
-	}
-	// The observer's membership was bumped by the last write (never
-	// connected, involvement enabled); the bump is fresh.
-	stamp, err := d.readStamp(ctx, "SELECT unread_at FROM memberships WHERE room_id=? AND user_id=?", room, observer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if age := time.Since(stamp); age < 0 || age > 5*time.Minute {
-		t.Fatalf("observer unread_at not bumped by the batch: %v (%s ago)", stamp, age)
-	}
+
+		// Every request's own result: ids, room, creator, client id, body.
+		seen := make(map[int64]string, writers*perWriter)
+		for i, list := range messages {
+			if len(list) != perWriter {
+				t.Fatalf("writer %d got %d results", i, len(list))
+			}
+			for j, m := range list {
+				if m.RoomID != room || m.CreatorID != owner || m.Creator != "Owner" {
+					t.Fatalf("writer %d msg %d: bad record %+v", i, j, m)
+				}
+				if want := fmt.Sprintf("client-%d-%d", i, j); m.ClientID != want {
+					t.Fatalf("writer %d msg %d: client %q, want %q", i, j, m.ClientID, want)
+				}
+				if want := fmt.Sprintf("<p>writer %d message %d</p>", i, j); m.Body != want {
+					t.Fatalf("writer %d msg %d: body %q, want %q", i, j, m.Body, want)
+				}
+				seen[m.ID] = m.ClientID
+			}
+		}
+		if len(seen) != writers*perWriter {
+			t.Fatalf("distinct ids = %d, want %d", len(seen), writers*perWriter)
+		}
+
+		// All rows persisted through the group commits.
+		if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE room_id=?", room); err != nil || n != writers*perWriter {
+			t.Fatalf("messages rows = %d %v, want %d", n, err, writers*perWriter)
+		}
+		// The search index holds every message body; a query for each needle
+		// finds exactly its message.
+		for i := 0; i < writers; i++ {
+			for j := 0; j < perWriter; j++ {
+				needle := fmt.Sprintf("wneedle%02d%02d", i, j)
+				hits, err := d.Search(ctx, owner, needle)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(hits) != 1 || hits[0].Body != fmt.Sprintf("<p>writer %d message %d</p>", i, j) {
+					t.Fatalf("search %q: %v", needle, hits)
+				}
+			}
+		}
+		if n, err := d.readInt(ctx, "SELECT count(*) FROM message_search_index"); err != nil || n != writers*perWriter {
+			t.Fatalf("search index rows = %d %v, want %d", n, err, writers*perWriter)
+		}
+		// The observer's membership was bumped by the last write (never
+		// connected, involvement enabled); the bump is fresh.
+		stamp, err := d.readStamp(ctx, "SELECT unread_at FROM memberships WHERE room_id=? AND user_id=?", room, observer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if age := time.Since(stamp); age < 0 || age > 5*time.Minute {
+			t.Fatalf("observer unread_at not bumped by the batch: %v (%s ago)", stamp, age)
+		}
+	})
 }
 
 // TestWriteQueueOrdering asserts ids strictly follow submission order: the
 // queued tasks run in queue order inside one transaction, so LastInsertId
 // must ascend with submission.
 func TestWriteQueueOrdering(t *testing.T) {
-	d, owner, _, _, room := seededWriterTest(t)
-	ctx := context.Background()
-	const total = 40
-	ids := make([]int64, total)
-	for i := 0; i < total; i++ {
-		m, err := d.CreateMessage(ctx, owner, room, fmt.Sprintf("order-%d", i), fmt.Sprintf("<p>order %d</p>", i), fmt.Sprintf("order-%d", i))
-		if err != nil {
-			t.Fatal(err)
+	runBothLanes(t, func(t *testing.T) {
+		d, owner, _, _, room := seededWriterTest(t)
+		ctx := context.Background()
+		const total = 40
+		ids := make([]int64, total)
+		for i := 0; i < total; i++ {
+			m, err := d.CreateMessage(ctx, owner, room, fmt.Sprintf("order-%d", i), fmt.Sprintf("<p>order %d</p>", i), fmt.Sprintf("order-%d", i))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids[i] = m.ID
+			if i > 0 && ids[i] <= ids[i-1] {
+				t.Fatalf("ids not ascending at %d: %d <= %d", i, ids[i], ids[i-1])
+			}
 		}
-		ids[i] = m.ID
-		if i > 0 && ids[i] <= ids[i-1] {
-			t.Fatalf("ids not ascending at %d: %d <= %d", i, ids[i], ids[i-1])
-		}
-	}
+	})
 }
 
 // TestWriteQueueFailureIsolation puts one failing job in a batch of good ones
@@ -276,224 +368,234 @@ func TestWriteQueueOrdering(t *testing.T) {
 // messages persist with their search rows and the unread bump, the failing
 // one leaves nothing behind.
 func TestWriteQueueFailureIsolation(t *testing.T) {
-	d, owner, observer, stranger, room := seededWriterTest(t)
-	ctx := context.Background()
-	var wg sync.WaitGroup
-	start := make(chan struct{})
-	results := make([]struct {
-		m   Message
-		err error
-	}, 6)
-	for i := range results {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			<-start
-			user := owner
+	runBothLanes(t, func(t *testing.T) {
+		d, owner, observer, stranger, room := seededWriterTest(t)
+		ctx := context.Background()
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		results := make([]struct {
+			m   Message
+			err error
+		}, 6)
+		for i := range results {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				user := owner
+				if i == 2 {
+					user = stranger // no membership in the room: ErrForbidden
+				}
+				results[i].m, results[i].err = d.CreateMessage(ctx, user, room, fmt.Sprintf("late-%d", i), fmt.Sprintf("<p>late %d</p>", i), fmt.Sprintf("late-%d", i))
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+		for i, r := range results {
 			if i == 2 {
-				user = stranger // no membership in the room: ErrForbidden
+				if !errors.Is(r.err, ErrForbidden) {
+					t.Fatalf("job %d: got %v, want ErrForbidden", i, r.err)
+				}
+				continue
 			}
-			results[i].m, results[i].err = d.CreateMessage(ctx, user, room, fmt.Sprintf("late-%d", i), fmt.Sprintf("<p>late %d</p>", i), fmt.Sprintf("late-%d", i))
-		}(i)
-	}
-	close(start)
-	wg.Wait()
-	for i, r := range results {
-		if i == 2 {
-			if !errors.Is(r.err, ErrForbidden) {
-				t.Fatalf("job %d: got %v, want ErrForbidden", i, r.err)
+			if r.err != nil {
+				t.Fatalf("job %d: %v", i, r.err)
 			}
-			continue
 		}
-		if r.err != nil {
-			t.Fatalf("job %d: %v", i, r.err)
+		// The failing job left no message row and no search row; the others all
+		// persisted with search rows, and the unread bump still ran.
+		if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE room_id=?", room); err != nil || n != 5 {
+			t.Fatalf("messages after batch = %d %v, want 5", n, err)
 		}
-	}
-	// The failing job left no message row and no search row; the others all
-	// persisted with search rows, and the unread bump still ran.
-	if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE room_id=?", room); err != nil || n != 5 {
-		t.Fatalf("messages after batch = %d %v, want 5", n, err)
-	}
-	if n, err := d.readInt(ctx, "SELECT count(*) FROM message_search_index"); err != nil || n != 5 {
-		t.Fatalf("search rows after batch = %d %v, want 5", n, err)
-	}
-	if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE client_message_id='late-2'"); err != nil || n != 0 {
-		t.Fatalf("failed job persisted: %d %v", n, err)
-	}
-	if _, err := d.readStamp(ctx, "SELECT unread_at FROM memberships WHERE room_id=? AND user_id=?", room, observer); err != nil {
-		t.Fatalf("observer unread not bumped by the batch: %v", err)
-	}
+		if n, err := d.readInt(ctx, "SELECT count(*) FROM message_search_index"); err != nil || n != 5 {
+			t.Fatalf("search rows after batch = %d %v, want 5", n, err)
+		}
+		if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE client_message_id='late-2'"); err != nil || n != 0 {
+			t.Fatalf("failed job persisted: %d %v", n, err)
+		}
+		if _, err := d.readStamp(ctx, "SELECT unread_at FROM memberships WHERE room_id=? AND user_id=?", room, observer); err != nil {
+			t.Fatalf("observer unread not bumped by the batch: %v", err)
+		}
+	})
 }
 
 // TestWriteQueueCancellation pins the cancel semantics: a job whose context is
 // cancelled before the writer executes it does not persist (the legacy
 // BeginTx-with-cancelled-ctx behaviour), and the caller learns ctx.Err().
 func TestWriteQueueCancellation(t *testing.T) {
-	d, owner, _, _, room := seededWriterTest(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	m, err := d.CreateMessage(ctx, owner, room, "cancelled", "<p>cancelled</p>", "cancelled")
-	if err == nil || !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled create: %v %+v", err, m)
-	}
-	if n, err := d.readInt(context.Background(), "SELECT count(*) FROM messages WHERE client_message_id='cancelled'"); err != nil || n != 0 {
-		t.Fatalf("cancelled job persisted: %d %v", n, err)
-	}
-	// The writer still serves later jobs.
-	after, err := d.CreateMessage(context.Background(), owner, room, "after-cancel", "<p>after cancel</p>", "after-cancel")
-	if err != nil || after.Body != "<p>after cancel</p>" {
-		t.Fatalf("post-cancel write: %v %+v", err, after)
-	}
+	runBothLanes(t, func(t *testing.T) {
+		d, owner, _, _, room := seededWriterTest(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		m, err := d.CreateMessage(ctx, owner, room, "cancelled", "<p>cancelled</p>", "cancelled")
+		if err == nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled create: %v %+v", err, m)
+		}
+		if n, err := d.readInt(context.Background(), "SELECT count(*) FROM messages WHERE client_message_id='cancelled'"); err != nil || n != 0 {
+			t.Fatalf("cancelled job persisted: %d %v", n, err)
+		}
+		// The writer still serves later jobs.
+		after, err := d.CreateMessage(context.Background(), owner, room, "after-cancel", "<p>after cancel</p>", "after-cancel")
+		if err != nil || after.Body != "<p>after cancel</p>" {
+			t.Fatalf("post-cancel write: %v %+v", err, after)
+		}
+	})
 }
 
 // TestWriteQueueDrainsOnClose pins shutdown: jobs queued before Close run to
 // completion (their results are delivered), and creators racing Close either
 // persist or fail with ErrWriterClosed — never hang.
 func TestWriteQueueDrainsOnClose(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "test.sqlite3")
-	d, err := Open(path, 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	owner, err := d.Setup(ctx, "Owner", "owner@test", "digest")
-	if err != nil {
-		t.Fatal(err)
-	}
-	room, err := d.CreateRoom(ctx, owner.ID, "Rooms::Open", "Lane", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Queued jobs whose callers never wait are still drained and answered.
-	raw := make([]*messageJob, 8)
-	for i := range raw {
-		raw[i] = &messageJob{
-			ctx:  ctx,
-			run:  func(tx *sql.Tx) (Message, error) { return Message{ID: int64(i + 1)}, nil },
-			done: make(chan messageResult, 1),
-		}
-		if err := d.writer.submit(raw[i]); err != nil {
-			t.Fatal(err)
-		}
-	}
-	d.Close()
-	for i, job := range raw {
-		result := <-job.done
-		if result.err != nil {
-			t.Fatalf("queued job %d: %v", i, result.err)
-		}
-		if result.message.ID != int64(i+1) {
-			t.Fatalf("queued job %d result = %+v", i, result.message)
-		}
-	}
-
-	// Creators racing Close: every outcome is decided before Close returns.
-	d, err = Open(path, 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wg sync.WaitGroup
-	errs := make([]error, 16)
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, errs[i] = d.CreateMessage(ctx, owner.ID, room.ID, fmt.Sprintf("close-%d", i), fmt.Sprintf("<p>close %d</p>", i), fmt.Sprintf("close-%d", i))
-		}(i)
-	}
-	time.Sleep(2 * time.Millisecond)
-	d.Close()
-	wg.Wait()
-	committed, failed := 0, 0
-	for _, err := range errs {
-		switch {
-		case errors.Is(err, ErrWriterClosed):
-			failed++
-		case err != nil:
-			t.Fatalf("close-period write: %v", err)
-		default:
-			committed++
-		}
-	}
-	if committed+failed != 16 {
-		t.Fatalf("outcomes = %d committed + %d failed, want 16", committed, failed)
-	}
-	if committed == 0 {
-		t.Fatal("no write completed before close")
-	}
-	// Persistence is final: a fresh open of the same file sees every
-	// committed row exactly once, and none of the rejected ones.
-	check, err := Open(path, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer check.Close()
-	for i := 0; i < 16; i++ {
-		n, err := check.readInt(ctx, "SELECT count(*) FROM messages WHERE client_message_id=?", fmt.Sprintf("close-%d", i))
+	runBothLanes(t, func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "test.sqlite3")
+		d, err := Open(path, 4)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if n > 1 {
-			t.Fatalf("close-%d persisted %d times", i, n)
+		ctx := context.Background()
+		owner, err := d.Setup(ctx, "Owner", "owner@test", "digest")
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if n, err := check.readInt(ctx, "SELECT count(*) FROM messages WHERE room_id=?", room.ID); err != nil || n != committed {
-		t.Fatalf("persisted = %d %v, want %d committed", n, err, committed)
-	}
+		room, err := d.CreateRoom(ctx, owner.ID, "Rooms::Open", "Lane", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Queued jobs whose callers never wait are still drained and answered.
+		raw := make([]*messageJob, 8)
+		for i := range raw {
+			raw[i] = &messageJob{
+				ctx:  ctx,
+				run:  func(tx jobTx) (Message, error) { return Message{ID: int64(i + 1)}, nil },
+				done: make(chan messageResult, 1),
+			}
+			if err := d.writer.submit(raw[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		d.Close()
+		for i, job := range raw {
+			result := <-job.done
+			if result.err != nil {
+				t.Fatalf("queued job %d: %v", i, result.err)
+			}
+			if result.message.ID != int64(i+1) {
+				t.Fatalf("queued job %d result = %+v", i, result.message)
+			}
+		}
+
+		// Creators racing Close: every outcome is decided before Close returns.
+		d, err = Open(path, 4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		errs := make([]error, 16)
+		for i := 0; i < 16; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				_, errs[i] = d.CreateMessage(ctx, owner.ID, room.ID, fmt.Sprintf("close-%d", i), fmt.Sprintf("<p>close %d</p>", i), fmt.Sprintf("close-%d", i))
+			}(i)
+		}
+		time.Sleep(2 * time.Millisecond)
+		d.Close()
+		wg.Wait()
+		committed, failed := 0, 0
+		for _, err := range errs {
+			switch {
+			case errors.Is(err, ErrWriterClosed):
+				failed++
+			case err != nil:
+				t.Fatalf("close-period write: %v", err)
+			default:
+				committed++
+			}
+		}
+		if committed+failed != 16 {
+			t.Fatalf("outcomes = %d committed + %d failed, want 16", committed, failed)
+		}
+		if committed == 0 {
+			t.Fatal("no write completed before close")
+		}
+		// Persistence is final: a fresh open of the same file sees every
+		// committed row exactly once, and none of the rejected ones.
+		check, err := Open(path, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer check.Close()
+		for i := 0; i < 16; i++ {
+			n, err := check.readInt(ctx, "SELECT count(*) FROM messages WHERE client_message_id=?", fmt.Sprintf("close-%d", i))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n > 1 {
+				t.Fatalf("close-%d persisted %d times", i, n)
+			}
+		}
+		if n, err := check.readInt(ctx, "SELECT count(*) FROM messages WHERE room_id=?", room.ID); err != nil || n != committed {
+			t.Fatalf("persisted = %d %v, want %d committed", n, err, committed)
+		}
+	})
 }
 
 // TestCreateMessageUnreadWindow pins the connected_at cutoff of the unread
 // bump: a member connected within the last minute is not marked unread, a
 // member connected before it is (the same SQL on both lanes).
 func TestCreateMessageUnreadWindow(t *testing.T) {
-	for _, mode := range []string{"on", "off"} {
-		t.Run("queue="+mode, func(t *testing.T) {
-			t.Setenv("CAMPFIRE_WRITE_QUEUE", mode)
-			d, owner, observer, _, room := seededWriterTest(t)
-			ctx := context.Background()
-			if _, err := d.Write.ExecContext(ctx, "UPDATE memberships SET connected_at=? WHERE room_id=? AND user_id=?", Stamp(time.Now().Add(-2*time.Minute)), room, observer); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := d.CreateMessage(ctx, owner, room, "", "<p>old</p>", "old"); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := d.readStamp(ctx, "SELECT unread_at FROM memberships WHERE room_id=? AND user_id=?", room, observer); err != nil {
-				t.Fatalf("stale connection was not bumped: %v", err)
-			}
-			if _, err := d.Write.ExecContext(ctx, "UPDATE memberships SET connected_at=?, unread_at=NULL WHERE room_id=? AND user_id=?", Stamp(time.Now().Add(-10*time.Second)), room, observer); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := d.CreateMessage(ctx, owner, room, "", "<p>new</p>", "new"); err != nil {
-				t.Fatal(err)
-			}
-			var unread sql.NullString
-			if err := d.Read.QueryRowContext(ctx, "SELECT unread_at FROM memberships WHERE room_id=? AND user_id=?", room, observer).Scan(&unread); err != nil {
-				t.Fatal(err)
-			}
-			if unread.Valid {
-				t.Fatalf("recent connection marked unread: %v", unread.String)
-			}
-		})
-	}
+	runBothLanes(t, func(t *testing.T) {
+		for _, mode := range []string{"on", "off"} {
+			t.Run("queue="+mode, func(t *testing.T) {
+				t.Setenv("CAMPFIRE_WRITE_QUEUE", mode)
+				d, owner, observer, _, room := seededWriterTest(t)
+				ctx := context.Background()
+				if _, err := d.Write.ExecContext(ctx, "UPDATE memberships SET connected_at=? WHERE room_id=? AND user_id=?", Stamp(time.Now().Add(-2*time.Minute)), room, observer); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := d.CreateMessage(ctx, owner, room, "", "<p>old</p>", "old"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := d.readStamp(ctx, "SELECT unread_at FROM memberships WHERE room_id=? AND user_id=?", room, observer); err != nil {
+					t.Fatalf("stale connection was not bumped: %v", err)
+				}
+				if _, err := d.Write.ExecContext(ctx, "UPDATE memberships SET connected_at=?, unread_at=NULL WHERE room_id=? AND user_id=?", Stamp(time.Now().Add(-10*time.Second)), room, observer); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := d.CreateMessage(ctx, owner, room, "", "<p>new</p>", "new"); err != nil {
+					t.Fatal(err)
+				}
+				var unread sql.NullString
+				if err := d.Read.QueryRowContext(ctx, "SELECT unread_at FROM memberships WHERE room_id=? AND user_id=?", room, observer).Scan(&unread); err != nil {
+					t.Fatal(err)
+				}
+				if unread.Valid {
+					t.Fatalf("recent connection marked unread: %v", unread.String)
+				}
+			})
+		}
+	})
 }
 
 // TestWriteQueueWebhookReply exercises the background path: a webhook-style
 // create (no membership check) through the queue still persists and
 // search-indexes.
 func TestWriteQueueWebhookReply(t *testing.T) {
-	d, owner, _, stranger, room := seededWriterTest(t)
-	ctx := context.Background()
-	m, err := d.CreateWebhookReply(ctx, stranger, room, "<p>reply</p>", "reply", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE id=?", m.ID); err != nil || n != 1 {
-		t.Fatalf("webhook reply missing: %d %v", n, err)
-	}
-	if hits, err := d.Search(ctx, owner, "reply"); err != nil || len(hits) != 1 {
-		t.Fatalf("webhook reply not searchable: %v %v", hits, err)
-	}
+	runBothLanes(t, func(t *testing.T) {
+		d, owner, _, stranger, room := seededWriterTest(t)
+		ctx := context.Background()
+		m, err := d.CreateWebhookReply(ctx, stranger, room, "<p>reply</p>", "reply", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE id=?", m.ID); err != nil || n != 1 {
+			t.Fatalf("webhook reply missing: %d %v", n, err)
+		}
+		if hits, err := d.Search(ctx, owner, "reply"); err != nil || len(hits) != 1 {
+			t.Fatalf("webhook reply not searchable: %v %v", hits, err)
+		}
+	})
 }
 
 // TestWriteQueueAfterCommitFailure pins the queued path's after-commit
@@ -504,50 +606,52 @@ func TestWriteQueueWebhookReply(t *testing.T) {
 // after-commit statements commit atomically with the row; see
 // TestWriteQueueAdaptiveAfterCommitAtomicity).
 func TestWriteQueueAfterCommitFailure(t *testing.T) {
-	d, owner, _, _, room := seededWriterTest(t)
-	ctx := context.Background()
-	if _, err := d.Write.Exec("DROP TABLE message_search_index"); err != nil {
-		t.Fatal(err)
-	}
-	// Force the queued path: a blocker job claims the lane and holds the
-	// write connection inside its transaction, so the post below can only be
-	// batched behind it. Releasing the gate lets the batch commit the post's
-	// message row before the caller's after-commit transaction fails.
-	gate := make(chan struct{})
-	blocker := &messageJob{
-		ctx:  ctx,
-		run:  func(tx *sql.Tx) (Message, error) { <-gate; return Message{}, nil },
-		done: make(chan messageResult, 1),
-	}
-	go func() { _ = d.writer.submit(blocker) }()
-	for {
-		d.writer.mu.Lock()
-		busy := d.writer.busy
-		d.writer.mu.Unlock()
-		if busy {
-			break
+	runBothLanes(t, func(t *testing.T) {
+		d, owner, _, _, room := seededWriterTest(t)
+		ctx := context.Background()
+		if _, err := d.Write.Exec("DROP TABLE message_search_index"); err != nil {
+			t.Fatal(err)
 		}
-		runtime.Gosched()
-	}
-	var m Message
-	var postErr error
-	posted := make(chan struct{})
-	go func() {
-		defer close(posted)
-		m, postErr = d.CreateMessage(ctx, owner, room, "keeps-row", "<p>keeps row</p>", "keeps row")
-	}()
-	// The blocker holds the lane; the post is queued behind it and cannot
-	// run in-line while the gate is shut.
-	time.Sleep(50 * time.Millisecond)
-	close(gate)
-	<-posted
-	if postErr == nil {
-		t.Fatal("expected the failed index insert to surface")
-	}
-	if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE client_message_id='keeps-row'"); err != nil || n != 1 {
-		t.Fatalf("message row after after-commit failure = %d %v, want 1 (committed before the index)", n, err)
-	}
-	_ = m
+		// Force the queued path: a blocker job claims the lane and holds the
+		// write connection inside its transaction, so the post below can only be
+		// batched behind it. Releasing the gate lets the batch commit the post's
+		// message row before the caller's after-commit transaction fails.
+		gate := make(chan struct{})
+		blocker := &messageJob{
+			ctx:  ctx,
+			run:  func(tx jobTx) (Message, error) { <-gate; return Message{}, nil },
+			done: make(chan messageResult, 1),
+		}
+		go func() { _ = d.writer.submit(blocker) }()
+		for {
+			d.writer.mu.Lock()
+			busy := d.writer.busy
+			d.writer.mu.Unlock()
+			if busy {
+				break
+			}
+			runtime.Gosched()
+		}
+		var m Message
+		var postErr error
+		posted := make(chan struct{})
+		go func() {
+			defer close(posted)
+			m, postErr = d.CreateMessage(ctx, owner, room, "keeps-row", "<p>keeps row</p>", "keeps row")
+		}()
+		// The blocker holds the lane; the post is queued behind it and cannot
+		// run in-line while the gate is shut.
+		time.Sleep(50 * time.Millisecond)
+		close(gate)
+		<-posted
+		if postErr == nil {
+			t.Fatal("expected the failed index insert to surface")
+		}
+		if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE client_message_id='keeps-row'"); err != nil || n != 1 {
+			t.Fatalf("message row after after-commit failure = %d %v, want 1 (committed before the index)", n, err)
+		}
+		_ = m
+	})
 }
 
 // TestWriteQueueAdaptiveAfterCommitAtomicity pins the in-line path's
@@ -555,18 +659,20 @@ func TestWriteQueueAfterCommitFailure(t *testing.T) {
 // commit atomically with the message row, so a failing index insert rolls the
 // row back too (the direct path's behaviour).
 func TestWriteQueueAdaptiveAfterCommitAtomicity(t *testing.T) {
-	d, owner, _, _, room := seededWriterTest(t)
-	ctx := context.Background()
-	if _, err := d.Write.Exec("DROP TABLE message_search_index"); err != nil {
-		t.Fatal(err)
-	}
-	_, err := d.CreateMessage(ctx, owner, room, "atomic-row", "<p>atomic</p>", "atomic")
-	if err == nil {
-		t.Fatal("expected the failed index insert to surface")
-	}
-	if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE client_message_id='atomic-row'"); err != nil || n != 0 {
-		t.Fatalf("message row after in-line failure = %d %v, want 0 (rolled back with the index)", n, err)
-	}
+	runBothLanes(t, func(t *testing.T) {
+		d, owner, _, _, room := seededWriterTest(t)
+		ctx := context.Background()
+		if _, err := d.Write.Exec("DROP TABLE message_search_index"); err != nil {
+			t.Fatal(err)
+		}
+		_, err := d.CreateMessage(ctx, owner, room, "atomic-row", "<p>atomic</p>", "atomic")
+		if err == nil {
+			t.Fatal("expected the failed index insert to surface")
+		}
+		if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE client_message_id='atomic-row'"); err != nil || n != 0 {
+			t.Fatalf("message row after in-line failure = %d %v, want 0 (rolled back with the index)", n, err)
+		}
+	})
 }
 
 // benchLane seeds one user and room and runs b.N message creates on the given
