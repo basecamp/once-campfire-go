@@ -51,6 +51,7 @@ func TestFilenameVectors(t *testing.T) {
 		}
 	}
 }
+
 func TestUploadIntegrityAndSigning(t *testing.T) {
 	root := t.TempDir()
 	db, err := database.Open(filepath.Join(root, "test.sqlite3"), 2)
@@ -67,7 +68,15 @@ func TestUploadIntegrityAndSigning(t *testing.T) {
 	content := "an uploaded file"
 	sum := md5.Sum([]byte(content))
 	ct := "text/plain"
-	b, err := s.Create(ctx, Blob{Filename: "notes.txt", ContentType: &ct, ByteSize: int64(len(content)), Checksum: base64.StdEncoding.EncodeToString(sum[:])})
+	b, err := s.Create(
+		ctx,
+		Blob{
+			Filename:    "notes.txt",
+			ContentType: &ct,
+			ByteSize:    int64(len(content)),
+			Checksum:    base64.StdEncoding.EncodeToString(sum[:]),
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,10 +120,14 @@ func TestUploadIntegrityAndSigning(t *testing.T) {
 	if err = s.Verifier.Verify(signed, "blob_token", db.Now().Add(2*time.Minute), &decoded); err == nil {
 		t.Fatal("expired token accepted")
 	}
-	for _, key := range []string{"../escape", "abcd/../../escape", "abcd\\escape", "."} {
+	for _, key := range []string{"../escape", "abcd/../../escape", "abcd\\escape", ".", "..escape", "....escape", "ab..escape"} {
 		if _, err = s.Path(key); err == nil {
 			t.Errorf("unsafe key accepted: %q", key)
 		}
+	}
+	if got, err := s.Path("abcd-legacy.key"); err != nil ||
+		got != filepath.Join(s.Root, "ab", "cd", "abcd-legacy.key") {
+		t.Fatalf("valid legacy key lost its reference storage layout: %q %v", got, err)
 	}
 }
 
@@ -164,7 +177,8 @@ func TestTrackedVariantIsReusable(t *testing.T) {
 		t.Fatalf("variant dimensions: %d %d %v", w, h, err)
 	}
 	var count int
-	if err = db.Read.QueryRow("SELECT count(*) FROM active_storage_blobs").Scan(&count); err != nil || count != 2 {
+	if err = db.Read.QueryRow("SELECT count(*) FROM active_storage_blobs").Scan(&count); err != nil ||
+		count != 2 {
 		t.Fatalf("leaked variant blobs: %d %v", count, err)
 	}
 }

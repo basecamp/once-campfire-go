@@ -157,6 +157,8 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
   differ from both the original Go implementation and Rust.
 - The default version label and fallback VAPID subject identify `once-campfire-go`. Explicit version,
   VAPID keys and subject settings remain supported.
+- Storage keys containing separators, NUL, or parent-directory shards are rejected before
+  filesystem access. Rust directly joins the key's shards; valid keys retain the same storage layout.
 - Native host media output can differ with installed library versions. All byte-golden media tests
   pass with the pinned container libraries. Web Push is verified locally, not against external push
   providers.
