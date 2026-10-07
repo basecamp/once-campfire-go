@@ -3,8 +3,10 @@ package web
 import (
 	"container/list"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"html/template"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -109,11 +111,27 @@ func messageListCacheKey(messages []database.Message) string {
 	}
 	return key.String()
 }
+
+// Namespace timestamp fragments by the generation observed before request reads.
+// An older in-flight render cannot populate a newer generation after a commit.
+func (s *Server) fragmentKey(ctx context.Context, key string) string {
+	version := uint64(0)
+	if info := requestMetadata(ctx); info != nil {
+		version = info.databaseVersion
+	} else {
+		version, _ = s.DB.ResponseVersion(ctx)
+	}
+	if version == 0 {
+		return "uncached/" + rand.Text() + "/" + key
+	}
+	return strconv.FormatUint(version, 10) + "/" + key
+}
+
 func (s *Server) messageItems(ctx context.Context, messages []database.Message) ([]messageView, error) {
 	views := viewMessages(messages)
 	var missing []int64
 	for i, m := range messages {
-		if html, ok := s.fragments.get(messageCacheKey(m)); ok {
+		if html, ok := s.fragments.get(s.fragmentKey(ctx, messageCacheKey(m))); ok {
 			views[i].Fragment = html
 		} else if m.CreatorID == 0 {
 			missing = append(missing, m.ID)

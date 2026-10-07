@@ -14,7 +14,7 @@ import (
 // the cached message list without copying it through template/fmt/page buffers.
 
 func (s *Server) messageList(ctx context.Context, messages []database.Message) (responsebody.Part, error) {
-	key := messageListCacheKey(messages)
+	key := s.fragmentKey(ctx, messageListCacheKey(messages))
 	if entry, ok := s.fragments.entry(key); ok {
 		return entry.part, nil
 	}
@@ -43,7 +43,7 @@ func (s *Server) searchMessageList(ctx context.Context, user int64, query string
 	if len(refs) == 0 {
 		return responsebody.Part{}, 0, nil
 	}
-	if entry, ok := s.fragments.entry(messageListCacheKey(refs)); ok {
+	if entry, ok := s.fragments.entry(s.fragmentKey(ctx, messageListCacheKey(refs))); ok {
 		return entry.part, len(refs), nil
 	}
 	// Matching membership and body must come from one statement on a miss.

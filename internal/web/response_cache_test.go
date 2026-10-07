@@ -285,3 +285,41 @@ func TestResponseCacheBudgetAndHeadMiss(t *testing.T) {
 		t.Fatal("old request rolled back cache generation")
 	}
 }
+
+func TestResponseCacheForeignFragmentEditsWithoutTimestamps(t *testing.T) {
+	app, _, cookie, user := testApp(t)
+	ctx := context.Background()
+	rooms, _ := app.DB.Rooms(ctx, user.ID)
+	if _, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "foreign-cache", "<p>Original foreign body</p>", "Original foreign body"); err != nil {
+		t.Fatal(err)
+	}
+	var id, creator int64
+	if err := app.DB.Read.QueryRow("SELECT id,creator_id FROM messages WHERE room_id=? ORDER BY id DESC LIMIT 1", rooms[0].ID).Scan(&id, &creator); err != nil {
+		t.Fatal(err)
+	}
+	path := fmt.Sprintf("/rooms/%d", rooms[0].ID)
+	cachedRequest(t, app, cookie, "GET", path, nil)
+	cachedRequest(t, app, cookie, "GET", path, nil)
+	foreign := foreignWriter(t, app)
+	execForeign(t, foreign, "UPDATE action_text_rich_texts SET body='<p>Foreign unchanged timestamp body</p>' WHERE record_type='Message' AND record_id=?", id)
+	fresh := cachedRequest(t, app, cookie, "GET", path, nil)
+	if !strings.Contains(fresh.Body.String(), "Foreign unchanged timestamp body") {
+		t.Fatal("stale message fragment")
+	}
+	execForeign(t, foreign, "UPDATE users SET name='Foreign fragment creator' WHERE id=?", creator)
+	fresh = cachedRequest(t, app, cookie, "GET", path, nil)
+	if !strings.Contains(fresh.Body.String(), "Foreign fragment creator") {
+		t.Fatal("stale creator fragment")
+	}
+	stamp := app.DB.Now().UTC().Format("2006-01-02 15:04:05.000000")
+	execForeign(t, foreign, "INSERT INTO boosts(booster_id,content,created_at,message_id,updated_at) VALUES(?,?,?,?,?)", user.ID, "🍊", stamp, id, stamp)
+	fresh = cachedRequest(t, app, cookie, "GET", path, nil)
+	if !strings.Contains(fresh.Body.String(), "🍊") {
+		t.Fatal("stale new boost fragment")
+	}
+	execForeign(t, foreign, "UPDATE boosts SET content='🍋' WHERE message_id=?", id)
+	fresh = cachedRequest(t, app, cookie, "GET", path, nil)
+	if !strings.Contains(fresh.Body.String(), "🍋") || strings.Contains(fresh.Body.String(), "🍊") {
+		t.Fatal("stale edited boost fragment")
+	}
+}

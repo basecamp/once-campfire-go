@@ -123,7 +123,7 @@ func TestMessageListOwnershipAndAdmission(t *testing.T) {
 		return b.String()
 	}
 	want := body(original)
-	key := messageListCacheKey(messages)
+	key := app.fragmentKey(context.Background(), messageListCacheKey(messages))
 	cost := len(key) + len(want) + 240
 	for _, test := range []struct {
 		name     string

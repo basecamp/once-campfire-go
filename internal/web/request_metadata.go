@@ -13,10 +13,11 @@ type requestInfoKey struct{}
 // One request-owned context value replaces separate host/origin values. Parsing
 // stays lazy for non-browser endpoints, and derived contexts share the result.
 type requestInfo struct {
-	host, origin string
-	response     *responseRound
-	agentOnce    sync.Once
-	agent        *useragent.Agent
+	host, origin    string
+	response        *responseRound
+	databaseVersion uint64
+	agentOnce       sync.Once
+	agent           *useragent.Agent
 }
 
 func requestMetadata(ctx context.Context) *requestInfo {

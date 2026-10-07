@@ -83,7 +83,15 @@ func (c *responseCache) put(entry *cachedResponse) {
 }
 func (s *Server) beginResponseCache(r *http.Request) {
 	info := requestMetadata(r.Context())
-	if info == nil || s.responses.limit == 0 || (r.Method != "GET" && r.Method != "HEAD") || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+	if info == nil {
+		return
+	}
+	version, err := s.DB.ResponseVersion(r.Context())
+	if err != nil {
+		return
+	}
+	info.databaseVersion = version
+	if s.responses.limit == 0 || (r.Method != "GET" && r.Method != "HEAD") || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
 		return
 	}
 	route, _, err := recognize(r.Method, r.URL.EscapedPath())
@@ -97,10 +105,6 @@ func (s *Server) beginResponseCache(r *http.Request) {
 	}
 	encoding := front.ResponseEncoding(r.Header.Get("Accept-Encoding"))
 	if encoding == "" {
-		return
-	}
-	version, err := s.DB.ResponseVersion(r.Context())
-	if err != nil {
 		return
 	}
 	state := browserState(r)

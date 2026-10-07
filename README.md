@@ -148,7 +148,9 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 - Completed room, messages, sidebar and search HTML/gzip responses share a per-process
   cache (`CAMPFIRE_RESPONSE_CACHE_MB`, default 64 MiB, 0 disables it). Every request checks
   its session and access before lookup. A dedicated SQLite reader observes local and foreign
-  commits and invalidates all entries. Request variants remain separate; headers and cookies
+  commits and invalidates whole responses. Message and message-list fragments also carry
+  the observed generation, including external edits without timestamp changes. Request
+  variants remain separate; headers and cookies
   stay fresh. GET and HEAD share bodies and preserve validators; flash responses bypass it.
 - The default version label and fallback VAPID subject identify `once-campfire-go`. Explicit version,
   VAPID keys and subject settings remain supported.

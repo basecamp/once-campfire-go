@@ -162,7 +162,7 @@ func (s *Server) hydrateMessageViews(ctx context.Context, views []messageView) e
 		if err := s.messageAttachment(ctx, &views[i]); err != nil {
 			return err
 		}
-		key := messageCacheKey(views[i].Message)
+		key := s.fragmentKey(ctx, messageCacheKey(views[i].Message))
 		if html, ok := s.fragments.get(key); ok {
 			views[i].Fragment = html
 		} else {
