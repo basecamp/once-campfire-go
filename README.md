@@ -114,6 +114,8 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 
 ## Known differences
 
+- Search selects the newest 100 matching messages by insertion ID, then displays them in ID order. Backdated messages can appear in a different order from the original Rails app.
+
 - Templates use `html/template`. Whitespace, attribute serialization, some canonical form-action
   URLs, and response headers/validators differ from Rust. Strict server/live DOM and network layers
   therefore still fail in many inventory cells, even when screenshots, accessibility and workflows
