@@ -16,11 +16,11 @@ import (
 // The marker exists only during template execution. The actual response inserts
 // the cached message list without copying it through template/fmt/page buffers.
 
-func (s *Server) messageList(ctx context.Context, messages []database.Message) (fragmentEntry, error) {
+func (s *Server) messageList(ctx context.Context, messages []database.Message, generation uint64) (fragmentEntry, error) {
 	var key strings.Builder
 	key.WriteString("message-list/")
 	for _, message := range messages {
-		key.WriteString(messageCacheKey(message))
+		key.WriteString(messageCacheKey(message, generation))
 		key.WriteByte('/')
 	}
 	if entry, ok := s.fragments.entry(key.String()); ok {
@@ -28,7 +28,7 @@ func (s *Server) messageList(ctx context.Context, messages []database.Message) (
 		return entry, nil
 	}
 	s.stats.listMiss.Add(1)
-	views, err := s.messageItems(ctx, messages)
+	views, err := s.messageItems(ctx, messages, generation)
 	if err != nil {
 		return fragmentEntry{}, err
 	}
@@ -37,9 +37,11 @@ func (s *Server) messageList(ctx context.Context, messages []database.Message) (
 		body.WriteString(string(view.Fragment))
 	}
 	html := template.HTML(body.String())
-	s.fragments.put(key.String(), html)
-	if entry, ok := s.fragments.entry(key.String()); ok {
-		return entry, nil
+	if s.DB.ContentGeneration() == generation {
+		s.fragments.put(key.String(), html)
+		if entry, ok := s.fragments.entry(key.String()); ok {
+			return entry, nil
+		}
 	}
 	raw := []byte(html)
 	return fragmentEntry{html: html, digest: sha256.Sum256(raw), payload: raw, gzip: gzipMember(raw), zstd: zstdMember(raw)}, nil

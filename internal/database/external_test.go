@@ -57,10 +57,10 @@ func TestExternalCommitRefreshesWindowAccountAndMembership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.MessagePageReferences(ctx, room, 0, "around"); err != nil {
+	if _, _, err = d.MessagePageReferences(ctx, room, 0, "around"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.MessagePageReferences(ctx, room, 0, "around"); err != nil {
+	if _, _, err = d.MessagePageReferences(ctx, room, 0, "around"); err != nil {
 		t.Fatal(err)
 	}
 	hits, misses := d.PageCacheStats()
@@ -97,7 +97,7 @@ func TestExternalCommitRefreshesWindowAccountAndMembership(t *testing.T) {
 
 	// Warm again, then a foreign insert followed by our own write. The local
 	// write must not publish a window that skipped the foreign message.
-	if _, err = d.MessagePageReferences(ctx, room, 0, "around"); err != nil {
+	if _, _, err = d.MessagePageReferences(ctx, room, 0, "around"); err != nil {
 		t.Fatal(err)
 	}
 	externalID := insertExternalMessage(t, other, user.ID, room, "external-1", "external-ping")
@@ -105,7 +105,7 @@ func TestExternalCommitRefreshesWindowAccountAndMembership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	window, err := d.MessagePageReferences(ctx, room, 0, "around")
+	window, _, err := d.MessagePageReferences(ctx, room, 0, "around")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,5 +120,63 @@ func TestExternalCommitRefreshesWindowAccountAndMembership(t *testing.T) {
 	}
 	if !sawExternal || !sawLocal {
 		t.Fatalf("window missed an external or local message: %+v", window)
+	}
+}
+
+func TestForeignCommitBetweenSampleAndBeginRefillsWindow(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	user, err := d.Setup(ctx, "David", "david@example.test", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rooms, err := d.Rooms(ctx, user.ID)
+	if err != nil || len(rooms) != 1 {
+		t.Fatal(rooms, err)
+	}
+	room := rooms[0].ID
+	if _, err = d.CreateMessage(ctx, user.ID, room, "seed", "<p>seed</p>", "seed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = d.MessagePageReferences(ctx, room, 0, "around"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = d.MessagePageReferences(ctx, room, 0, "around"); err != nil {
+		t.Fatal(err)
+	}
+	hits, misses := d.PageCacheStats()
+	if hits != 1 || misses != 1 {
+		t.Fatalf("window was not warm: hits=%d misses=%d", hits, misses)
+	}
+	other := openExternal(t, d)
+	var externalID int64
+	d.betweenObserve = func() {
+		externalID = insertExternalMessage(t, other, user.ID, room, "external-gap", "external-gap")
+	}
+	defer func() { d.betweenObserve = nil }()
+	created, err := d.CreateMessage(ctx, user.ID, room, "local-gap", "<p>local-gap</p>", "local-gap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.ResetPageStats()
+	window, _, err := d.MessagePageReferences(ctx, room, 0, "around")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hits, misses = d.PageCacheStats()
+	if hits != 0 || misses != 1 {
+		t.Fatalf("interleaved commit kept a warm window: hits=%d misses=%d", hits, misses)
+	}
+	var sawExternal, sawLocal bool
+	for _, message := range window {
+		if message.ID == externalID {
+			sawExternal = true
+		}
+		if message.ID == created.ID {
+			sawLocal = true
+		}
+	}
+	if !sawExternal || !sawLocal {
+		t.Fatalf("window missed an interleaved message: %+v", window)
 	}
 }

@@ -89,14 +89,14 @@ func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
 	}
 	return entry
 }
-func messageCacheKey(message database.Message) string {
-	return "message/" + database.Stamp(message.UpdatedAt) + "/" + strconv.FormatInt(message.ID, 10)
+func messageCacheKey(message database.Message, generation uint64) string {
+	return "message/" + database.Stamp(message.UpdatedAt) + "/" + strconv.FormatInt(message.ID, 10) + "/" + strconv.FormatUint(generation, 10)
 }
-func (s *Server) messageItems(ctx context.Context, messages []database.Message) ([]messageView, error) {
+func (s *Server) messageItems(ctx context.Context, messages []database.Message, generation uint64) ([]messageView, error) {
 	views := viewMessages(messages)
 	var missing []int64
 	for i, m := range messages {
-		if html, ok := s.fragments.get(messageCacheKey(m)); ok {
+		if html, ok := s.fragments.get(messageCacheKey(m, generation)); ok {
 			views[i].Fragment = html
 		} else if m.CreatorID == 0 {
 			missing = append(missing, m.ID)
@@ -125,7 +125,7 @@ func (s *Server) messageItems(ctx context.Context, messages []database.Message) 
 			}
 		}
 
-		rendered, err := s.messageViews(ctx, []database.Message{m})
+		rendered, err := s.messageViews(ctx, []database.Message{m}, generation)
 		if err != nil {
 			return nil, err
 		}

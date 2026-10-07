@@ -19,7 +19,8 @@ func TestMessageFragmentVersionAndBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := app.messageItems(ctx, []database.Message{m})
+	generation := app.DB.ContentGeneration()
+	first, err := app.messageItems(ctx, []database.Message{m}, generation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +28,7 @@ func TestMessageFragmentVersionAndBound(t *testing.T) {
 		t.Fatal("missing rendered message")
 	}
 	// A cache hit skips rich text, boosts and attachment hydration entirely.
-	cached, err := app.messageItems(ctx, []database.Message{m})
+	cached, err := app.messageItems(ctx, []database.Message{m}, generation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +37,7 @@ func TestMessageFragmentVersionAndBound(t *testing.T) {
 	}
 	m.UpdatedAt = m.UpdatedAt.Add(time.Microsecond)
 	m.Body = "<p>after</p>"
-	changed, err := app.messageItems(ctx, []database.Message{m})
+	changed, err := app.messageItems(ctx, []database.Message{m}, generation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +109,7 @@ func TestMissingMessageAuthorKeepsPlaceholder(t *testing.T) {
 	if len(messages) != 1 {
 		t.Fatalf("orphan disappeared: %d messages", len(messages))
 	}
-	views, err := app.messageItems(ctx, messages)
+	views, err := app.messageItems(ctx, messages, app.DB.ContentGeneration())
 	if err != nil {
 		t.Fatal(err)
 	}

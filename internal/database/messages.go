@@ -339,27 +339,40 @@ func (d *DB) FindRoom(ctx context.Context, id int64) (Room, error) {
 // MessagePageReferences leaves rich text and author loading to cache misses.
 // Around/after pagination retains the same full-record path and ordering.
 // The anchor-zero window (the room page and "after" with no cursor) is served
-// from memory and refreshed by create, update, and delete.
-func (d *DB) MessagePageReferences(ctx context.Context, room, anchor int64, direction string) ([]Message, error) {
+// from memory until a local commit or an observed external commit drops it.
+// MessagePageReferences returns the content generation observed after the
+// external sync and before the read. Callers that cache HTML must keep that
+// value in the key and skip admission if ContentGeneration has moved.
+func (d *DB) MessagePageReferences(ctx context.Context, room, anchor int64, direction string) ([]Message, uint64, error) {
+	d.syncExternal(ctx)
+	generation := d.generation()
 	if direction != "before" && anchor != 0 {
-		return d.MessagePage(ctx, room, anchor, direction)
+		messages, err := d.MessagePage(ctx, room, anchor, direction)
+		return messages, generation, err
 	}
 	if anchor == 0 {
-		d.syncExternal(ctx)
 		if messages, ok := d.cachedLatest(room); ok {
 			d.countPage(true)
-			return messages, nil
+			return messages, generation, nil
 		}
 		d.countPage(false)
 		epoch, seen := d.beginRoom(room)
 		messages, err := d.queryMessageWindow(ctx, room, 0)
 		if err != nil {
-			return nil, err
+			return nil, generation, err
 		}
 		d.storeLatest(room, epoch, seen, messages)
-		return messages, nil
+		return messages, generation, nil
 	}
-	return d.queryMessageWindow(ctx, room, anchor)
+	messages, err := d.queryMessageWindow(ctx, room, anchor)
+	return messages, generation, err
+}
+
+func (d *DB) generation() uint64 {
+	if s := d.state(); s != nil {
+		return s.gen.Load()
+	}
+	return 0
 }
 
 func (d *DB) queryMessageWindow(ctx context.Context, room, anchor int64) ([]Message, error) {

@@ -32,7 +32,7 @@ func TestPlainMessageMatchesTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	views, err := app.messageViews(ctx, []database.Message{message})
+	views, err := app.messageViews(ctx, []database.Message{message}, app.DB.ContentGeneration())
 	if err != nil || len(views) != 1 || views[0].Fragment == "" {
 		t.Fatal(views, err)
 	}
@@ -69,7 +69,7 @@ func TestPlainMessageMatchesTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	withBoost, err := app.messageViews(ctx, []database.Message{reloaded})
+	withBoost, err := app.messageViews(ctx, []database.Message{reloaded}, app.DB.ContentGeneration())
 	if err != nil || len(withBoost[0].Boosts) != 1 || withBoost[0].Boosts[0].ID != boosted.ID {
 		t.Fatal(withBoost, err)
 	}

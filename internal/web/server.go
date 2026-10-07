@@ -108,6 +108,7 @@ type page struct {
 	Room                         database.Room
 	Rooms                        []database.Room
 	Messages                     []messageView
+	ContentGen                   uint64
 	Setup                        bool
 	Query                        string
 }
@@ -400,11 +401,11 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 		}
 		if name == "room" || name == "messages" || name == "search" {
 			var entry fragmentEntry
-			entry, err = s.messageList(r.Context(), raw)
+			entry, err = s.messageList(r.Context(), raw, p.ContentGen)
 			recorded = &entry
 			p.MessagesHTML = template.HTML("\x00campfire-" + rand.Text() + "\x00")
 		} else {
-			p.Messages, err = s.messageViews(r.Context(), raw)
+			p.Messages, err = s.messageViews(r.Context(), raw, p.ContentGen)
 			if err == nil && name == "edit-message" {
 				for i := range p.Messages {
 					p.Messages[i].Editable, _ = richtext.Editable(p.Messages[i].Body, s.richContext(r.Context()))
@@ -708,9 +709,9 @@ func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
 		return
 	}
 	anchor, _ := strconv.ParseInt(strings.TrimPrefix(r.PathValue("anchor"), "@"), 10, 64)
-	messages, err := s.DB.MessagePageReferences(r.Context(), room.ID, anchor, "around")
+	messages, generation, err := s.DB.MessagePageReferences(r.Context(), room.ID, anchor, "around")
 	if errors.Is(err, sql.ErrNoRows) {
-		messages, err = s.DB.MessagePageReferences(r.Context(), room.ID, 0, "around")
+		messages, generation, err = s.DB.MessagePageReferences(r.Context(), room.ID, 0, "around")
 	}
 	if err != nil {
 		s.fail(w, err)
@@ -728,7 +729,7 @@ func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
 		return
 	}
 	s.rememberRoom(w, r, strconv.FormatInt(room.ID, 10))
-	s.render(w, r, "room", 200, page{Invitation: invitation, Stream: s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)), Title: room.Name, User: u, Room: room, Messages: viewMessages(messages)})
+	s.render(w, r, "room", 200, page{Invitation: invitation, Stream: s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)), Title: room.Name, User: u, Room: room, Messages: viewMessages(messages), ContentGen: generation})
 }
 func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.User) {
 	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
@@ -742,7 +743,7 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.Use
 		before, _ = strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 		direction = "after"
 	}
-	messages, err := s.DB.MessagePageReferences(r.Context(), room.ID, before, direction)
+	messages, generation, err := s.DB.MessagePageReferences(r.Context(), room.ID, before, direction)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -754,7 +755,7 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.Use
 	if messageFreshness(w, r, messages) {
 		return
 	}
-	s.render(w, r, "messages", 200, page{Messages: viewMessages(messages)})
+	s.render(w, r, "messages", 200, page{Messages: viewMessages(messages), ContentGen: generation})
 }
 func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u database.User) {
 	if !requireMessage(w, r) {
@@ -793,7 +794,8 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 
 	b := borrowBuffer()
 	defer releaseBuffer(b)
-	views, err := s.messageViews(r.Context(), []database.Message{m})
+	generation := s.DB.ContentGeneration()
+	views, err := s.messageViews(r.Context(), []database.Message{m}, generation)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -868,7 +870,8 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 		return
 	}
 	returnRoom, _ := s.lastRoom(r, u.ID)
-	key := fmt.Sprintf("se/%d/%d/%d/%d/%d/%s/%t", u.ID, u.Role, u.UpdatedAt.UnixMicro(), s.DB.ContentGeneration(), returnRoom, q, r.Header.Get("Turbo-Frame") != "")
+	generation := s.DB.ContentGeneration()
+	key := fmt.Sprintf("se/%d/%d/%d/%d/%d/%s/%t", u.ID, u.Role, u.UpdatedAt.UnixMicro(), generation, returnRoom, q, r.Header.Get("Turbo-Frame") != "")
 	flash := s.hasFlash(r)
 	if !flash && s.writeCached(w, r, "search", key) {
 		return
@@ -888,7 +891,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Rooms: rooms, Messages: viewMessages(messages), RecentSearches: recent})
+	s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Rooms: rooms, Messages: viewMessages(messages), RecentSearches: recent, ContentGen: generation})
 	if !flash {
 		s.saveCached(w, key)
 	}

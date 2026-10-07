@@ -104,9 +104,21 @@ func (d *DB) syncExternal(ctx context.Context) {
 	s.seen = version
 }
 
-// advanceExternal records the watcher's version after our own commit so the
-// next read does not treat that commit as a foreign write.
-func (d *DB) advanceExternal(ctx context.Context) {
+// lockedVersion re-samples after BEGIN. syncExternal drops caches when the
+// watcher moved; the returned value is the version covered by that drop.
+func (d *DB) lockedVersion(ctx context.Context) (uint32, error) {
+	d.syncExternal(ctx)
+	return d.dataVersion(ctx)
+}
+
+// finishExternal runs after our commit. The watcher also moves for that
+// commit, and a foreign commit after the lock drops can collapse into the
+// same observation, so a changed version is not "only our write". Drop the
+// warm window and the account row so noteCreate cannot extend a page that
+// missed a foreign row. Leave the content generation alone: presence must
+// not invalidate sidebar HTML. A foreign membership change in this
+// post-commit gap is acknowledged without a generation bump.
+func (d *DB) finishExternal(ctx context.Context, origin uint32) {
 	version, err := d.dataVersion(ctx)
 	s := d.state()
 	if s == nil {
@@ -120,9 +132,18 @@ func (d *DB) advanceExternal(ctx context.Context) {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if version == origin {
+		s.seen = version
+		s.have = true
+		return
+	}
+	s.epoch++
+	s.rooms = map[int64][]Message{}
+	s.hasAcct = false
+	s.account = Account{}
 	s.seen = version
 	s.have = true
-	s.mu.Unlock()
 }
 
 func (s *readState) dropLocked() {

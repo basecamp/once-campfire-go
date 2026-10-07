@@ -57,7 +57,7 @@ func (s *Server) findMessage(r *http.Request, u database.User, administer bool) 
 	}
 	return m, nil
 }
-func (s *Server) messageViews(ctx context.Context, messages []database.Message) ([]messageView, error) {
+func (s *Server) messageViews(ctx context.Context, messages []database.Message, generation uint64) ([]messageView, error) {
 	views := viewMessages(messages)
 	roomNames := map[int64]string{}
 	creators := map[int64]database.User{}
@@ -127,7 +127,7 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		key := messageCacheKey(views[i].Message)
+		key := messageCacheKey(views[i].Message, generation)
 		if html, ok := s.fragments.get(key); ok {
 			views[i].Fragment = html
 		} else {
@@ -135,7 +135,11 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 			if err != nil {
 				return nil, err
 			}
-			views[i].Fragment = s.fragments.put(key, template.HTML(body))
+			rendered := template.HTML(body)
+			if s.DB.ContentGeneration() == generation {
+				rendered = s.fragments.put(key, rendered)
+			}
+			views[i].Fragment = rendered
 		}
 	}
 	return views, nil
@@ -180,25 +184,27 @@ func writeStream(w http.ResponseWriter, markup string) {
 	fmt.Fprint(w, markup)
 }
 func (s *Server) showMessage(w http.ResponseWriter, r *http.Request, u database.User) {
+	generation := s.DB.ContentGeneration()
 	m, err := s.findMessage(r, u, false)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	views, err := s.messageItems(r.Context(), []database.Message{m})
+	views, err := s.messageItems(r.Context(), []database.Message{m}, generation)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "show-message", 200, page{User: u, Messages: views})
+	s.render(w, r, "show-message", 200, page{User: u, Messages: views, ContentGen: generation})
 }
 func (s *Server) editMessage(w http.ResponseWriter, r *http.Request, u database.User) {
+	generation := s.DB.ContentGeneration()
 	m, err := s.findMessage(r, u, true)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "edit-message", 200, page{User: u, Messages: viewMessages([]database.Message{m})})
+	s.render(w, r, "edit-message", 200, page{User: u, Messages: viewMessages([]database.Message{m}), ContentGen: generation})
 }
 func (s *Server) updateMessage(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, true)
@@ -214,7 +220,7 @@ func (s *Server) updateMessage(w http.ResponseWriter, r *http.Request, u databas
 		s.fail(w, err)
 		return
 	}
-	views, err := s.messageViews(r.Context(), []database.Message{m})
+	views, err := s.messageViews(r.Context(), []database.Message{m}, s.DB.ContentGeneration())
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -252,25 +258,27 @@ func (s *Server) deleteMessage(w http.ResponseWriter, r *http.Request, u databas
 	}
 }
 func (s *Server) boosts(w http.ResponseWriter, r *http.Request, u database.User) {
+	generation := s.DB.ContentGeneration()
 	m, err := s.findMessage(r, u, false)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	views, err := s.messageViews(r.Context(), []database.Message{m})
+	views, err := s.messageViews(r.Context(), []database.Message{m}, generation)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "boosts-index", 200, page{User: u, Messages: views})
+	s.render(w, r, "boosts-index", 200, page{User: u, Messages: views, ContentGen: generation})
 }
 func (s *Server) newBoost(w http.ResponseWriter, r *http.Request, u database.User) {
+	generation := s.DB.ContentGeneration()
 	m, err := s.findMessage(r, u, false)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "new-boost", 200, page{User: u, Messages: viewMessages([]database.Message{m})})
+	s.render(w, r, "new-boost", 200, page{User: u, Messages: viewMessages([]database.Message{m}), ContentGen: generation})
 }
 func (s *Server) createBoost(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, false)
@@ -318,6 +326,7 @@ func (s *Server) refreshRoom(w http.ResponseWriter, r *http.Request, u database.
 		http.Error(w, "Invalid timestamp", 400)
 		return
 	}
+	generation := s.DB.ContentGeneration()
 	created, updated, err := s.DB.RefreshedMessages(r.Context(), room.ID, since)
 	if err != nil {
 		s.fail(w, err)
@@ -328,7 +337,7 @@ func (s *Server) refreshRoom(w http.ResponseWriter, r *http.Request, u database.
 		action   string
 		messages []database.Message
 	}{{"append", created}, {"replace", updated}} {
-		views, err := s.messageViews(r.Context(), group.messages)
+		views, err := s.messageViews(r.Context(), group.messages, generation)
 		if err != nil {
 			s.fail(w, err)
 			return

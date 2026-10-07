@@ -82,6 +82,78 @@ func TestExternalConnectionRefreshesContentAndPermissions(t *testing.T) {
 	}
 }
 
+func TestAuthorRenameAndForeignBodyMissFragmentCache(t *testing.T) {
+	app, server, cookie, user := testApp(t)
+	ctx := context.Background()
+	rooms, err := app.DB.Rooms(ctx, user.ID)
+	if err != nil || len(rooms) != 1 {
+		t.Fatal(rooms, err)
+	}
+	room := rooms[0]
+	if _, err = app.DB.CreateMessage(ctx, user.ID, room.ID, "author-seed", "<p>seed</p>", "seed"); err != nil {
+		t.Fatal(err)
+	}
+	path := "/rooms/" + strconv.FormatInt(room.ID, 10)
+	first := getPath(t, server, cookie, path)
+	if !strings.Contains(first, `data-reply-target="author">Owner</strong>`) || !strings.Contains(first, "seed") {
+		t.Fatal("room page missing the author or the seeded message")
+	}
+	hits := app.stats.listHit.Load()
+	second := getPath(t, server, cookie, path)
+	if app.stats.listHit.Load() == hits {
+		t.Fatal("message list was not cached")
+	}
+	if !strings.Contains(second, `data-reply-target="author">Owner</strong>`) {
+		t.Fatal("warm message list dropped the author")
+	}
+	stamp := messageStamp(t, app, "author-seed")
+	if err = app.DB.UpdateUser(ctx, user.ID, map[string]string{"name": "Renamed Owner"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if messageStamp(t, app, "author-seed") != stamp {
+		t.Fatal("renaming the author touched the message")
+	}
+	renamed := getPath(t, server, cookie, path)
+	if !strings.Contains(renamed, `data-reply-target="author">Renamed Owner</strong>`) || strings.Contains(renamed, `data-reply-target="author">Owner</strong>`) {
+		t.Fatal("cached message kept the old author")
+	}
+
+	other, err := sql.Open("sqlite3", app.DB.FilePath()+"?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if _, err = other.Exec(`UPDATE users SET name=?, updated_at=? WHERE id=?`, "Foreign Author", database.Stamp(app.DB.Now()), user.ID); err != nil {
+		t.Fatal(err)
+	}
+	if messageStamp(t, app, "author-seed") != stamp {
+		t.Fatal("foreign rename touched the message")
+	}
+	foreignName := getPath(t, server, cookie, path)
+	if !strings.Contains(foreignName, `data-reply-target="author">Foreign Author</strong>`) {
+		t.Fatal("foreign author rename stayed in the message fragment")
+	}
+	if _, err = other.Exec(`UPDATE action_text_rich_texts SET body=? WHERE record_type='Message' AND name='body' AND record_id=(SELECT id FROM messages WHERE client_message_id=?)`, "<p>foreign-body</p>", "author-seed"); err != nil {
+		t.Fatal(err)
+	}
+	if messageStamp(t, app, "author-seed") != stamp {
+		t.Fatal("foreign body edit touched the message")
+	}
+	foreignBody := getPath(t, server, cookie, path)
+	if !strings.Contains(foreignBody, "foreign-body") || strings.Contains(foreignBody, ">seed<") {
+		t.Fatal("foreign body edit stayed in the message fragment")
+	}
+}
+
+func messageStamp(t *testing.T, app *Server, client string) string {
+	t.Helper()
+	var stamp string
+	if err := app.DB.Read.QueryRow("SELECT updated_at FROM messages WHERE client_message_id=?", client).Scan(&stamp); err != nil {
+		t.Fatal(err)
+	}
+	return stamp
+}
+
 func getPath(t *testing.T, server *httptest.Server, cookie *http.Cookie, path string) string {
 	t.Helper()
 	status, body := getRaw(t, server, cookie, path)

@@ -32,6 +32,9 @@ type DB struct {
 	watch               *sql.Conn
 	watchDB             *sql.DB
 	reads               *readState
+	// betweenObserve runs after the pre-lock data_version sample and before
+	// BEGIN. Tests commit on another connection in that gap.
+	betweenObserve func()
 }
 
 func Open(path string, readers int) (*DB, error) {
@@ -129,21 +132,29 @@ func (d *DB) Close() error {
 }
 func Stamp(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05.000000") }
 func (d *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {
-	// Drop anything another connection committed before this write publishes
-	// its own cache update. Advancing afterwards keeps that update.
+	// A foreign commit can land after this sample and before the write lock.
 	d.syncExternal(ctx)
+	if d.betweenObserve != nil {
+		d.betweenObserve()
+	}
 	tx, err := d.Write.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	// Re-sample while IMMEDIATE is held. Our commit has not happened, so a
+	// move here is foreign and dropLocked applies.
+	origin, err := d.lockedVersion(ctx)
+	if err != nil {
+		return err
+	}
 	if err = fn(tx); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	d.advanceExternal(ctx)
+	d.finishExternal(ctx, origin)
 	return nil
 }
 func prepare(db *sql.DB) error {

@@ -23,11 +23,11 @@ func TestLatestWindowAndGenerations(t *testing.T) {
 		}
 	}
 	d.ResetPageStats()
-	first, err := d.MessagePageReferences(ctx, room, 0, "around")
+	first, _, err := d.MessagePageReferences(ctx, room, 0, "around")
 	if err != nil || len(first) != 3 {
 		t.Fatal(len(first), err)
 	}
-	second, err := d.MessagePageReferences(ctx, room, 0, "around")
+	second, _, err := d.MessagePageReferences(ctx, room, 0, "around")
 	if err != nil || len(second) != 3 || second[2].ID != first[2].ID {
 		t.Fatal(second, err)
 	}
@@ -40,28 +40,28 @@ func TestLatestWindowAndGenerations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterCreate, err := d.MessagePageReferences(ctx, room, 0, "around")
+	afterCreate, _, err := d.MessagePageReferences(ctx, room, 0, "around")
 	if err != nil || len(afterCreate) != 4 || afterCreate[3].ID != created.ID {
-		t.Fatalf("create did not extend the window: %+v %v", afterCreate, err)
+		t.Fatalf("create did not refill the window: %+v %v", afterCreate, err)
 	}
 	hits, misses = d.PageCacheStats()
-	if hits != 2 || misses != 1 {
-		t.Fatalf("create should stay a hit, hits=%d misses=%d", hits, misses)
+	if hits != 1 || misses != 2 {
+		t.Fatalf("create should refill from sqlite, hits=%d misses=%d", hits, misses)
 	}
 
 	updated, err := d.UpdateMessage(ctx, user.ID, created.ID, "<p>edited</p>", "edited")
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterUpdate, err := d.MessagePageReferences(ctx, room, 0, "around")
+	afterUpdate, _, err := d.MessagePageReferences(ctx, room, 0, "around")
 	if err != nil || !afterUpdate[3].UpdatedAt.Equal(updated.UpdatedAt) {
-		t.Fatalf("update did not patch the window: %v %v", afterUpdate, err)
+		t.Fatalf("update did not refill the window: %v %v", afterUpdate, err)
 	}
 
 	if err = d.DeleteMessage(ctx, user.ID, created.ID); err != nil {
 		t.Fatal(err)
 	}
-	afterDelete, err := d.MessagePageReferences(ctx, room, 0, "around")
+	afterDelete, _, err := d.MessagePageReferences(ctx, room, 0, "around")
 	if err != nil || len(afterDelete) != 3 {
 		t.Fatal(len(afterDelete), err)
 	}
@@ -71,8 +71,8 @@ func TestLatestWindowAndGenerations(t *testing.T) {
 		}
 	}
 	hits, misses = d.PageCacheStats()
-	if misses != 2 {
-		t.Fatalf("delete should refill once, misses=%d", misses)
+	if hits != 1 || misses != 4 {
+		t.Fatalf("each local write should refill, hits=%d misses=%d", hits, misses)
 	}
 
 	name := "Renamed"

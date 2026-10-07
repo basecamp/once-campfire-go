@@ -166,7 +166,7 @@ func (s *Server) botRequest(w http.ResponseWriter, r *http.Request) bool {
 			s.fail(w, err)
 			return true
 		}
-		views, err := s.messageViews(r.Context(), []database.Message{message})
+		views, err := s.messageViews(r.Context(), []database.Message{message}, s.DB.ContentGeneration())
 		if err != nil {
 			s.fail(w, err)
 			return true
@@ -197,7 +197,7 @@ func (s *Server) botRequest(w http.ResponseWriter, r *http.Request) bool {
 			s.fail(w, err)
 			return true
 		}
-		views, err := s.messageViews(r.Context(), []database.Message{message})
+		views, err := s.messageViews(r.Context(), []database.Message{message}, s.DB.ContentGeneration())
 		if err != nil {
 			s.fail(w, err)
 			return true

@@ -143,7 +143,7 @@ func (s *Server) deliverWebhook(ctx context.Context, botID, messageID int64) err
 		return err
 	}
 	s.messageCreated(created, room)
-	views, err := s.messageViews(ctx, []database.Message{created})
+	views, err := s.messageViews(ctx, []database.Message{created}, s.DB.ContentGeneration())
 	if err != nil {
 		return err
 	}

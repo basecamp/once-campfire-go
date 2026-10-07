@@ -21,7 +21,8 @@ func TestRecordedMessagesPreserveBodyAndInvalidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	list := []database.Message{message}
-	views, err := app.messageItems(ctx, list)
+	generation := app.DB.ContentGeneration()
+	views, err := app.messageItems(ctx, list, generation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +30,7 @@ func TestRecordedMessagesPreserveBodyAndInvalidate(t *testing.T) {
 	if err := app.templates.ExecuteTemplate(&original, "messages", page{Messages: views}); err != nil {
 		t.Fatal(err)
 	}
-	fragment, err := app.messageList(ctx, list)
+	fragment, err := app.messageList(ctx, list, generation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestRecordedMessagesPreserveBodyAndInvalidate(t *testing.T) {
 	}
 	list[0].UpdatedAt = list[0].UpdatedAt.Add(time.Second)
 	list[0].Body = "<p>changed</p>"
-	changed, err := app.messageList(ctx, list)
+	changed, err := app.messageList(ctx, list, generation)
 	if err != nil || !strings.Contains(string(changed.html), "changed") || changed.digest == fragment.digest {
 		t.Fatal("stale message list", err)
 	}
