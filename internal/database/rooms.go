@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -63,33 +64,16 @@ func (d *DB) CreateRoom(ctx context.Context, creator int64, kind, name string, u
 	err := d.Transaction(ctx, func(tx *sql.Tx) error {
 		now := Stamp(d.Now())
 		if kind == "Rooms::Direct" {
-			rows, err := tx.QueryContext(ctx, "SELECT r.id,m.user_id FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE r.type='Rooms::Direct' ORDER BY r.id,m.user_id")
+			raw, err := json.Marshal(users)
 			if err != nil {
 				return err
 			}
-			groups := map[int64][]int64{}
-			var order []int64
-			for rows.Next() {
-				var id, user int64
-				if err = rows.Scan(&id, &user); err != nil {
-					rows.Close()
-					return err
-				}
-				if _, ok := groups[id]; !ok {
-					order = append(order, id)
-				}
-				groups[id] = append(groups[id], user)
+			err = tx.QueryRowContext(ctx, "SELECT r.id FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE r.type='Rooms::Direct' GROUP BY r.id HAVING COUNT(*)=? AND SUM(m.user_id IN (SELECT value FROM json_each(?)))=? ORDER BY r.id LIMIT 1", len(users), string(raw), len(users)).Scan(&room.ID)
+			if err == nil {
+				return nil
 			}
-			err = rows.Err()
-			rows.Close()
-			if err != nil {
+			if err != sql.ErrNoRows {
 				return err
-			}
-			for _, id := range order {
-				if slices.Equal(groups[id], users) {
-					room.ID = id
-					return nil
-				}
 			}
 		}
 		var storedName any = name

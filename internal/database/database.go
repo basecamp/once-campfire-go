@@ -137,6 +137,9 @@ func prepare(db *sql.DB) error {
 	if _, err = tx.Exec("CREATE INDEX IF NOT EXISTS index_messages_on_room_id_and_created_at ON messages(room_id,created_at)"); err != nil {
 		return err
 	}
+	if _, err = tx.Exec("CREATE INDEX IF NOT EXISTS index_messages_on_room_id_and_updated_at ON messages(room_id,updated_at)"); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

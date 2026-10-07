@@ -64,7 +64,7 @@ func (d *DB) RefreshedMessages(ctx context.Context, room int64, since time.Time)
 	if err != nil {
 		return
 	}
-	rows, err = d.Read.QueryContext(ctx, messageSelect+"WHERE m.room_id=? AND m.updated_at>? ORDER BY m.created_at DESC LIMIT 40", room, Stamp(since))
+	rows, err = d.Read.QueryContext(ctx, messageSelect+"WHERE m.room_id=? AND m.updated_at>? ORDER BY +m.created_at DESC LIMIT 40", room, Stamp(since))
 	if err != nil {
 		return
 	}

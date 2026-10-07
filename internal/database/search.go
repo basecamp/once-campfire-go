@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"unicode"
 )
@@ -16,48 +17,81 @@ func SearchQuery(query string) string {
 	}, query)
 }
 
-// SearchReferences returns reachable message IDs, room IDs and versions, with
-// the latest 100 results in chronological order. Renderers hydrate cache misses.
+const searchProbeLimit = 1000
+
+// SearchReferences follows the current Rails/Rust newest-ID search order. Bound
+// the global FTS probe so sparse memberships cannot scan inaccessible history.
 func (d *DB) SearchReferences(ctx context.Context, user int64, query string) ([]Message, error) {
 	terms := searchTerms(query)
 	if terms == "" {
 		return []Message{}, nil
 	}
-	rows, err := d.Read.QueryContext(ctx, "SELECT m.id,m.room_id,m.updated_at FROM messages m JOIN message_search_index idx ON idx.rowid=m.id JOIN memberships member ON member.room_id=m.room_id WHERE member.user_id=? AND idx.body MATCH ? ORDER BY m.created_at DESC LIMIT 100", user, terms)
+	rows, err := d.Read.QueryContext(ctx, "SELECT m.id,m.room_id,m.updated_at,member.user_id IS NOT NULL FROM message_search_index idx JOIN messages m ON m.id=idx.rowid LEFT JOIN memberships member ON member.room_id=m.room_id AND member.user_id=? WHERE idx.body MATCH ? ORDER BY idx.rowid DESC LIMIT 1000", user, terms)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	messages := []Message{}
-	for rows.Next() {
-		var m Message
-		if err := rows.Scan(&m.ID, &m.RoomID, timestamp{&m.UpdatedAt}); err != nil {
+	messages, examined, err := searchReferenceRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(messages) < 100 && examined == searchProbeLimit {
+		rows, err = d.Read.QueryContext(ctx, "SELECT m.id,m.room_id,m.updated_at,1 FROM messages m JOIN message_search_index idx ON idx.rowid=m.id JOIN memberships member ON member.room_id=m.room_id WHERE member.user_id=? AND idx.body MATCH ? ORDER BY m.id DESC LIMIT 100", user, terms)
+		if err != nil {
 			return nil, err
 		}
-		messages = append(messages, m)
+		messages, _, err = searchReferenceRows(rows)
 	}
-	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-		messages[i], messages[j] = messages[j], messages[i]
-	}
-	return messages, rows.Err()
-}
-
-// Search reads matching bodies in the same statement as result membership.
-// It is the uncached path when a references-only result cannot reuse known bytes.
-func (d *DB) Search(ctx context.Context, user int64, query string) ([]Message, error) {
-	terms := searchTerms(query)
-	if terms == "" {
-		return []Message{}, nil
-	}
-	rows, err := d.Read.QueryContext(ctx, messageSelect+"JOIN message_search_index idx ON idx.rowid=m.id JOIN memberships member ON member.room_id=m.room_id WHERE member.user_id=? AND idx.body MATCH ? ORDER BY m.created_at DESC LIMIT 100", user, terms)
-	if err != nil {
-		return nil, err
-	}
-	messages, err := scanMessages(rows)
 	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
 		messages[i], messages[j] = messages[j], messages[i]
 	}
 	return messages, err
+}
+
+func searchReferenceRows(rows *sql.Rows) ([]Message, int, error) {
+	defer rows.Close()
+	messages := []Message{}
+	examined := 0
+	for rows.Next() {
+		examined++
+		var m Message
+		var version any
+		var reachable bool
+		if err := rows.Scan(&m.ID, &m.RoomID, &version, &reachable); err != nil {
+			return nil, examined, err
+		}
+		// Inaccessible data must not affect the caller, even if malformed.
+		if reachable {
+			if err := (timestamp{&m.UpdatedAt}).Scan(version); err != nil {
+				return nil, examined, err
+			}
+			messages = append(messages, m)
+			if len(messages) == 100 {
+				break
+			}
+		}
+	}
+	return messages, examined, rows.Err()
+}
+
+// Hydrate only the selected page and recheck its membership in the same query.
+func (d *DB) Search(ctx context.Context, user int64, query string) ([]Message, error) {
+	refs, err := d.SearchReferences(ctx, user, query)
+	if err != nil || len(refs) == 0 {
+		return refs, err
+	}
+	ids := make([]int64, len(refs))
+	for i, ref := range refs {
+		ids[i] = ref.ID
+	}
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := d.Read.QueryContext(ctx, messageSelect+"JOIN memberships member ON member.room_id=m.room_id WHERE member.user_id=? AND m.id IN (SELECT value FROM json_each(?)) ORDER BY m.id", user, string(raw))
+	if err != nil {
+		return nil, err
+	}
+	return scanMessages(rows)
 }
 
 func searchTerms(query string) string {
