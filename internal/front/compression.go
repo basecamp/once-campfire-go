@@ -10,6 +10,9 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/basecamp/once-campfire-go/internal/responsebody"
 )
 
 var gzipPool = sync.Pool{New: func() any { writer, _ := gzip.NewWriterLevel(nil, 6); return writer }}
@@ -40,6 +43,10 @@ type gzipResponse struct {
 	selected string
 	status   int
 	drop     bool
+	compress bool
+	complete bool
+	mtime    uint32
+	cache    *gzipCache
 }
 
 func (w *gzipResponse) Unwrap() http.ResponseWriter { return w.ResponseWriter }
@@ -69,15 +76,67 @@ func (w *gzipResponse) WriteHeader(status int) {
 	if w.selected == "gzip" {
 		h.Set("Content-Encoding", "gzip")
 		h.Del("Content-Length")
-		w.writer = gzipPool.Get().(*gzip.Writer)
-		w.writer.Reset(w.ResponseWriter)
-		w.writer.Header.OS = 3
-		if stamp, err := http.ParseTime(h.Get("Last-Modified")); err == nil {
-			w.writer.Header.ModTime = stamp
+		w.compress = true
+		if stamp, err := http.ParseTime(h.Get("Last-Modified")); err == nil && stamp.Unix() > 0 {
+			w.mtime = uint32(stamp.Unix())
 		}
 	}
 	w.ResponseWriter.WriteHeader(status)
 }
+func (w *gzipResponse) startGzip() {
+	if !w.compress || w.writer != nil || w.request.Method == "HEAD" {
+		return
+	}
+	w.writer = gzipPool.Get().(*gzip.Writer)
+	w.writer.Reset(w.ResponseWriter)
+	w.writer.Header.OS = 3
+	if w.mtime != 0 {
+		w.writer.Header.ModTime = time.Unix(int64(w.mtime), 0)
+	}
+}
+
+// WriteBody accepts completed, immutable parts with trusted digests. A hit
+// writes the gzip member directly, without hashing the full body. Ordinary
+// Write/Flush callers retain streaming compression and never enter this cache.
+func (w *gzipResponse) WriteBody(parts []responsebody.Part) (int, error) {
+	size := 0
+	for _, part := range parts {
+		size += part.Len()
+	}
+	if w.status == 0 {
+		w.WriteHeader(200)
+	}
+	if w.drop || w.request.Method == "HEAD" {
+		return size, nil
+	}
+	if w.request.Method == "GET" && w.compress && w.writer == nil && w.cache != nil && w.cache.capacity > 0 &&
+		(w.status == 200 || w.status == 201) && size >= 1024 && size <= gzipMaxBody &&
+		!strings.Contains(strings.ToLower(w.Header().Get("Cache-Control")), "no-store") {
+		w.complete = true
+		body, err := w.cache.prepare(w.request.Context(), parts, w.mtime)
+		if err != nil {
+			return 0, err
+		}
+		n, err := w.ResponseWriter.Write(body)
+		if err == nil && n != len(body) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			return 0, err
+		}
+		return size, nil
+	}
+	written := 0
+	for _, part := range parts {
+		n, err := part.WriteTo(w)
+		written += int(n)
+		if err != nil {
+			return written, err
+		}
+	}
+	return written, nil
+}
+
 func (w *gzipResponse) Write(p []byte) (int, error) {
 	if w.status == 0 {
 		if w.Header().Get("Content-Type") == "" {
@@ -88,6 +147,7 @@ func (w *gzipResponse) Write(p []byte) (int, error) {
 	if w.drop || w.request.Method == "HEAD" {
 		return len(p), nil
 	}
+	w.startGzip()
 	if w.writer != nil {
 		return w.writer.Write(p)
 	}
@@ -106,6 +166,7 @@ func (w *gzipResponse) WriteString(value string) (int, error) {
 	if w.drop || w.request.Method == "HEAD" {
 		return len(value), nil
 	}
+	w.startGzip()
 	if w.writer != nil {
 		return io.WriteString(w.writer, value)
 	}
@@ -115,26 +176,30 @@ func (w *gzipResponse) Flush() {
 	if w.status == 0 {
 		w.WriteHeader(200)
 	}
+	w.startGzip()
 	if w.writer != nil {
 		w.writer.Flush()
 	}
 	http.NewResponseController(w.ResponseWriter).Flush()
 }
 func Deflate(next http.Handler) http.Handler {
+	cache := newGzipCache(gzipCacheBytes)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Upgrade") != "" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		wrapped := &gzipResponse{ResponseWriter: w, request: r, selected: encoding(r.Header.Get("Accept-Encoding"))}
+		wrapped := &gzipResponse{ResponseWriter: w, request: r, selected: encoding(r.Header.Get("Accept-Encoding")), cache: cache}
 		next.ServeHTTP(wrapped, r)
 		if wrapped.status == 0 {
 			wrapped.WriteHeader(200)
 		}
+		// Even an empty streaming response is a complete gzip member.
+		if !wrapped.complete {
+			wrapped.startGzip()
+		}
 		if wrapped.writer != nil {
-			if r.Method != "HEAD" {
-				wrapped.writer.Close()
-			}
+			wrapped.writer.Close()
 			wrapped.writer.Reset(nil)
 			gzipPool.Put(wrapped.writer)
 		}

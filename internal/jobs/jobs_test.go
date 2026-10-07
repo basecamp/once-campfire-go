@@ -2,7 +2,9 @@ package jobs
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -23,6 +25,49 @@ func TestIndependentQueuesAndShutdown(t *testing.T) {
 	r.Close(time.Second)
 	if r.Enqueue("fast", func(context.Context) error { return nil }) {
 		t.Fatal("accepted work after shutdown")
+	}
+}
+
+func TestConcurrentShutdown(t *testing.T) {
+	for _, timeout := range []bool{false, true} {
+		name := "drain"
+		if timeout {
+			name = "timeout"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				r := New(1, "work")
+				release := make(chan struct{})
+				r.Enqueue("work", func(ctx context.Context) error {
+					select {
+					case <-release:
+					case <-ctx.Done():
+					}
+					return nil
+				})
+				var closers sync.WaitGroup
+				for range 2 {
+					closers.Go(func() { r.Close(time.Minute) })
+				}
+				synctest.Wait() // Both closers and the active job are blocked.
+				start := time.Now()
+				if !timeout {
+					close(release)
+				}
+				closers.Wait()
+				synctest.Wait()
+				want := time.Duration(0)
+				if timeout {
+					want = time.Minute
+				}
+				if elapsed := time.Since(start); elapsed != want {
+					t.Fatalf("shutdown took %s; want %s", elapsed, want)
+				}
+				if r.Enqueue("work", func(context.Context) error { return nil }) {
+					t.Fatal("accepted work after concurrent shutdown")
+				}
+			})
+		})
 	}
 }
 

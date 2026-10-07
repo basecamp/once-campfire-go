@@ -9,10 +9,13 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"uuid"
 )
 
-var ErrForbidden = errors.New("forbidden")
-var ErrValidation = errors.New("invalid attributes")
+var (
+	ErrForbidden  = errors.New("forbidden")
+	ErrValidation = errors.New("invalid attributes")
+)
 
 type User struct {
 	ID                    int64
@@ -65,18 +68,53 @@ const userColumns = "u.id,u.name,coalesce(u.email_address,''),coalesce(u.passwor
 
 func userRow(row *sql.Row) (User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Name, &u.Email, &u.Password, &u.Role, &u.Status, &u.Bio, timestamp{&u.UpdatedAt}, &u.BotToken)
+	err := row.Scan(
+		&u.ID,
+		&u.Name,
+		&u.Email,
+		&u.Password,
+		&u.Role,
+		&u.Status,
+		&u.Bio,
+		timestamp{&u.UpdatedAt},
+		&u.BotToken,
+	)
 	return u, err
 }
+
 func (d *DB) UserByEmail(ctx context.Context, email string) (User, error) {
-	return userRow(d.Read.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users u WHERE u.email_address=? AND u.status=0", email))
+	return userRow(
+		d.Read.QueryRowContext(
+			ctx,
+			"SELECT "+userColumns+" FROM users u WHERE u.email_address=? AND u.status=0",
+			email,
+		),
+	)
 }
+
 func (d *DB) SessionUser(ctx context.Context, token string) (User, error) {
-	return userRow(d.Read.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND u.status=0", token))
+	return userRow(
+		d.Read.QueryRowContext(
+			ctx,
+			"SELECT "+userColumns+" FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND u.status=0",
+			token,
+		),
+	)
 }
+
 func (d *DB) StartSession(ctx context.Context, user int64, agent, ip string) (string, error) {
 	token, now := Token(), Stamp(d.Now())
-	_, err := d.Write.ExecContext(ctx, "INSERT INTO sessions(token,user_id,user_agent,ip_address,last_active_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?)", token, user, agent, ip, now, now, now)
+	_, err := d.Write.ExecContext(
+		ctx,
+		"INSERT INTO sessions(token,user_id,user_agent,ip_address,last_active_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+		token,
+		user,
+		agent,
+		ip,
+		now,
+		now,
+		now,
+	)
 	if err == nil {
 		// A sessions-table write moves the authorization generation, keeping
 		// the ENGINE-40b audit contract "every session insert/delete bumps".
@@ -103,7 +141,12 @@ func (d *DB) DeleteSession(ctx context.Context, token string, user int64) error 
 	}
 	return nil
 }
-func (d *DB) Setup(ctx context.Context, name, email, passwordDigest string, uploads ...BlobStager) (User, error) {
+
+func (d *DB) Setup(
+	ctx context.Context,
+	name, email, passwordDigest string,
+	uploads ...BlobStager,
+) (User, error) {
 	var u User
 	if strings.TrimSpace(name) == "" || strings.TrimSpace(email) == "" || passwordDigest == "" {
 		return u, ErrValidation
@@ -120,7 +163,15 @@ func (d *DB) Setup(ctx context.Context, name, email, passwordDigest string, uplo
 		if _, err := tx.ExecContext(ctx, "INSERT INTO accounts(name,join_code,settings,created_at,updated_at) VALUES (?,?,?,?,?)", "Campfire", Token(), "{}", now, now); err != nil {
 			return err
 		}
-		r, err := tx.ExecContext(ctx, "INSERT INTO users(name,email_address,password_digest,role,status,created_at,updated_at) VALUES (?,?,?,1,0,?,?)", name, email, passwordDigest, now, now)
+		r, err := tx.ExecContext(
+			ctx,
+			"INSERT INTO users(name,email_address,password_digest,role,status,created_at,updated_at) VALUES (?,?,?,1,0,?,?)",
+			name,
+			email,
+			passwordDigest,
+			now,
+			now,
+		)
 		if err != nil {
 			return err
 		}
@@ -128,7 +179,14 @@ func (d *DB) Setup(ctx context.Context, name, email, passwordDigest string, uplo
 		if err != nil {
 			return err
 		}
-		r, err = tx.ExecContext(ctx, "INSERT INTO rooms(name,type,creator_id,created_at,updated_at) VALUES (?,'Rooms::Open',?,?,?)", "All Talk", id, now, now)
+		r, err = tx.ExecContext(
+			ctx,
+			"INSERT INTO rooms(name,type,creator_id,created_at,updated_at) VALUES (?,'Rooms::Open',?,?,?)",
+			"All Talk",
+			id,
+			now,
+			now,
+		)
 		if err != nil {
 			return err
 		}
@@ -136,7 +194,14 @@ func (d *DB) Setup(ctx context.Context, name, email, passwordDigest string, uplo
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, "INSERT INTO memberships(room_id,user_id,created_at,updated_at) VALUES (?,?,?,?)", room, id, now, now)
+		_, err = tx.ExecContext(
+			ctx,
+			"INSERT INTO memberships(room_id,user_id,created_at,updated_at) VALUES (?,?,?,?)",
+			room,
+			id,
+			now,
+			now,
+		)
 		u = User{ID: id, Name: name, Email: email, Role: 1}
 		return err
 	})
@@ -148,10 +213,18 @@ func (d *DB) Setup(ctx context.Context, name, email, passwordDigest string, uplo
 	}
 	return u, err
 }
-func (d *DB) Rooms(ctx context.Context, user int64) ([]Room, error) { return d.rooms(ctx, user, true) }
+
+func (d *DB) Rooms(
+	ctx context.Context,
+	user int64,
+) ([]Room, error) {
+	return d.rooms(ctx, user, true)
+}
+
 func (d *DB) AllRooms(ctx context.Context, user int64) ([]Room, error) {
 	return d.rooms(ctx, user, false)
 }
+
 func (d *DB) rooms(ctx context.Context, user int64, visible bool) ([]Room, error) {
 	query := "SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=?"
 	if visible {
@@ -172,9 +245,11 @@ func (d *DB) rooms(ctx context.Context, user int64, visible bool) ([]Room, error
 	}
 	return result, rows.Err()
 }
+
 func (d *DB) Room(ctx context.Context, user, id int64) (Room, error) {
 	var r Room
-	err := d.Read.QueryRowContext(ctx, "SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=? AND r.id=?", user, id).Scan(&r.ID, &r.CreatorID, &r.Name, &r.Type, timestamp{&r.UpdatedAt})
+	err := d.Read.QueryRowContext(ctx, "SELECT r.id,r.creator_id,coalesce(r.name,''),r.type,r.updated_at FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE m.user_id=? AND r.id=?", user, id).
+		Scan(&r.ID, &r.CreatorID, &r.Name, &r.Type, timestamp{&r.UpdatedAt})
 	return r, err
 }
 
@@ -192,6 +267,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 	}
 	return result, rows.Err()
 }
+
 func (d *DB) Messages(ctx context.Context, room, before int64) ([]Message, error) {
 	query := messageSelect + "WHERE m.room_id=? "
 	args := []any{room}
@@ -212,16 +288,31 @@ func (d *DB) Messages(ctx context.Context, room, before int64) ([]Message, error
 
 // CreateMessage mirrors Message and Room callbacks in reference/reference/app/models.
 // Publication and job delivery happen only after this transaction commits.
-func (d *DB) CreateMessage(ctx context.Context, user, room int64, client, body, plain string) (Message, error) {
+func (d *DB) CreateMessage(
+	ctx context.Context,
+	user, room int64,
+	client, body, plain string,
+) (Message, error) {
 	return d.CreateMessageWithBlob(ctx, user, room, client, body, plain, 0)
 }
-func (d *DB) CreateMessageWithBlob(ctx context.Context, user, room int64, client, body, plain string, blob int64) (Message, error) {
+
+func (d *DB) CreateMessageWithBlob(
+	ctx context.Context,
+	user, room int64,
+	client, body, plain string,
+	blob int64,
+) (Message, error) {
 	return d.createMessage(ctx, user, room, client, &body, plain, blob, nil, true)
 }
 
 // CreateWebhookReply is called only by a queued, authorized webhook delivery. Like
 // the reference model callback it does not reapply controller membership checks.
-func (d *DB) CreateWebhookReply(ctx context.Context, user, room int64, body, plain string, blob int64) (Message, error) {
+func (d *DB) CreateWebhookReply(
+	ctx context.Context,
+	user, room int64,
+	body, plain string,
+	blob int64,
+) (Message, error) {
 	return d.createMessage(ctx, user, room, "", &body, plain, blob, nil, false)
 }
 
@@ -235,15 +326,33 @@ type BlobStager interface {
 	Discard()
 }
 
-func (d *DB) CreateMessageWithUpload(ctx context.Context, user, room int64, client string, body *string, plain string, staged BlobStager, webhook bool) (Message, error) {
+func (d *DB) CreateMessageWithUpload(
+	ctx context.Context,
+	user, room int64,
+	client string,
+	body *string,
+	plain string,
+	staged BlobStager,
+	webhook bool,
+) (Message, error) {
 	return d.createMessage(ctx, user, room, client, body, plain, 0, staged, !webhook)
 }
-func (d *DB) createMessage(ctx context.Context, user, room int64, client string, body *string, plain string, blob int64, staged BlobStager, checkMembership bool) (Message, error) {
+
+func (d *DB) createMessage(
+	ctx context.Context,
+	user, room int64,
+	client string,
+	body *string,
+	plain string,
+	blob int64,
+	staged BlobStager,
+	checkMembership bool,
+) (Message, error) {
 	if staged != nil {
 		defer staged.Discard()
 	}
 	if client == "" {
-		client = UUID()
+		client = uuid.NewV4().String()
 	}
 	now := d.Now().UTC()
 	m := Message{RoomID: room, CreatorID: user, ClientID: client, CreatedAt: now, UpdatedAt: now}
@@ -410,28 +519,14 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 	}
 	return result.message, nil
 }
-func (d *DB) Search(ctx context.Context, user int64, query string) ([]Message, error) {
-	words := strings.Fields(SearchQuery(query))
-	if len(words) == 0 {
-		return []Message{}, nil
-	}
-	for i, w := range words {
-		words[i] = "\"" + strings.ReplaceAll(w, "\"", "\"\"") + "\""
-	}
-	rows, err := d.Read.QueryContext(ctx, messageSelect+"JOIN message_search_index idx ON idx.rowid=m.id JOIN memberships member ON member.room_id=m.room_id WHERE member.user_id=? AND idx.body MATCH ? ORDER BY m.created_at DESC LIMIT 100", user, strings.Join(words, " "))
-	if err != nil {
-		return nil, err
-	}
-	messages, err := scanMessages(rows)
-	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-		messages[i], messages[j] = messages[j], messages[i]
-	}
-	return messages, err
-}
 
 // AuthorizedSessions checks a publication's distinct sessions in one snapshot.
 // json_each keeps the SQL shape stable and avoids SQLite's placeholder limit.
-func (d *DB) AuthorizedSessions(ctx context.Context, tokens []string, room int64) (map[string]int64, error) {
+func (d *DB) AuthorizedSessions(
+	ctx context.Context,
+	tokens []string,
+	room int64,
+) (map[string]int64, error) {
 	raw, err := json.Marshal(tokens)
 	if err != nil {
 		return nil, err

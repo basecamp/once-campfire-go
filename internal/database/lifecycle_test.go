@@ -56,7 +56,7 @@ func TestMessageLifecyclePermissionsAndSearch(t *testing.T) {
 		t.Fatal("edit did not touch message")
 	}
 	for query, count := range map[string]int{"original": 0, "edited": 1} {
-		hits, err := d.Search(ctx, member.ID, query)
+		hits, err := d.SearchReferences(ctx, member.ID, query)
 		if err != nil || len(hits) != count {
 			t.Fatalf("%s: %v %v", query, hits, err)
 		}
@@ -77,7 +77,7 @@ func TestMessageLifecyclePermissionsAndSearch(t *testing.T) {
 	if err = d.DeleteMessage(ctx, member.ID, message.ID); err != nil {
 		t.Fatal(err)
 	}
-	if hits, err := d.Search(ctx, member.ID, "edited"); err != nil || len(hits) != 0 {
+	if hits, err := d.SearchReferences(ctx, member.ID, "edited"); err != nil || len(hits) != 0 {
 		t.Fatal(hits, err)
 	}
 	if boosts, err := d.Boosts(ctx, message.ID); err != nil || len(boosts) != 0 {

@@ -160,11 +160,15 @@ func (c *readCache) store(key readCacheKey, makeEntry func() (readCacheEntry, in
 }
 
 // roomRowCached returns the room for user,id with its membership check,
-// through the read cache when it is enabled: the key carries the sidebar and
-// corpus versions read before the lookup, so a hit is valid for the rooms/
-// memberships/messages state this request would have read; a miss reads
-// through fastdb (c) or database/sql exactly as before. A missing or
-// forbidden room is ErrNoRows, cached as not-found.
+// through the read cache when it is enabled. The cached part is the room row
+// alone, keyed by the sidebar and corpus versions read before the lookup; the
+// MEMBERSHIP check itself is deliberately fresh on every call (upstream
+// main's authorization recheck): the version counters only move on helper
+// writes, and a raw membership write must revoke the page immediately — the
+// compressed-body path pins that behavior. A missing or forbidden room is
+// ErrNoRows. A miss reads the row through fastdb (c) or database/sql exactly
+// as before; the row lookup here is by id (the membership predicate has
+// already run and cannot change the row).
 func (s *Server) roomRowCached(c *fastdb.Conn, ctx context.Context, user, id int64) (database.Room, error) {
 	if s.readCache == nil {
 		return s.roomRow(c, ctx, user, id)
@@ -174,25 +178,49 @@ func (s *Server) roomRowCached(c *fastdb.Conn, ctx context.Context, user, id int
 		return s.roomRow(c, ctx, user, id)
 	}
 	key := readCacheKey{kind: kindRoom, a: user, b: id, version: version, v2: s.DB.CorpusVersion()}
+	if err := s.membershipCheck(c, ctx, user, id); err != nil {
+		return database.Room{}, err
+	}
 	if entry, ok := s.readCache.lookup(key); ok {
-		if !entry.found {
-			return database.Room{}, sql.ErrNoRows
-		}
 		return entry.room, nil
 	}
-	room, err := s.roomRow(c, ctx, user, id)
-	found := err == nil
-	if !found && !errors.Is(err, sql.ErrNoRows) {
+	room, err := s.roomByID(c, ctx, id)
+	if err != nil {
 		return room, err
 	}
 	s.readCache.store(key, func() (readCacheEntry, int) {
-		entry := readCacheEntry{found: found}
 		copy := room
+		entry := readCacheEntry{found: true}
 		entry.room = copy
 		size := readCacheOverhead + 32 + len(copy.Name) + len(copy.Type)
 		return entry, size
 	})
-	return room, err
+	return room, nil
+}
+
+// membershipCheck reports whether user is a member of room, through fastdb
+// (c) or database/sql. It never consults a cache: authorization must observe
+// every membership write, including raw SQL the version counters cannot see.
+// ErrNoRows means the membership is absent, exactly like the joined readers.
+func (s *Server) membershipCheck(c *fastdb.Conn, ctx context.Context, user, id int64) error {
+	if c == nil {
+		_, err := s.DB.Involvement(ctx, user, id)
+		return err
+	}
+	_, err := c.Involvement(user, id)
+	return err
+}
+
+// roomByID returns the room row by id, through fastdb (c) or database/sql.
+func (s *Server) roomByID(c *fastdb.Conn, ctx context.Context, id int64) (database.Room, error) {
+	if c == nil {
+		return s.DB.FindRoom(ctx, id)
+	}
+	var r fastdb.Room
+	if err := c.RoomByID(&r, id); err != nil {
+		return database.Room{}, err
+	}
+	return roomOf(r), nil
 }
 
 // accountCached returns the account row render reads on every page, through

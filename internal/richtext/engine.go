@@ -293,7 +293,10 @@ func processRoot(a *xhtml.Arena, result Result, root *xhtml.Node, ctx Context, f
 	}
 
 	if fields&displayOutput != 0 {
-		filtered := clone(a, root)
+		filtered := root
+		if fields&mentionsOutput != 0 {
+			filtered = clone(a, root)
+		}
 		if result.Errors["plain"] != nil {
 			setResultError(&result, "filtered", result.Errors["plain"])
 		} else {
@@ -647,6 +650,9 @@ func mentionHTML(a *xhtml.Arena, user Mention) string {
 	b.WriteString("</span>\n")
 	return strings.Clone(b.String())
 }
+
+var hostLabelLetter = regexp.MustCompile(`[a-zA-Z]`)
+
 func externalURL(value, host string) (string, error) {
 	if strings.TrimSpace(value) == "" {
 		return "", nil
@@ -673,7 +679,7 @@ func externalURL(value, host string) (string, error) {
 		return "", errors.New("missing host label")
 	}
 	label := name[strings.LastIndex(name, ".")+1:]
-	if !regexp.MustCompile(`[a-zA-Z]`).MatchString(label) || strings.HasPrefix(strings.ToLower(label), "0x") || strings.EqualFold(name, strings.TrimSuffix(host, ".")) {
+	if !hostLabelLetter.MatchString(label) || strings.HasPrefix(strings.ToLower(label), "0x") || strings.EqualFold(name, strings.TrimSuffix(host, ".")) {
 		return "", nil
 	}
 	return value, nil

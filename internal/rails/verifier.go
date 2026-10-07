@@ -21,14 +21,6 @@ import (
 var ErrPurpose = errors.New("message purpose mismatch")
 var ErrExpired = errors.New("message expired")
 
-// The two camel-to-snake passes modelPurpose runs are immutable, so their
-// patterns compile once instead of on every signed id (avatars sign on every
-// rendered message).
-var (
-	camelHeadPattern = regexp.MustCompile(`([A-Z]+)([A-Z][a-z])`)
-	camelMidPattern  = regexp.MustCompile(`([a-z0-9])([A-Z])`)
-)
-
 type Verifier struct {
 	Key                                         []byte
 	SHA256, URLSafe, Padded, HTML, AllowMarshal bool
@@ -302,10 +294,14 @@ func marshalString(data []byte) (string, bool) {
 	}
 	return string(data[:length]), true
 }
+
+var modelAcronymBoundary = regexp.MustCompile(`([A-Z]+)([A-Z][a-z])`)
+var modelWordBoundary = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+
 func modelPurpose(model, purpose string) string {
 	model = strings.ReplaceAll(model, "::", "/")
-	model = camelHeadPattern.ReplaceAllString(model, "${1}_${2}")
-	model = camelMidPattern.ReplaceAllString(model, "${1}_${2}")
+	model = modelAcronymBoundary.ReplaceAllString(model, "${1}_${2}")
+	model = modelWordBoundary.ReplaceAllString(model, "${1}_${2}")
 	model = strings.ToLower(strings.ReplaceAll(model, "-", "_"))
 	if strings.TrimSpace(purpose) != "" {
 		model += "/" + purpose
@@ -381,6 +377,8 @@ func (s *Secrets) VerifySGID(message, purpose string, now time.Time) (string, er
 }
 
 // UnverifiedUserGID is the deliberately User-only exception in rails_ext/action_text_attachables.rb.
+var unverifiedGID = regexp.MustCompile(`gid://campfire/[^/]+/\d+`)
+
 func UnverifiedUserGID(sgid string) (string, error) {
 	if strings.Trim(sgid, "-") == "" {
 		return "", nil
@@ -407,7 +405,7 @@ func UnverifiedUserGID(sgid string) (string, error) {
 		if err != nil {
 			return "", ErrInvalid
 		}
-		gid = regexp.MustCompile(`gid://campfire/[^/]+/\d+`).FindString(string(decoded))
+		gid = unverifiedGID.FindString(string(decoded))
 	}
 	if !strings.HasPrefix(gid, "gid://") {
 		decoded, err := decode64(gid)

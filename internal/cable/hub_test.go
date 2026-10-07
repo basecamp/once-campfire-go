@@ -3,6 +3,7 @@ package cable
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -102,6 +103,16 @@ func TestRoomAuthorizationAndDelivery(t *testing.T) {
 	}
 	owner := dial("/")
 	subscribe(owner, "confirm_subscription")
+	// A repeated subscription must remain one recipient, not duplicate delivery.
+	subscribe(owner, "confirm_subscription")
+	alias := " " + identifier
+	if err := wsjson.Write(ctx, owner, map[string]string{"command": "subscribe", "identifier": alias}); err != nil {
+		t.Fatal(err)
+	}
+	var confirmed map[string]any
+	if err := wsjson.Read(ctx, owner, &confirmed); err != nil || confirmed["identifier"] != alias || confirmed["type"] != "confirm_subscription" {
+		t.Fatal("alias subscription failed", confirmed, err)
+	}
 	duplicate := dial("/")
 	subscribe(duplicate, "confirm_subscription")
 	outsider := dial("/stranger")
@@ -109,15 +120,57 @@ func TestRoomAuthorizationAndDelivery(t *testing.T) {
 	expected := `<turbo-stream action="append"><template>` + strings.Repeat("hello ", 100) + `</template></turbo-stream>`
 	hub.Publish(ctx, room.ID, expected)
 	var frame map[string]any
-	if err = wsjson.Read(ctx, owner, &frame); err != nil {
-		t.Fatal(err)
+	delivered := make(map[string]bool)
+	for i := 0; i < 2; i++ {
+		if err = wsjson.Read(ctx, owner, &frame); err != nil || frame["message"] != expected {
+			t.Fatal("incorrect alias delivery", frame, err)
+		}
+		delivered[frame["identifier"].(string)] = true
 	}
-	if frame["message"] != expected || frame["identifier"] != identifier {
-		t.Fatal("incorrect delivery", frame)
+	if !delivered[identifier] || !delivered[alias] || len(delivered) != 2 {
+		t.Fatal("room aliases were collapsed", delivered)
 	}
 	if err = wsjson.Read(ctx, duplicate, &frame); err != nil || frame["message"] != expected {
 		t.Fatal("shared recipient did not receive frame", err)
 	}
+	// Removing one alias must leave the other room identifier intact.
+	if err = wsjson.Write(ctx, owner, map[string]string{"command": "unsubscribe", "identifier": alias}); err != nil {
+		t.Fatal(err)
+	}
+	readIdentifier := `{"channel":"ReadRoomsChannel"}`
+	if err = wsjson.Write(ctx, owner, map[string]string{"command": "subscribe", "identifier": readIdentifier}); err != nil {
+		t.Fatal(err)
+	}
+	if err = wsjson.Read(ctx, owner, &frame); err != nil || frame["type"] != "confirm_subscription" {
+		t.Fatal("read stream subscription failed", frame, err)
+	}
+	hub.Publish(ctx, room.ID, "remaining alias")
+	if err = wsjson.Read(ctx, owner, &frame); err != nil || frame["identifier"] != identifier || frame["message"] != "remaining alias" {
+		t.Fatal("selective alias removal changed delivery", frame, err)
+	}
+	if err = wsjson.Read(ctx, duplicate, &frame); err != nil || frame["message"] != "remaining alias" {
+		t.Fatal("other socket delivery changed", frame, err)
+	}
+	// Unsubscription takes effect before the next command's acknowledgement.
+	// A following stream frame must not be preceded by stale room delivery.
+	if err = wsjson.Write(ctx, owner, map[string]string{"command": "unsubscribe", "identifier": identifier}); err != nil {
+		t.Fatal(err)
+	}
+	if err = wsjson.Write(ctx, owner, map[string]string{"command": "subscribe", "identifier": readIdentifier}); err != nil {
+		t.Fatal(err)
+	}
+	if err = wsjson.Read(ctx, owner, &frame); err != nil || frame["type"] != "confirm_subscription" {
+		t.Fatal("read stream subscription failed", frame, err)
+	}
+	hub.Publish(ctx, room.ID, "only remaining room subscriber")
+	if err = wsjson.Read(ctx, duplicate, &frame); err != nil || frame["message"] != "only remaining room subscriber" {
+		t.Fatal("remaining room subscription lost delivery", frame, err)
+	}
+	hub.PublishStream(ctx, fmt.Sprintf("user_%d_reads", user.ID), "stream marker")
+	if err = wsjson.Read(ctx, owner, &frame); err != nil || frame["identifier"] != readIdentifier || frame["message"] != "stream marker" {
+		t.Fatal("unsubscribed room or wrong stream received delivery", frame, err)
+	}
+	subscribe(owner, "confirm_subscription")
 	// Revoke the owner's membership through the audited helper: the bump it
 	// performs must invalidate the publication authorization cache so the
 	// next publish excludes both sockets (the ENGINE-40b poisoning contract).
@@ -130,6 +183,20 @@ func TestRoomAuthorizationAndDelivery(t *testing.T) {
 	}
 	if err = wsjson.Read(ctx, duplicate, &frame); err == nil {
 		t.Fatal("revoked duplicate received frame", frame)
+	}
+	// Both sockets' room/stream index references are released on disconnect.
+	deadline := time.Now().Add(time.Second)
+	for {
+		hub.mu.RLock()
+		remaining := len(hub.roomStreams) + len(hub.namedStreams)
+		hub.mu.RUnlock()
+		if remaining == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("disconnected subscribers remained indexed")
+		}
+		time.Sleep(time.Millisecond)
 	}
 	// A previously issued, correctly signed stream cannot restore revoked access.
 	revoked := dial("/")

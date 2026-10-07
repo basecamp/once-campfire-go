@@ -8,6 +8,56 @@ import (
 	"time"
 )
 
+func TestMessageVersionMatchesStampIdentity(t *testing.T) {
+	for name, stamp := range map[string]time.Time{
+		"zero":       {},
+		"pre-epoch":  time.Unix(-1, 999999001),
+		"current":    time.Date(2026, 10, 5, 12, 0, 0, 123456001, time.UTC),
+		"far future": time.Date(300000, 1, 1, 0, 0, 0, 1, time.UTC),
+	} {
+		t.Run(name, func(t *testing.T) {
+			base := database.Message{ID: -1, UpdatedAt: stamp}
+			variants := []database.Message{
+				{ID: -1, UpdatedAt: stamp.In(time.FixedZone("offset", 19800))},
+				{ID: -1, UpdatedAt: stamp.Add(998 * time.Nanosecond)},
+				{ID: -1, UpdatedAt: stamp.Add(time.Microsecond)},
+				{ID: 0, UpdatedAt: stamp},
+			}
+			for _, other := range variants {
+				equal := base.ID == other.ID && database.Stamp(base.UpdatedAt) == database.Stamp(other.UpdatedAt)
+				if (messageCacheKey(base) == messageCacheKey(other)) != equal {
+					t.Fatalf("key identity differs from Stamp: %v / %v", base, other)
+				}
+			}
+		})
+	}
+	// Integer nanosecond/microsecond timestamps wrap outside their ranges.
+	for _, pair := range [][2]time.Time{
+		{{}, time.Unix(0, time.Time{}.UnixNano())},
+		{time.Date(300000, 1, 1, 0, 0, 0, 0, time.UTC), time.UnixMicro(time.Date(300000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())},
+	} {
+		if messageCacheKey(database.Message{ID: 1, UpdatedAt: pair[0]}) == messageCacheKey(database.Message{ID: 1, UpdatedAt: pair[1]}) {
+			t.Fatal("out-of-range dates collided")
+		}
+	}
+}
+
+func TestMessageListKeyPreservesOrderAndBoundaries(t *testing.T) {
+	a, b := database.Message{ID: 1}, database.Message{ID: 2}
+	for _, pair := range [][2][]database.Message{
+		{{a, b}, {b, a}},
+		{{a}, {a, a}},
+		{nil, {database.Message{}}},
+	} {
+		if messageListKey(pair[0]) == messageListKey(pair[1]) {
+			t.Fatal("different ordered lists collided")
+		}
+	}
+	if messageListKey(nil) == messageCacheKey(database.Message{}) {
+		t.Fatal("list and item namespaces collided")
+	}
+}
+
 func TestMessageFragmentVersionAndBound(t *testing.T) {
 	app, _, _, user := testApp(t)
 	ctx := context.Background()

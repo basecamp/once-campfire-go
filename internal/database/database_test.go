@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"uuid"
 )
 
 func testDB(t *testing.T) *DB {
@@ -19,6 +20,7 @@ func testDB(t *testing.T) *DB {
 	t.Cleanup(func() { d.Close() })
 	return d
 }
+
 func TestSchemaAndMessageTransaction(t *testing.T) {
 	// This test pins the direct path's rollback contract end to end, so it
 	// runs with the write queue off; the queued path's after-commit contract
@@ -41,25 +43,36 @@ func TestSchemaAndMessageTransaction(t *testing.T) {
 	if err != nil || len(rooms) != 1 {
 		t.Fatalf("rooms: %v %v", rooms, err)
 	}
-	if _, err = d.Setup(ctx, "Other", "other@example.test", "digest"); !errors.Is(err, ErrForbidden) {
+	if _, err = d.Setup(ctx, "Other", "other@example.test", "digest"); !errors.Is(
+		err,
+		ErrForbidden,
+	) {
 		t.Fatalf("repeated setup: %v", err)
 	}
 	m, err := d.CreateMessage(ctx, u.ID, rooms[0].ID, "", "<p>running dogs</p>", "running dogs")
 	if err != nil {
 		t.Fatal(err)
 	}
+	id, err := uuid.Parse(m.ClientID)
+	if err != nil || m.ClientID != id.String() || id[6]>>4 != 4 || id[8]&0xc0 != 0x80 {
+		t.Fatalf("generated client ID must remain a canonical UUID v4: %q (%v)", m.ClientID, err)
+	}
 	messages, err := d.Messages(ctx, rooms[0].ID, 0)
-	if err != nil || len(messages) != 1 || messages[0].ID != m.ID || messages[0].Body != "<p>running dogs</p>" {
+	if err != nil || len(messages) != 1 || messages[0].ID != m.ID ||
+		messages[0].Body != "<p>running dogs</p>" {
 		t.Fatalf("messages: %v %v", messages, err)
 	}
-	hits, err := d.Search(ctx, u.ID, "run")
+	hits, err := d.SearchReferences(ctx, u.ID, "run")
 	if err != nil || len(hits) != 1 {
 		t.Fatalf("porter search: %v %v", hits, err)
 	}
-	if _, err = d.CreateMessage(ctx, u.ID, 12345, "", "hidden", "hidden"); !errors.Is(err, ErrForbidden) {
+	if _, err = d.CreateMessage(ctx, u.ID, 12345, "", "hidden", "hidden"); !errors.Is(
+		err,
+		ErrForbidden,
+	) {
 		t.Fatalf("unauthorized write: %v", err)
 	}
-	if hits, err = d.Search(ctx, u.ID+1, "run"); err != nil || len(hits) != 0 {
+	if hits, err = d.SearchReferences(ctx, u.ID+1, "run"); err != nil || len(hits) != 0 {
 		t.Fatalf("private search leaked: %v %v", hits, err)
 	}
 	// An FTS failure must roll back the message and its rich text together.
@@ -73,10 +86,12 @@ func TestSchemaAndMessageTransaction(t *testing.T) {
 		t.Fatal("expected failed index write")
 	}
 	var count int
-	if err = d.Read.QueryRow("SELECT count(*) FROM messages").Scan(&count); err != nil || count != 1 {
+	if err = d.Read.QueryRow("SELECT count(*) FROM messages").Scan(&count); err != nil ||
+		count != 1 {
 		t.Fatalf("partial write: %d %v", count, err)
 	}
 }
+
 func TestSessionRevocation(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -99,6 +114,7 @@ func TestSessionRevocation(t *testing.T) {
 		t.Fatalf("banned user session accepted: %v", err)
 	}
 }
+
 func TestPendingMigrationFails(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.sqlite3")
 	d, err := Open(path, 1)

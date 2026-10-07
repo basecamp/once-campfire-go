@@ -174,13 +174,18 @@ func autoLink(a *xhtml.Arena, text string) (string, error) {
 		if strings.HasPrefix(strings.ToLower(destination), "www.") {
 			destination = a.Concat("http://", destination)
 		}
+		same := destination == display
 		display, e := sanitizeString(a, display)
 		if e != nil {
 			return "", e
 		}
-		destination, e = sanitizeString(a, destination)
-		if e != nil {
-			return "", e
+		if same {
+			destination = display
+		} else {
+			destination, e = sanitizeString(a, destination)
+			if e != nil {
+				return "", e
+			}
 		}
 		out.WriteString(`<a target="_blank" href="`)
 		out.WriteString(a.ReplaceAll(destination, `"`, "&quot;"))

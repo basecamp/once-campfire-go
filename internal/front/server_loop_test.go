@@ -39,22 +39,37 @@ func TestServerLoopFlagDiff(t *testing.T) {
 		config.TargetBind = "127.0.0.1"
 		config.ServerLoop = loop
 		config.LogRequests = false
-		port := freePort(t)
-		config.TargetPort = port
-		config.HTTPPort = port + 1 // distinct ports so the target listener exists
-		ctx, cancel := context.WithCancel(context.Background())
-		done := make(chan error, 1)
-		go func() { done <- Serve(ctx, config, app) }()
-		waitPort(t, port)
-		t.Cleanup(func() {
+		// The port chosen by freePort can be claimed by a concurrent
+		// test binary's :0 bind before Serve binds it explicitly, which
+		// would make waitPort time out; retry with a fresh port.
+		for attempt := 0; ; attempt++ {
+			port := freePort(t)
+			config.TargetPort = port
+			config.HTTPPort = port + 1 // distinct ports so the target listener exists
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- Serve(ctx, config, app) }()
+			if waitPortBool(port) {
+				t.Cleanup(func() {
+					cancel()
+					select {
+					case <-done:
+					case <-time.After(10 * time.Second):
+						t.Error("front.Serve did not stop")
+					}
+				})
+				return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+			}
 			cancel()
 			select {
-			case <-done:
+			case err := <-done:
+				if attempt == 2 {
+					t.Fatalf("front.Serve failed: %v", err)
+				}
 			case <-time.After(10 * time.Second):
-				t.Error("front.Serve did not stop")
+				t.Fatal("front.Serve did not stop after a failed listen")
 			}
-		})
-		return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+		}
 	}
 	off := run(false)
 	on := run(true)
@@ -112,16 +127,24 @@ func freePort(t *testing.T) int {
 
 func waitPort(t *testing.T, port int) {
 	t.Helper()
+	if !waitPortBool(port) {
+		t.Fatalf("listener on %d never came up", port)
+	}
+}
+
+// waitPortBool reports whether a listener accepted a connection on port
+// within the deadline, without failing the test.
+func waitPortBool(port int) bool {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 200*time.Millisecond)
 		if err == nil {
 			c.Close()
-			return
+			return true
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("listener on %d never came up", port)
+	return false
 }
 
 // exchange sends raw bytes and returns everything until the connection

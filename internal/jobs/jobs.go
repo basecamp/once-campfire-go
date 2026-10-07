@@ -8,28 +8,35 @@ import (
 	"time"
 )
 
-type Work func(context.Context) error
-type Runner struct {
-	mu      sync.RWMutex
-	closed  bool
-	pending int
-	changed chan struct{}
-	queues  map[string]chan Work
-	ctx     context.Context
-	cancel  context.CancelFunc
-	workers sync.WaitGroup
-}
+type (
+	Work   func(context.Context) error
+	Runner struct {
+		mu      sync.RWMutex
+		closed  bool
+		pending int
+		changed chan struct{}
+		done    chan struct{}
+		queues  map[string]chan Work
+		ctx     context.Context
+		cancel  context.CancelFunc
+		workers sync.WaitGroup
+	}
+)
 
 func New(concurrency int, kinds ...string) *Runner {
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &Runner{changed: make(chan struct{}, 1), queues: map[string]chan Work{}, ctx: ctx, cancel: cancel}
+	r := &Runner{
+		changed: make(chan struct{}, 1),
+		done:    make(chan struct{}),
+		queues:  map[string]chan Work{},
+		ctx:     ctx,
+		cancel:  cancel,
+	}
 	for _, kind := range kinds {
 		queue := make(chan Work, 1024)
 		r.queues[kind] = queue
 		for range max(1, concurrency) {
-			r.workers.Add(1)
-			go func() {
-				defer r.workers.Done()
+			r.workers.Go(func() {
 				for {
 					select {
 					case <-ctx.Done():
@@ -48,11 +55,12 @@ func New(concurrency int, kinds ...string) *Runner {
 						}
 					}
 				}
-			}()
+			})
 		}
 	}
 	return r
 }
+
 func run(ctx context.Context, kind string, work Work) {
 	defer func() {
 		if p := recover(); p != nil {
@@ -63,6 +71,7 @@ func run(ctx context.Context, kind string, work Work) {
 		slog.Error("background job failed", "kind", kind, "error", err)
 	}
 }
+
 func (r *Runner) Enqueue(kind string, work Work) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -85,6 +94,7 @@ func (r *Runner) Enqueue(kind string, work Work) bool {
 
 // The HTTP server stops accepting requests before Close. Queued work can still
 // enqueue dependent work (a banned message's attachment purge, for example).
+// changed wakes one drain waiter; done broadcasts shutdown to all closers.
 func (r *Runner) Close(timeout time.Duration) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -96,6 +106,7 @@ func (r *Runner) Close(timeout time.Duration) {
 		}
 		if r.pending == 0 {
 			r.closed = true
+			close(r.done)
 			for _, queue := range r.queues {
 				close(queue)
 			}
@@ -107,9 +118,16 @@ func (r *Runner) Close(timeout time.Duration) {
 		r.mu.Unlock()
 		select {
 		case <-r.changed:
+		case <-r.done:
+			return
 		case <-timer.C:
 			r.mu.Lock()
+			if r.closed {
+				r.mu.Unlock()
+				return
+			}
 			r.closed = true
+			close(r.done)
 			r.mu.Unlock()
 			r.cancel()
 			slog.Warn("background jobs abandoned at shutdown")

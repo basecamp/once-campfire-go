@@ -108,6 +108,10 @@ type Server struct {
 	// the one account-visible write that touches neither the accounts row
 	// nor any sidebar-visible table, so the account read cache keys on it.
 	logoVersion atomic.Int64
+	// sidebarGates records each user's served sidebar (registry version +
+	// frame content key), the ENGINE-20 gate that lets warm sidebar requests
+	// skip room/membership/placeholder reads; see sidebar_cache.go.
+	sidebarGates sync.Map
 	// searchCache stores search pages keyed by (user, query, corpus,
 	// membership versions) so hits skip Search, Rooms and RecentSearches
 	// (CAMPFIRE_SEARCH_CACHE=off leaves it nil and the handler keeps the
@@ -187,18 +191,19 @@ type page struct {
 	Origin                       string
 	CanCreateRooms               bool
 	Stream                       string
-	Title, Error                 string
-	User                         database.User
-	Room                         database.Room
-	Rooms                        []database.Room
-	Messages                     []messageView
-	Setup                        bool
-	Query                        string
-	// sidebarKey carries the version-keyed fragment key from Server.sidebar
-	// to render, which stores the rendered fragment under it on a miss. It is
-	// unexported: only the sidebar handler sets it, and the render's sidebar
-	// branch is the only reader.
-	sidebarKey string
+	SearchResultCount            int
+	SidebarHTML                  template.HTML
+	// gateVersion carries the sidebar registry version from Server.sidebar
+	// to render, where the frame render records the served gate; unexported:
+	// only the sidebar handler sets it.
+	gateVersion  uint64
+	Title, Error string
+	User         database.User
+	Room         database.Room
+	Rooms        []database.Room
+	Messages     []messageView
+	Setup        bool
+	Query        string
 }
 type messageView struct {
 	AllEmoji                         bool
@@ -625,7 +630,11 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	if s.Push.VAPID != nil {
 		p.VAPIDPublicKey = s.Push.VAPID.PublicKey()
 	}
-	p.LoadedAt = strconv.FormatInt(s.DB.Now().UnixMilli(), 10)
+	// Keep the refresh cursor at the room version read before the message
+	// query (upstream main's behavior fix adopted): a render-time clock could
+	// skip a message committed between query and render, and it made the
+	// room response vary between otherwise identical requests.
+	p.LoadedAt = strconv.FormatInt(p.Room.UpdatedAt.UnixMilli(), 10)
 	p.Origin = s.origin(r)
 	p.CanCreateRooms = p.User.Role == 1 || !a.RestrictRooms()
 	if p.Chat || name == "search" || name == "welcome" {
@@ -713,26 +722,25 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 		writeRecorded(w, status, shell, marker, recorded.fragment)
 		return
 	}
-	sidebarKey := ""
-	if name == "sidebar" {
-		sidebarKey = p.sidebarKey
-		if sidebarKey != "" {
-			if fragment, ok := s.fragments.get(sidebarKey); ok {
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.WriteHeader(status)
-				w.Write([]byte(fragment))
-				return
-			}
+	// Sidebar (upstream main PR #9 split): the "sidebar" template is a shell
+	// around the pre-rendered frame in SidebarHTML. On a miss the handler
+	// built the page and passes gateVersion; render caches the frame under
+	// its content key and records the served gate. A warm request passes the
+	// cached frame in already, so only the layout is rendered (fresh account,
+	// flash and user; no rooms/memberships/placeholders reads).
+	if name == "sidebar" && p.SidebarHTML == "" {
+		frame, err := s.sidebarHTML(p)
+		if err != nil {
+			s.fail(w, err)
+			return
 		}
+		p.SidebarHTML = frame
 	}
 	b := borrowBuffer()
 	defer releaseBuffer(b)
 	if err := s.templates.ExecuteTemplate(b, name, p); err != nil {
 		s.fail(w, err)
 		return
-	}
-	if sidebarKey != "" {
-		s.fragments.put(sidebarKey, template.HTML(b.String()))
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if recorded != nil {
@@ -1123,30 +1131,28 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 	}
 }
 func (s *Server) sidebar(w http.ResponseWriter, r *http.Request, u database.User) {
-	// The fragment key comes from the sidebar version registry alone; a hit
-	// is served before any room, membership or placeholder read and before
-	// render's pageSetup (account read, flash, negotiation bookkeeping).
+	// The served gate comes from the sidebar version registry alone; a warm
+	// request serves the cached frame with only the layout rendered fresh,
+	// before any room, membership or placeholder read (ENGINE-20), while
+	// account-only writes (which bump the registry but no frame input) keep
+	// the frame under its content key — see sidebarHTML and sidebar_cache.go.
 	version, err := s.DB.SidebarVersion(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	key := sidebarFragmentKey(u.ID, version)
-	if fragment, ok := s.fragments.get(key); ok {
-		if respondFormat(w, r, "html") == "" {
+	if gate, ok := s.sidebarGate(u.ID); ok && gate.version == version {
+		if frame, ok := s.fragments.get(gate.frameKey); ok {
+			s.render(w, r, "sidebar", 200, page{User: u, SidebarHTML: frame})
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(200)
-		w.Write([]byte(fragment))
-		return
 	}
 	items, placeholders, err := s.sidebarData(r, u)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "sidebar", 200, page{Placeholders: placeholders, SidebarRooms: items, User: u, RoomsStream: s.Secrets.SignStream("rooms"), UserRoomsStream: s.Secrets.SignStream(rails.UserRoomsStream(u.ID)), sidebarKey: key})
+	s.render(w, r, "sidebar", 200, page{Placeholders: placeholders, SidebarRooms: items, User: u, RoomsStream: s.Secrets.SignStream("rooms"), UserRoomsStream: s.Secrets.SignStream(rails.UserRoomsStream(u.ID)), gateVersion: version})
 }
 func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User) {
 	q := database.SearchQuery(r.FormValue("q"))
@@ -1181,7 +1187,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 			// (keyed by exactly these messages' id/stamp pairs), so no Search,
 			// Rooms or RecentSearches read happens and nothing renders the
 			// fragments again.
-			s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Messages: viewMessages(result.messages), RecentSearches: result.recent})
+			s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Messages: viewMessages(result.messages), RecentSearches: result.recent, SearchResultCount: len(result.messages)})
 			return
 		}
 	}
@@ -1212,7 +1218,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 			s.searchCache.put(u.ID, q, corpus, membership, searchResult{recent: recent, messages: messages})
 		}
 	}
-	s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Rooms: rooms, Messages: viewMessages(messages), RecentSearches: recent})
+	s.render(w, r, "search", 200, page{Title: "Search", Query: q, User: u, Rooms: rooms, Messages: viewMessages(messages), RecentSearches: recent, SearchResultCount: len(messages)})
 }
 
 func (s *Server) serveCable(w http.ResponseWriter, r *http.Request, u database.User) {

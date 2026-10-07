@@ -190,6 +190,7 @@ const (
 	opISO                          // iso .CreatedAt (attr context)
 	opAvatarMsg                    // avatar .CreatorID .CreatorUpdatedAt, whole URL
 	opAvatarBoost                  // avatar .BoosterID .BoosterUpdatedAt, whole URL
+	opReactionBody                 // the current reaction's pre-rendered form body (message-actions' {{.}})
 	opCond                         // branch on a field predicate
 	opRangeBoost                   // iterate .Boosts
 	opRangeReactions               // iterate the fixed reactions table
@@ -260,6 +261,11 @@ func (r *messageRenderer) renderOps(dst []byte, ops []renderOp, v *messageView, 
 			dst = appendURLAttr(dst, r.avatar(v.CreatorID, v.CreatorUpdatedAt))
 		case opAvatarBoost:
 			dst = appendURLAttr(dst, r.avatar(b.BoosterID, b.BoosterUpdatedAt))
+		case opReactionBody:
+			// message-actions prints {{.}} over the pre-rendered body; the
+			// reaction-body template produced the bytes and htmlescaper is the
+			// identity on template.HTML, so they append raw.
+			dst = append(dst, rc.body...)
 		case opCond:
 			sub := op.other
 			switch op.cond {
@@ -411,6 +417,12 @@ func compileMessageRenderer(secrets *rails.Secrets, avatars *avatarCache) (*mess
 		return nil, err
 	}
 	if err := escapeMessageFragments(compileTemplates); err != nil {
+		return nil, err
+	}
+	// Render the fixed reaction bodies through the escaped set (the
+	// reactions table is shared with the html/template path, so the
+	// opReactionBody bytes equal that path's output).
+	if err := prepareReactionBodies(compileTemplates); err != nil {
 		return nil, err
 	}
 	// The renderer binds the same avatar helper as the template funcs, but
@@ -599,6 +611,7 @@ const (
 	fnEpochU
 	fnISO
 	fnAvatar
+	fnReactionBody
 )
 
 func (v valueRef) escape(esc []string) (renderOp, error) {
@@ -664,6 +677,14 @@ func (v valueRef) escape(esc []string) (renderOp, error) {
 			return renderOp{kind: opAvatarBoost}, nil
 		}
 		return renderOp{kind: opAvatarMsg}, nil
+	case fnReactionBody:
+		// {{.}} over a reaction element: the pre-rendered body, printed raw
+		// (html/template applies htmlescaper to template.HTML, which is the
+		// identity).
+		if chain != "text" {
+			return renderOp{}, fmt.Errorf("reaction body with escaping %v", esc)
+		}
+		return renderOp{kind: opReactionBody}, nil
 	}
 	return renderOp{}, fmt.Errorf("unknown function value")
 }
@@ -711,6 +732,14 @@ func (c *fragmentCompiler) valueOp(cmd *parse.CommandNode, base baseKind, vars m
 		return v, nil
 	case *parse.IdentifierNode:
 		return c.funcValue(cmd, base, vars)
+	case *parse.DotNode:
+		// {{.}} — message-actions' quick-boosts range prints the current
+		// reaction's pre-rendered form body (upstream PR #9 hoisted the
+		// fields into reaction-body; the bodies are compiled constants).
+		if base != baseReaction {
+			return valueRef{}, fmt.Errorf("unsupported dot value at %s", fieldName(fieldRef{base, ""}))
+		}
+		return valueRef{fn: fnReactionBody}, nil
 	case *parse.StringNode, *parse.BoolNode, *parse.NumberNode, *parse.NilNode:
 		return valueRef{}, fmt.Errorf("unsupported constant interpolation %T", a)
 	default:

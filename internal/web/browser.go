@@ -1,7 +1,6 @@
 package web
 
 import (
-	"github.com/basecamp/once-campfire-go/internal/useragent"
 	"net/http"
 	"strings"
 )
@@ -16,7 +15,7 @@ func (s *Server) browserCheck(next http.HandlerFunc) http.HandlerFunc {
 
 // ApplicationController's allow_browser runs after authentication and forgery protection.
 func (s *Server) blockBrowser(w http.ResponseWriter, r *http.Request) bool {
-	blocked, _ := useragent.Parse(r.UserAgent()).Blocked()
+	blocked, _ := requestAgent(r).Blocked()
 	if !blocked {
 		return false
 	}

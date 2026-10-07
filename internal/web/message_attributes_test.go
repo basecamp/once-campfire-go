@@ -50,7 +50,7 @@ func TestMessageAttachmentUpdatePreservesBodyAndIndexes(t *testing.T) {
 	if response.StatusCode != 302 {
 		t.Fatalf("clear body: %s %s", response.Status, data)
 	}
-	hits, err := app.DB.Search(ctx, user.ID, "report")
+	hits, err := app.DB.SearchReferences(ctx, user.ID, "report")
 	if err != nil || len(hits) != 1 {
 		t.Fatalf("filename search: %+v %v", hits, err)
 	}
@@ -61,7 +61,7 @@ func TestMessageAttachmentUpdatePreservesBodyAndIndexes(t *testing.T) {
 	if _, err = app.Storage.Attached(ctx, "Message", message.ID, "attachment"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatal(err)
 	}
-	hits, err = app.DB.Search(ctx, user.ID, "report")
+	hits, err = app.DB.SearchReferences(ctx, user.ID, "report")
 	if err != nil || len(hits) != 0 {
 		t.Fatalf("stale search: %+v %v", hits, err)
 	}

@@ -662,10 +662,13 @@ func TestRecordedPiecesConcurrent(t *testing.T) {
 	}
 }
 
-// TestRecordedPiecesLoadedAtAdvance pins the room route's ETag contract when
-// the clock moves but every content key stays fixed: the body changes (the
-// loadedAt timestamp is a per-request piece) while the validator stays stable,
-// so a conditional request still receives 304.
+// TestRecordedPiecesLoadedAtAdvance pins the room route's loadedAt contract
+// after upstream's behavior fix: the refresh cursor is the queried room
+// version (room.updated_at — a render-time clock could skip a message
+// committed between query and render), so a clock-only advance on the same
+// room version serves byte-identical bodies with a stable validator, any
+// write that advances the room version moves body and validator together, and
+// a conditional request for the stale validator still receives 304.
 func TestRecordedPiecesLoadedAtAdvance(t *testing.T) {
 	on, _, onServer, _, cookie, user := testRecordedPair(t)
 	ctx := context.Background()
@@ -691,15 +694,40 @@ func TestRecordedPiecesLoadedAtAdvance(t *testing.T) {
 	if second.status != 200 {
 		t.Fatalf("second response: %d", second.status)
 	}
-	if bytes.Equal(decodeRecorded(t, first), decodeRecorded(t, second)) {
-		t.Fatal("advancing loadedAt did not change the body")
+	// The cursor is the queried room version: a clock-only advance on the
+	// same room version must not change the body or its validator.
+	if !bytes.Equal(decodeRecorded(t, first), decodeRecorded(t, second)) {
+		t.Fatal("room body moved with the render clock")
 	}
 	if second.etag != first.etag {
-		t.Fatalf("room ETag moved with loadedAt: %q vs %q", second.etag, first.etag)
+		t.Fatalf("room ETag moved with the render clock: %q vs %q", second.etag, first.etag)
 	}
-	conditional := recordedGet(t, client, onServer, path, "gzip", first.etag, cookie)
-	if conditional.status != http.StatusNotModified || len(conditional.body) != 0 {
-		t.Fatalf("conditional after loadedAt advance: %d with %d bytes", conditional.status, len(conditional.body))
+	// A write advances the room version (message create moves
+	// rooms.updated_at, the content version): the loadedAt piece moves with
+	// it, and the validator moves too.
+	if _, err := on.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "loaded-at-2", "<p>loaded at 2</p>", "loaded at 2"); err != nil {
+		t.Fatal(err)
+	}
+	after := recordedGet(t, client, onServer, path, "gzip", "", cookie)
+	if after.status != 200 {
+		t.Fatalf("post-write response: %d", after.status)
+	}
+	if bytes.Equal(decodeRecorded(t, first), decodeRecorded(t, after)) {
+		t.Fatal("room body did not advance with the room version")
+	}
+	if after.etag == first.etag {
+		t.Fatal("room ETag did not move with the room version")
+	}
+	// The stale validator no longer matches the advanced content: a
+	// conditional for it must revalidate (200), and the current validator
+	// 304s with no body.
+	stale := recordedGet(t, client, onServer, path, "gzip", first.etag, cookie)
+	if stale.status != 200 {
+		t.Fatalf("conditional for a stale validator: %d", stale.status)
+	}
+	current := recordedGet(t, client, onServer, path, "gzip", after.etag, cookie)
+	if current.status != http.StatusNotModified || len(current.body) != 0 {
+		t.Fatalf("conditional for the current validator: %d with %d bytes", current.status, len(current.body))
 	}
 }
 

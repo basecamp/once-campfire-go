@@ -300,21 +300,23 @@ Container verification exercises setup, a live SQLite backup, offline restore, a
 
 ## Benchmarks
 
-Measured with 16 concurrent clients on an AMD Ryzen AI MAX+ 395,
-with four hardware threads allocated to each app.
+Measured with 16 concurrent clients on an AMD Ryzen AI MAX+ 395 with 32 GB RAM,
+with four hardware cores allocated to each app.
 
-| HTTP workload (requests/sec) | Rails | [Django](https://github.com/basecamp/once-campfire-django) | [Laravel](https://github.com/basecamp/once-campfire-laravel) | [Express](https://github.com/basecamp/once-campfire-express) | [Elixir](https://github.com/basecamp/once-campfire-elixir) | [Go](https://github.com/basecamp/once-campfire-go) | [Rust](https://github.com/basecamp/once-campfire-rust) |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Room page | 241 | 170 | 164 | 559 | 722 | 86,262 | 36,260 |
-| Messages page | 413 | 196 | 175 | 777 | 1,053 | 93,404 | 40,872 |
-| Sidebar | 552 | 615 | 715 | 4,125 | 1,275 | 55,014 | 34,672 |
-| Search | 435 | 315 | 305 | 1,294 | 1,156 | 117,661 | 33,299 |
-| Post a message | 273 | 154 | 137 | 256 | 801 | 8,391 | 6,896 |
+| HTTP workload (requests/sec) | Rails | [Django](https://github.com/basecamp/once-campfire-django) | [Laravel](https://github.com/basecamp/once-campfire-laravel) | [Express](https://github.com/basecamp/once-campfire-express) | [Elixir](https://github.com/basecamp/once-campfire-elixir) | [Go](https://github.com/basecamp/once-campfire-go) | [Rust](https://github.com/basecamp/once-campfire-rust) | [C](https://github.com/basecamp/once-campfire-c) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Room page | 241 | 170 | 164 | 559 | 722 | 86,262 | 36,260 | 141,834 |
+| Messages page | 413 | 196 | 175 | 777 | 1,053 | 93,404 | 40,872 | 151,564 |
+| Sidebar | 552 | 615 | 715 | 4,125 | 1,275 | 55,014 | 34,672 | 159,850 |
+| Search | 435 | 315 | 305 | 1,294 | 1,156 | 117,661 | 33,299 | 155,456 |
+| Post a message | 273 | 154 | 137 | 256 | 801 | 8,391 | 6,896 | 7,460 |
 
 The Go column reflects this branch's engine, re-measured on this machine with
 the official comparison harness; the other columns are the published cross-port
 figures. The strict same-machine Rails/Rust/Go comparison is in
 [Engine fork results](#engine-fork-results-this-machine) below.
+
+[Shared verification](https://github.com/basecamp/once-campfire-verification) · [Detailed results](https://github.com/basecamp/once-campfire-verification/blob/main/docs/performance-review.md).
 
 See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 
@@ -357,6 +359,15 @@ and `bench/results/final4-native-20261007/`.
 
 ## Known differences
 
+- Session-transfer auto-submit forms explicitly close their form tag; the pinned Rails
+  reference omitted it.
+- Background sidebar refreshes preserve an open New Ping form and selected recipients.
+
+- Sidebar connection refresh waits for the current Turbo frame to finish loading,
+  preventing an aborted response on startup or reconnect. Obsolete connections and removed frames do not reload.
+
+- Search selects the newest 100 matching messages by insertion ID, then displays them in ID order. Backdated messages can appear in a different order from the original Rails app.
+
 - Templates use `html/template`. Whitespace, attribute serialization, some canonical form-action
   URLs, and response headers/validators differ from Rust. Strict server/live DOM and network layers
   therefore still fail in many inventory cells, even when screenshots, accessibility and workflows
@@ -374,6 +385,9 @@ and `bench/results/final4-native-20261007/`.
   reads and no page setup (the sidebar version registry is seeded from the database on first use
   and bumped by every sidebar-visible write; see the `CAMPFIRE_FRAGMENT_CACHE_MB` notes above),
   while room membership and permission data are still read afresh for non-sidebar pages.
+  Search layouts similarly surround a captured immutable result body; misses rerun the full
+  query. Complete GET gzip representations have a bounded memo keyed by immutable part
+  identities, not by wire ETags. Authorization, sessions and request observations stay fresh.
   Room pages also cache their surrounding HTML keyed by fresh page data, inserting the current
   messages and refresh timestamp on every request. Responses assemble cached message bytes with fresh page HTML and derive validators from part
   lengths and hashes, so ETag values differ from both the original Go implementation and Rust.
@@ -391,6 +405,8 @@ and `bench/results/final4-native-20261007/`.
   fresh `Request` and header map per request, so the clone was pure overhead.
 - The default version label and fallback VAPID subject identify `once-campfire-go`. Explicit version,
   VAPID keys and subject settings remain supported.
+- Storage keys containing separators, NUL, or parent-directory shards are rejected before
+  filesystem access. Valid keys retain the existing storage layout.
 - Native host media output can differ with installed library versions. All byte-golden media tests
   pass with the pinned container libraries. Web Push is verified locally, not against external push
   providers.

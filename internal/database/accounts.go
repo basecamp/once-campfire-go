@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"uuid"
 )
 
 type Account struct {
@@ -21,10 +22,12 @@ type Account struct {
 func (d *DB) Account(ctx context.Context) (Account, error) {
 	var a Account
 	var settings string
-	err := d.Read.QueryRowContext(ctx, "SELECT id,name,join_code,coalesce(custom_styles,''),coalesce(settings,'{}'),updated_at,EXISTS(SELECT 1 FROM active_storage_attachments WHERE record_type='Account' AND record_id=accounts.id AND name='logo') FROM accounts ORDER BY id LIMIT 1").Scan(&a.ID, &a.Name, &a.JoinCode, &a.CustomStyles, &settings, timestamp{&a.UpdatedAt}, &a.HasLogo)
+	err := d.Read.QueryRowContext(ctx, "SELECT id,name,join_code,coalesce(custom_styles,''),coalesce(settings,'{}'),updated_at,EXISTS(SELECT 1 FROM active_storage_attachments WHERE record_type='Account' AND record_id=accounts.id AND name='logo') FROM accounts ORDER BY id LIMIT 1").
+		Scan(&a.ID, &a.Name, &a.JoinCode, &a.CustomStyles, &settings, timestamp{&a.UpdatedAt}, &a.HasLogo)
 	a.Settings = json.RawMessage(settings)
 	return a, err
 }
+
 func (a Account) RestrictRooms() bool {
 	var s struct {
 		Restrict bool `json:"restrict_room_creation_to_administrators"`
@@ -32,7 +35,15 @@ func (a Account) RestrictRooms() bool {
 	json.Unmarshal(a.Settings, &s)
 	return s.Restrict
 }
-func (d *DB) UpdateAccount(ctx context.Context, name *string, styles *string, restrict *bool, resetJoin bool, uploads ...BlobStager) error {
+
+func (d *DB) UpdateAccount(
+	ctx context.Context,
+	name *string,
+	styles *string,
+	restrict *bool,
+	resetJoin bool,
+	uploads ...BlobStager,
+) error {
 	var id int64
 	err := d.recordWithUpload(ctx, "Account", &id, uploads, func(tx *sql.Tx) error {
 		var settings string
@@ -67,7 +78,10 @@ func (d *DB) UpdateAccount(ctx context.Context, name *string, styles *string, re
 			args = append(args, RandomToken(24))
 		}
 		args = append(args, id)
-		_, err := tx.ExecContext(ctx, "UPDATE accounts SET "+strings.Join(sets, ",")+" WHERE id=?", args...)
+		_, err := tx.ExecContext(
+			ctx,
+			"UPDATE accounts SET "+strings.Join(sets, ",")+" WHERE id=?",
+			args...)
 		return err
 	})
 	if err == nil {
@@ -75,6 +89,7 @@ func (d *DB) UpdateAccount(ctx context.Context, name *string, styles *string, re
 	}
 	return err
 }
+
 func RandomToken(length int) string {
 	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 	out := make([]byte, 0, length)
@@ -94,9 +109,13 @@ func RandomToken(length int) string {
 	}
 	return string(out)
 }
+
 func (d *DB) User(ctx context.Context, id int64) (User, error) {
-	return userRow(d.Read.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users u WHERE u.id=?", id))
+	return userRow(
+		d.Read.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users u WHERE u.id=?", id),
+	)
 }
+
 func usersRows(rows *sql.Rows) ([]User, error) {
 	defer rows.Close()
 	users := []User{}
@@ -109,6 +128,7 @@ func usersRows(rows *sql.Rows) ([]User, error) {
 	}
 	return users, rows.Err()
 }
+
 func (d *DB) Users(ctx context.Context, room int64, botsOnly bool) ([]User, error) {
 	query := "SELECT " + userColumns + " FROM users u "
 	args := []any{}
@@ -126,7 +146,14 @@ func (d *DB) Users(ctx context.Context, room int64, botsOnly bool) ([]User, erro
 	}
 	return usersRows(rows)
 }
-func (d *DB) CreateUser(ctx context.Context, name, email, password, bio string, role int, webhook *string, uploads ...BlobStager) (User, error) {
+
+func (d *DB) CreateUser(
+	ctx context.Context,
+	name, email, password, bio string,
+	role int,
+	webhook *string,
+	uploads ...BlobStager,
+) (User, error) {
 	var u User
 	err := d.recordWithUpload(ctx, "User", &u.ID, uploads, func(tx *sql.Tx) error {
 		now := Stamp(d.Now())
@@ -136,7 +163,18 @@ func (d *DB) CreateUser(ctx context.Context, name, email, password, bio string, 
 			digest = nil
 			bot = RandomToken(12)
 		}
-		r, err := tx.ExecContext(ctx, "INSERT INTO users(name,email_address,password_digest,bio,role,status,bot_token,created_at,updated_at) VALUES (?,?,?,?,?,0,?,?,?)", name, address, digest, bio, role, bot, now, now)
+		r, err := tx.ExecContext(
+			ctx,
+			"INSERT INTO users(name,email_address,password_digest,bio,role,status,bot_token,created_at,updated_at) VALUES (?,?,?,?,?,0,?,?,?)",
+			name,
+			address,
+			digest,
+			bio,
+			role,
+			bot,
+			now,
+			now,
+		)
 		if err != nil {
 			return err
 		}
@@ -152,7 +190,15 @@ func (d *DB) CreateUser(ctx context.Context, name, email, password, bio string, 
 				return err
 			}
 		}
-		u = User{ID: id, Name: name, Email: email, Password: password, Role: role, Bio: bio, UpdatedAt: d.Now()}
+		u = User{
+			ID:        id,
+			Name:      name,
+			Email:     email,
+			Password:  password,
+			Role:      role,
+			Bio:       bio,
+			UpdatedAt: d.Now(),
+		}
 		if bot != nil {
 			u.BotToken = bot.(string)
 		}
@@ -166,7 +212,13 @@ func (d *DB) CreateUser(ctx context.Context, name, email, password, bio string, 
 	}
 	return u, err
 }
-func (d *DB) UpdateUser(ctx context.Context, id int64, attributes map[string]string, webhook *string, uploads ...BlobStager) error {
+func (d *DB) UpdateUser(
+	ctx context.Context,
+	id int64,
+	attributes map[string]string,
+	webhook *string,
+	uploads ...BlobStager,
+) error {
 	err := d.recordWithUpload(ctx, "User", &id, uploads, func(tx *sql.Tx) error {
 		sets := []string{"updated_at=?"}
 		args := []any{Stamp(d.Now())}
@@ -177,7 +229,10 @@ func (d *DB) UpdateUser(ctx context.Context, id int64, attributes map[string]str
 			}
 		}
 		args = append(args, id)
-		r, err := tx.ExecContext(ctx, "UPDATE users SET "+strings.Join(sets, ",")+" WHERE id=?", args...)
+		r, err := tx.ExecContext(
+			ctx,
+			"UPDATE users SET "+strings.Join(sets, ",")+" WHERE id=?",
+			args...)
 		if err != nil {
 			return err
 		}
@@ -212,13 +267,22 @@ func (d *DB) UpdateUser(ctx context.Context, id int64, attributes map[string]str
 	}
 	return err
 }
+
 func (d *DB) Bot(ctx context.Context, key string) (User, error) {
 	id, token, ok := strings.Cut(strings.TrimSpace(key), "-")
 	if !ok {
 		return User{}, sql.ErrNoRows
 	}
-	return userRow(d.Read.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users u WHERE u.id=? AND u.bot_token=? AND u.role=2 AND u.status=0", id, token))
+	return userRow(
+		d.Read.QueryRowContext(
+			ctx,
+			"SELECT "+userColumns+" FROM users u WHERE u.id=? AND u.bot_token=? AND u.role=2 AND u.status=0",
+			id,
+			token,
+		),
+	)
 }
+
 func (d *DB) DeactivateUser(ctx context.Context, id int64) error {
 	err := d.Transaction(ctx, func(tx *sql.Tx) error {
 		now := Stamp(d.Now())
@@ -228,7 +292,11 @@ func (d *DB) DeactivateUser(ctx context.Context, id int64) error {
 		}
 		var address any
 		if email.Valid {
-			address = strings.ReplaceAll(email.String, "@", "-deactivated-"+UUID()+"@")
+			address = strings.ReplaceAll(
+				email.String,
+				"@",
+				"-deactivated-"+uuid.NewV4().String()+"@",
+			)
 		}
 		for _, table := range []string{"push_subscriptions", "searches", "sessions"} {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE user_id=?", id); err != nil {
@@ -238,7 +306,13 @@ func (d *DB) DeactivateUser(ctx context.Context, id int64) error {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM memberships WHERE user_id=? AND room_id IN (SELECT id FROM rooms WHERE type!='Rooms::Direct')", id); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE users SET status=1,email_address=?,updated_at=? WHERE id=?", address, now, id)
+		_, err := tx.ExecContext(
+			ctx,
+			"UPDATE users SET status=1,email_address=?,updated_at=? WHERE id=?",
+			address,
+			now,
+			id,
+		)
 		return err
 	})
 	if err == nil {
@@ -253,6 +327,7 @@ func (d *DB) DeactivateUser(ctx context.Context, id int64) error {
 	}
 	return err
 }
+
 func (d *DB) BanUser(ctx context.Context, id int64, ban bool) error {
 	err := d.Transaction(ctx, func(tx *sql.Tx) error {
 		now := Stamp(d.Now())
@@ -270,7 +345,13 @@ func (d *DB) BanUser(ctx context.Context, id int64, ban bool) error {
 				return err
 			}
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE users SET status=?,updated_at=? WHERE id=?", status, now, id)
+		_, err := tx.ExecContext(
+			ctx,
+			"UPDATE users SET status=?,updated_at=? WHERE id=?",
+			status,
+			now,
+			id,
+		)
 		return err
 	})
 	if err == nil && ban && d.RemoveBannedContent != nil {
@@ -288,11 +369,13 @@ func (d *DB) BanUser(ctx context.Context, id int64, ban bool) error {
 	}
 	return err
 }
+
 func (d *DB) BannedIP(ctx context.Context, ip string) (bool, error) {
 	var n int
 	err := d.Read.QueryRowContext(ctx, "SELECT count(*) FROM bans WHERE ip_address=?", ip).Scan(&n)
 	return n > 0, err
 }
+
 func (d *DB) RefreshSession(ctx context.Context, token, agent, ip string) (bool, error) {
 	now := d.Now()
 	var active time.Time
@@ -302,7 +385,16 @@ func (d *DB) RefreshSession(ctx context.Context, token, agent, ip string) (bool,
 	if !active.Before(now.Add(-time.Hour)) {
 		return false, nil
 	}
-	r, err := d.Write.ExecContext(ctx, "UPDATE sessions SET last_active_at=?,updated_at=?,user_agent=?,ip_address=? WHERE token=? AND last_active_at<?", Stamp(now), Stamp(now), agent, ip, token, Stamp(now.Add(-time.Hour)))
+	r, err := d.Write.ExecContext(
+		ctx,
+		"UPDATE sessions SET last_active_at=?,updated_at=?,user_agent=?,ip_address=? WHERE token=? AND last_active_at<?",
+		Stamp(now),
+		Stamp(now),
+		agent,
+		ip,
+		token,
+		Stamp(now.Add(-time.Hour)),
+	)
 	if err != nil {
 		return false, err
 	}
@@ -316,7 +408,10 @@ func (d *DB) AccountUsers(ctx context.Context, includeBanned bool) ([]User, erro
 	if includeBanned {
 		status = "u.status IN (0,2)"
 	}
-	rows, err := d.Read.QueryContext(ctx, "SELECT "+userColumns+" FROM users u WHERE "+status+" AND u.role != 2 ORDER BY lower(u.name)")
+	rows, err := d.Read.QueryContext(
+		ctx,
+		"SELECT "+userColumns+" FROM users u WHERE "+status+" AND u.role != 2 ORDER BY lower(u.name)",
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +419,11 @@ func (d *DB) AccountUsers(ctx context.Context, includeBanned bool) ([]User, erro
 }
 
 func (d *DB) RoomMembers(ctx context.Context, room int64) ([]User, error) {
-	rows, err := d.Read.QueryContext(ctx, "SELECT "+userColumns+" FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.room_id=?", room)
+	rows, err := d.Read.QueryContext(
+		ctx,
+		"SELECT "+userColumns+" FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.room_id=?",
+		room,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +431,11 @@ func (d *DB) RoomMembers(ctx context.Context, room int64) ([]User, error) {
 }
 
 func (d *DB) DirectPlaceholders(ctx context.Context, user int64) ([]User, error) {
-	rows, err := d.Read.QueryContext(ctx, "SELECT DISTINCT user_id FROM memberships WHERE room_id IN (SELECT r.id FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE r.type='Rooms::Direct' AND m.user_id=?)", user)
+	rows, err := d.Read.QueryContext(
+		ctx,
+		"SELECT DISTINCT user_id FROM memberships WHERE room_id IN (SELECT r.id FROM rooms r JOIN memberships m ON m.room_id=r.id WHERE r.type='Rooms::Direct' AND m.user_id=?)",
+		user,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +455,15 @@ func (d *DB) DirectPlaceholders(ctx context.Context, user int64) ([]User, error)
 	}
 	ids = append(ids, user)
 	marks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	rows, err = d.Read.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM users u WHERE u.status=0 AND u.id NOT IN (%s) ORDER BY u.created_at ASC LIMIT %d", userColumns, marks, max(0, 20-len(ids))), ids...)
+	rows, err = d.Read.QueryContext(
+		ctx,
+		fmt.Sprintf(
+			"SELECT %s FROM users u WHERE u.status=0 AND u.id NOT IN (%s) ORDER BY u.created_at ASC LIMIT %d",
+			userColumns,
+			marks,
+			max(0, 20-len(ids)),
+		),
+		ids...)
 	if err != nil {
 		return nil, err
 	}
