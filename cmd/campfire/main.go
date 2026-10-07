@@ -35,6 +35,11 @@ func run() error {
 	// serving work starts: apply now, and the effective settings land in the
 	// startup log either way.
 	applyGCPolicy(os.LookupEnv)
+	// Access log goodness (accesslog.go): the async pipeline drainer must
+	// run for the whole serving lifetime; stopLogDrain flushes the rest on
+	// the way out.
+	stopLogDrain := startAccessLogDrainer()
+	defer stopLogDrain()
 
 	if path := os.Getenv("GO_CPU_PROFILE"); path != "" {
 		file, err := os.Create(path)
@@ -90,5 +95,10 @@ func run() error {
 		slog.Warn("engine: unrecognized CAMPFIRE_ENGINE value, defaulting to on", "value", setting)
 	}
 	slog.Info("engine", "mode", mode)
-	return front.Serve(ctx, rootConfig(front.FromEnv()), buildRoot(app, mode))
+	config := rootConfig(front.FromEnv())
+	// Access-log records (LOG_REQUESTS) flow through the async pipeline: a
+	// brief queue append on the request path, formatting and writing on the
+	// drainer goroutine; see accesslog.go.
+	config.AccessLog = accessLogQueueInst.push
+	return front.Serve(ctx, config, buildRoot(app, mode))
 }

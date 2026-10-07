@@ -90,7 +90,11 @@ func forward(next http.Handler, c Config) http.Handler {
 		started := time.Now()
 		next.ServeHTTP(w, r)
 		if c.LogRequests {
-			slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(started))
+			if accessLog := c.AccessLog; accessLog != nil {
+				accessLog(r.Method, r.URL.Path, time.Since(started))
+			} else {
+				slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(started))
+			}
 		}
 	})
 }
