@@ -315,6 +315,18 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
   Room pages also cache their surrounding HTML keyed by fresh page data, inserting the current
   messages and refresh timestamp on every request. Responses assemble cached message bytes with fresh page HTML and derive validators from part
   lengths and hashes, so ETag values differ from both the original Go implementation and Rust.
+- The front answers `/up` from a fixed-response table (`CAMPFIRE_FRONT_FIXED`, default `on`;
+  same value shapes and warning policy as the other switches): the first unconditional GET
+  captures the health response once per content encoding (identity and gzip) and later
+  requests replay the captured bytes without touching the application. Replays are byte-
+  identical to the application path (status, headers, validators, Vary and the captured
+  X-Cache value), the table is keyed by host, path and the exact Accept header value (the
+  application negotiates the health format from Accept), and conditional, Range, other-host
+  or non-negotiable requests still reach the application. The replay lane of the ordinary
+  response cache (compression wrapper fast path, single-allocation header copy) and the
+  per-header-value encoding negotiation memo are wire-identical by construction. `forward`
+  edits the request headers in place instead of cloning the request; net/http allocates a
+  fresh `Request` and header map per request, so the clone was pure overhead.
 - The default version label and fallback VAPID subject identify `once-campfire-go`. Explicit version,
   VAPID keys and subject settings remain supported.
 - Native host media output can differ with installed library versions. All byte-golden media tests

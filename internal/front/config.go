@@ -19,6 +19,11 @@ type Config struct {
 	// net/http's conn loop. It is off by default until measured; see
 	// plans/engine-41.md. The public listeners are never affected.
 	ServerLoop bool
+	// FixedRoutes enables the fixed-route table (CAMPFIRE_FRONT_FIXED): the
+	// front answers /up from a captured precomputed response instead of
+	// running the application on every request. Wire bytes are identical to
+	// the application path; the flag exists as the rollback switch.
+	FixedRoutes bool
 	// SkipDeflate hands response encoding to the application, for a
 	// precomposed handler such as the engine. The caller then owns
 	// Content-Encoding and Vary: Accept-Encoding on every cacheable
@@ -69,17 +74,26 @@ func FromLookup(lookup func(string) (string, bool)) Config {
 		return time.Duration(max(0, number(key, fallback))) * time.Second
 	}
 	c := Config{CompressionJitter: int(max(0, number("GZIP_COMPRESSION_JITTER", 32))), TargetBind: get("TARGET_BIND", "127.0.0.1"), TargetPort: port("TARGET_PORT", 3000), HTTPPort: port("HTTP_PORT", 80), HTTPSPort: port("HTTPS_PORT", 443), CacheSize: number("CACHE_SIZE", 64<<20), MaxCacheItemSize: number("MAX_CACHE_ITEM_SIZE", 1<<20), MaxRequestBody: number("MAX_REQUEST_BODY", 0), Gzip: boolean("GZIP_COMPRESSION_ENABLED", true), DisableGzipOnAuth: boolean("GZIP_COMPRESSION_DISABLE_ON_AUTH", false), H2C: boolean("H2C_ENABLED", false), LogRequests: boolean("LOG_REQUESTS", true), ACMEDirectory: get("ACME_DIRECTORY", "https://acme-v02.api.letsencrypt.org/directory"), StoragePath: get("STORAGE_PATH", "./storage/thruster"), EABKeyID: get("EAB_KID", ""), EABKey: get("EAB_HMAC_KEY", ""), IdleTimeout: seconds("HTTP_IDLE_TIMEOUT", 60), ReadTimeout: seconds("HTTP_READ_TIMEOUT", 30), WriteTimeout: seconds("HTTP_WRITE_TIMEOUT", 30)}
-	// CAMPFIRE_SERVER_LOOP is read directly (not through the THRUSTER_
-	// pair) because it is this app's own rollback switch, like the other
-	// CAMPFIRE_* variables in cmd/campfire. "on"/"off" spellings are
-	// accepted alongside ParseBool values; anything else keeps the default
-	// off.
+	// CAMPFIRE_SERVER_LOOP and CAMPFIRE_FRONT_FIXED are read directly (not
+	// through the THRUSTER_ pair) because they are this app's own rollback
+	// switches, like the other CAMPFIRE_* variables in cmd/campfire.
+	// "on"/"off" spellings are accepted alongside ParseBool values; anything
+	// else keeps the default.
 	if value, ok := lookup("CAMPFIRE_SERVER_LOOP"); ok {
 		switch strings.ToLower(strings.TrimSpace(value)) {
 		case "on", "true", "1":
 			c.ServerLoop = true
 		case "off", "false", "0":
 			c.ServerLoop = false
+		}
+	}
+	c.FixedRoutes = true
+	if value, ok := lookup("CAMPFIRE_FRONT_FIXED"); ok {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "on", "true", "1":
+			c.FixedRoutes = true
+		case "off", "false", "0":
+			c.FixedRoutes = false
 		}
 	}
 	if net.ParseIP(c.TargetBind) == nil {
