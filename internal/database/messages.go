@@ -168,6 +168,11 @@ func (d *DB) UpdateMessageWithUpload(ctx context.Context, user, id int64, body *
 	if err != nil {
 		return Message{}, err
 	}
+	// The search index row is rewritten only when the transaction changed the
+	// message; bumping on any successful update instead is conservative (a
+	// no-op edit invalidates cached pages that did not change) and can never
+	// leave a stale entry behind.
+	d.corpusVersion.Add(1)
 	if staged != nil {
 		staged.Keep()
 	}
@@ -214,6 +219,7 @@ func (d *DB) deleteMessage(ctx context.Context, user, id int64, checkPermission 
 	})
 	if err == nil {
 		d.PurgeDetached(blobs)
+		d.corpusVersion.Add(1)
 	}
 	return err
 }
@@ -267,10 +273,15 @@ func (d *DB) CreateBoost(ctx context.Context, user, message int64, content strin
 		}
 		return touchMessage(ctx, tx, message, room, Stamp(now))
 	})
+	if err == nil {
+		// The boost renders inside the message fragment, and its stamp moved;
+		// cached search pages show it only after the corpus version bumps.
+		d.corpusVersion.Add(1)
+	}
 	return b, err
 }
 func (d *DB) DeleteBoost(ctx context.Context, user, message, id int64) error {
-	return d.Transaction(ctx, func(tx *sql.Tx) error {
+	err := d.Transaction(ctx, func(tx *sql.Tx) error {
 		room, err := messagePermission(ctx, tx, user, message, false)
 		if err != nil {
 			return err
@@ -288,6 +299,12 @@ func (d *DB) DeleteBoost(ctx context.Context, user, message, id int64) error {
 		}
 		return touchMessage(ctx, tx, message, room, Stamp(d.Now()))
 	})
+	if err == nil {
+		// Removing a boost changes the message fragment bytes; cached
+		// search pages must re-read before they can drop it.
+		d.corpusVersion.Add(1)
+	}
+	return err
 }
 
 // Message is the unscoped model lookup used by background jobs.

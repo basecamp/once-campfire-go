@@ -125,6 +125,7 @@ func (d *DB) CreateRoom(ctx context.Context, creator int64, kind, name string, u
 	if err != nil {
 		return room, err
 	}
+	d.membershipVersion.Add(1)
 	err = d.Read.QueryRowContext(ctx, "SELECT id,creator_id,coalesce(name,''),type,updated_at FROM rooms WHERE id=?", room.ID).Scan(&room.ID, &room.CreatorID, &room.Name, &room.Type, timestamp{&room.UpdatedAt})
 	if err != nil {
 		return room, err
@@ -198,7 +199,10 @@ func (d *DB) UpdateRoom(ctx context.Context, id int64, kind, name string, users 
 		}
 	}
 	if err == nil {
+		// Room rows and memberships both changed, and the search query joins
+		// memberships: bump the sidebar and membership versions.
 		d.bumpSidebarVersion()
+		d.membershipVersion.Add(1)
 	}
 	return err
 }
@@ -227,6 +231,11 @@ func (d *DB) DeleteRoom(ctx context.Context, id int64) error {
 	if err == nil {
 		d.PurgeDetached(blobs)
 		d.bumpSidebarVersion()
+		// The room's index rows and memberships commit together, so one bump
+		// per version is enough; both facts separately invalidate cached
+		// search pages.
+		d.corpusVersion.Add(1)
+		d.membershipVersion.Add(1)
 	}
 	return err
 }
@@ -250,7 +259,10 @@ func (d *DB) SetInvolvement(ctx context.Context, user, room int64, value string)
 	if count == 0 {
 		return sql.ErrNoRows
 	}
+	// The involvement row is sidebar-visible (room list filtering) and feed
+	// the search membership scope: both versions bump.
 	d.bumpSidebarVersion()
+	d.membershipVersion.Add(1)
 	return nil
 }
 func (d *DB) Presence(ctx context.Context, user, room int64, action string) error {

@@ -207,3 +207,13 @@ active; Rust medians are tight and the rotating order absorbs shared load.
 
 Sidebar and room confirm the profile's database/sql-glue share; search/post were
 not wired (ENGINE-30/31 own them). Raw: `bench/results/engine18-20261006/`.
+
+## ENGINE-30 — fastdb FTS reads and versioned search result cache (2026-10-06)
+
+`internal/fastdb/search.go` mirrors `database.DB.Search` (same MATCH word fold, quoted tokens, membership join, LIMIT 100 reversal); `internal/web/search_cache.go` adds a byte-bounded LRU of search pages keyed by (user, normalized query, corpusVersion, membershipVersion) with `CAMPFIRE_SEARCH_CACHE` (default on; off rolls back to the database/sql reads) and `CAMPFIRE_SEARCH_CACHE_MB` (default 16). The corpus version is a global counter bumped after every committed message create/edit/delete, boost change and room destroy; the membership version after every membership grant/revocation, involvement change and account create/deactivate. POST/DELETE recent-search routes purge the user's entries.
+
+Check: `timeout 900 nice -n 19 env GOMAXPROCS=4 go test -race -count=1 -timeout 800s -p 2 -tags sqlite_fts5 ./...` — pass. `go vet -tags sqlite_fts5 ./...` — clean. `gofmt -l .` — empty.
+
+Coverage: differential fastdb-vs-database/sql search on the seed and synthetic fixture (empty results, membership filtering, quoted tokens, unicode fold) and a byte-equality test of the word fold; on/off response byte parity incl. gzip, ETag and 304; corpus poisoning (edit/delete after fill) plus a DROP TABLE message_search_index proof that a hit skips the FTS scan; membership grant/revoke invalidation; POST/DELETE recent-search purge semantics; a 60-step deterministic write+query fuzz with per-step on/off byte parity.
+
+Package bench (`nice -n 19 env GOMAXPROCS=4 go test -count=1 -timeout 250s -p 2 -tags sqlite_fts5 -bench '^BenchmarkSearch$' -benchmem -run '^$' ./internal/fastdb/`): 9.06 µs/op, 79 B/op, 5 allocs/op (parity-seed fixture; per-request query normalization and MATCH text are the allocations). Official harness rerun (search row after ENGINE-30) is ENGINE-32's measurement step.

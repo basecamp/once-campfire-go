@@ -159,7 +159,10 @@ func (d *DB) CreateUser(ctx context.Context, name, email, password, bio string, 
 		return nil
 	})
 	if err == nil {
+		// New users land in the open rooms' memberships: the sidebar (users,
+		// accounts) and the search scoping (memberships) both change.
 		d.bumpSidebarVersion()
+		d.membershipVersion.Add(1)
 	}
 	return u, err
 }
@@ -239,7 +242,11 @@ func (d *DB) DeactivateUser(ctx context.Context, id int64) error {
 		return err
 	})
 	if err == nil {
+		// Deactivation revokes the user's non-direct memberships and changes
+		// the users row: both the sidebar and the search membership scope
+		// change.
 		d.bumpSidebarVersion()
+		d.membershipVersion.Add(1)
 	}
 	return err
 }

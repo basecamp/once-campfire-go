@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -31,6 +32,11 @@ type DB struct {
 	// sidebar is the in-process sidebar fragment version registry
 	// (internal/database/versions.go); see DB.SidebarVersion.
 	sidebar sidebarVersions
+	// corpusVersion and membershipVersion are the ENGINE-30 search cache
+	// version counters (see versions.go). Owned by the writers; readers only
+	// load.
+	corpusVersion     atomic.Int64
+	membershipVersion atomic.Int64
 }
 
 func Open(path string, readers int) (*DB, error) {

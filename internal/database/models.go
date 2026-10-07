@@ -117,7 +117,10 @@ func (d *DB) Setup(ctx context.Context, name, email, passwordDigest string, uplo
 		return err
 	})
 	if err == nil {
+		// Setup creates the owner, the open room and its membership: the
+		// sidebar and the search membership scope both change.
 		d.bumpSidebarVersion()
+		d.membershipVersion.Add(1)
 	}
 	return u, err
 }
@@ -279,6 +282,11 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 	}
 	if err == nil && staged != nil {
 		staged.Keep()
+	}
+	if err == nil {
+		// The index row committed with the message; bump after the commit so
+		// no reader can see the new corpus version with old rows.
+		d.corpusVersion.Add(1)
 	}
 	return m, err
 }
