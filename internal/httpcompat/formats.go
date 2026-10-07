@@ -155,10 +155,14 @@ func acceptItems(value string) []string {
 }
 func ParseAccept(value string) ([]string, error) {
 	if !strings.Contains(value, ",") {
-		if name, _, found := cutQuality(value); found {
-			value = name
+		// Strip a q parameter on presence, not on whether its value survives
+		// empty-field trimming: "text/html;q=" must parse as html, the same
+		// way the multi-item path below cuts every item at its q parameter.
+		if start, _, ok := qParam(value, 0); ok {
+			value = value[:start]
 		}
-		if strings.TrimSpace(value) == "" {
+		value = strings.TrimSpace(value)
+		if value == "" {
 			return nil, nil
 		}
 		if expanded := expand(value); expanded != nil {

@@ -28,7 +28,7 @@ func requestIsFresh(r *http.Request, etag []byte, modified time.Time) bool {
 					token = strings.TrimSpace(line[start : start+end])
 					start += end + 1
 				}
-				if bytesEqualFold(token, etag) || token == "*" {
+				if token == string(etag) || token == "*" {
 					return true
 				}
 			}
@@ -41,26 +41,6 @@ func requestIsFresh(r *http.Request, etag []byte, modified time.Time) bool {
 		}
 	}
 	return false
-}
-
-// bytesEqualFold compares two ASCII strings without allocation.
-func bytesEqualFold(a string, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := 0; i < len(a); i++ {
-		ca, cb := a[i], b[i]
-		if 'A' <= ca && ca <= 'Z' {
-			ca += 'a' - 'A'
-		}
-		if 'A' <= cb && cb <= 'Z' {
-			cb += 'a' - 'A'
-		}
-		if ca != cb {
-			return false
-		}
-	}
-	return true
 }
 
 // notModified reports whether the request is conditionally fresh; a fresh

@@ -63,9 +63,11 @@ Saturated post→all p50 at 1,000 clients: 13.4 ms vs Rust's 15.8 ms.
   subscriber index, exact-payload frame cache, per-client fixed-ring queue with
   a condition-variable writer park, batched vectored writes, generation-keyed
   authorization memo.
-- **Routing/rendering**: compiled route ownership (`CAMPFIRE_ENGINE`), arena
-  allocations and framing on the hot path; every fast path has an `off` switch
-  for A/B and rollback.
+- **Routing/rendering**: compiled router and message renderer, arena
+  allocations and precomposed framing on the hot path; every fast path has an
+  `off` switch for A/B and rollback. (`CAMPFIRE_ENGINE` is a strangler
+  scaffold that currently owns no routes — it is a pass-through; the measured
+  wins come from the fast paths, not from route ownership.)
 
 ## Correctness
 

@@ -125,12 +125,15 @@ func (d *DB) CreateRoom(ctx context.Context, creator int64, kind, name string, u
 	if err != nil {
 		return room, err
 	}
+	// Both registries move immediately after the commit: the hydration read
+	// below is fallible (a canceled context after commit), and a room that is
+	// already visible must not leave sidebar caches stale if it fails.
 	d.membershipVersion.Add(1)
+	d.bumpSidebarVersion()
 	err = d.Read.QueryRowContext(ctx, "SELECT id,creator_id,coalesce(name,''),type,updated_at FROM rooms WHERE id=?", room.ID).Scan(&room.ID, &room.CreatorID, &room.Name, &room.Type, timestamp{&room.UpdatedAt})
 	if err != nil {
 		return room, err
 	}
-	d.bumpSidebarVersion()
 	return room, nil
 }
 func (d *DB) UpdateRoom(ctx context.Context, id int64, kind, name string, users []int64) error {

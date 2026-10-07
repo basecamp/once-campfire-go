@@ -52,9 +52,12 @@ docker run --rm -p 8080:80 -e DISABLE_SSL=1 -e SECRET_KEY_BASE \
 The container runs as uid/gid 1000. For a bind mount, make its storage writable by that user.
 `CAMPFIRE_STORAGE_PATH` defaults to `storage`, with databases in `db/`, media in `files/`, backups
 in `backups/`, and certificate cache in `thruster/`. `CAMPFIRE_DATABASE_PATH` and `CAMPFIRE_FILES_PATH`
-override individual locations; `RAILS_ENV` defaults to `production`. `CAMPFIRE_ENGINE` controls route
-ownership for the performance engine: `on` (default) serves owned routes in the engine with the legacy
-handler as fallback, `off` disables ownership for A/B and rollback, and `force` is reserved for tests.
+override individual locations; `RAILS_ENV` defaults to `production`. `CAMPFIRE_ENGINE` selects the
+mode of the strangler scaffold in front of the legacy handler: the compiled route table currently owns
+no routes, so `on` (default), `off` and `force` are all pass-throughs and serve every request through
+the legacy chain unchanged. The switch exists for the differential harness and for promoting routes
+one at a time; the measured performance comes from the fast paths inside the handlers, not from route
+ownership.
 `CAMPFIRE_FRAGMENT_CACHE_MB` sizes the legacy in-process HTML fragment cache (default 32; `0`
 disables caching), which holds per-message fragments, the sidebar and the legacy recorded shells
 when the piece path is off; the engine piece cache reads the same key when routes migrate to it, so

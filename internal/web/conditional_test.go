@@ -52,3 +52,17 @@ func TestMessageConditionalGet(t *testing.T) {
 		t.Fatal("empty response")
 	}
 }
+
+// ETags are opaque and case-sensitive; the framed freshness path must not
+// accept a differently-cased validator (it previously folded ASCII case while
+// the map path compared exactly).
+func TestRequestIsFreshETagIsCaseSensitive(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("If-None-Match", `W/"ab"`)
+	if requestIsFresh(r, []byte(`W/"AB"`), time.Time{}) {
+		t.Fatal("case-folded ETag matched")
+	}
+	if !requestIsFresh(r, []byte(`W/"ab"`), time.Time{}) {
+		t.Fatal("exact ETag did not match")
+	}
+}
