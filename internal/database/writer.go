@@ -46,7 +46,7 @@ const writeQueueCapacity = 1024
 // A writer is not safe for direct use; all jobs go through submit, and Close
 // must be called before the underlying connection closes.
 type messageWriter struct {
-	db   *sql.DB
+	conn laneConn
 	jobs chan *messageJob
 	wake chan struct{}
 	stop chan struct{}
@@ -64,17 +64,10 @@ type messageWriter struct {
 	busy     bool
 }
 
-// execer is the statement surface a job's after-commit work runs against: a
-// transaction on the direct and in-line paths, a transaction of its own on
-// the queued path. *sql.Tx and *sql.DB both satisfy it.
-type execer interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-}
-
 type messageJob struct {
 	ctx   context.Context
-	run   func(*sql.Tx) (Message, error)
-	after func(context.Context, execer, Message) error
+	run   func(jobTx) (Message, error)
+	after func(context.Context, jobTx, Message) error
 	done  chan messageResult
 }
 
@@ -86,9 +79,9 @@ type messageResult struct {
 	inline bool
 }
 
-func newMessageWriter(db *sql.DB) *messageWriter {
+func newMessageWriter(conn laneConn) *messageWriter {
 	w := &messageWriter{
-		db:   db,
+		conn: conn,
 		jobs: make(chan *messageJob, writeQueueCapacity),
 		wake: make(chan struct{}, 1),
 		stop: make(chan struct{}),
@@ -214,7 +207,7 @@ func (d *DB) LaneBlocker() func() {
 	var once sync.Once
 	job := &messageJob{
 		ctx:  context.Background(),
-		run:  func(tx *sql.Tx) (Message, error) { <-gate; return Message{}, nil },
+		run:  func(tx jobTx) (Message, error) { <-gate; return Message{}, nil },
 		done: make(chan messageResult, 1),
 	}
 	go func() {
@@ -248,12 +241,12 @@ func (w *messageWriter) runInline(job *messageJob) {
 				result = messageResult{err: fmt.Errorf("database: message write panic: %v", p)}
 			}
 		}()
-		tx, err := w.db.BeginTx(job.ctx, nil)
+		tx, err := w.conn.begin(job.ctx)
 		if err != nil {
 			result = messageResult{err: err}
 			return
 		}
-		defer tx.Rollback()
+		defer tx.rollback()
 		m, err := job.run(tx)
 		if err == nil && job.after != nil {
 			err = job.after(job.ctx, tx, m)
@@ -262,7 +255,7 @@ func (w *messageWriter) runInline(job *messageJob) {
 			result = messageResult{err: err}
 			return
 		}
-		if err := tx.Commit(); err != nil {
+		if err := tx.commit(); err != nil {
 			result = messageResult{err: err}
 			return
 		}
@@ -313,7 +306,7 @@ func (w *messageWriter) runBatch(head *messageJob) {
 run:
 	results := make([]messageResult, len(batch))
 	var commitErr error
-	var tx *sql.Tx
+	var tx laneTx
 	func() {
 		// A panicking job must not take the writer down with it; its batch is
 		// rolled back and every job in it fails, like the legacy path.
@@ -322,12 +315,12 @@ run:
 				slog.Error("message write batch panicked", "error", p)
 				commitErr = fmt.Errorf("database: message write panic: %v", p)
 				if tx != nil {
-					tx.Rollback()
+					tx.rollback()
 				}
 			}
 		}()
 		var err error
-		tx, err = w.db.BeginTx(context.Background(), nil)
+		tx, err = w.conn.begin(context.Background())
 		if err != nil {
 			commitErr = err
 			return
@@ -337,12 +330,12 @@ run:
 			if err := job.ctx.Err(); err != nil {
 				// Cancelled before execution: nothing ran, nothing persists,
 				// exactly like the legacy BeginTx failing on a cancelled ctx.
-				tx.Rollback()
+				tx.rollback()
 				results[0] = messageResult{err: err}
 			} else if m, err := job.run(tx); err != nil {
-				tx.Rollback()
+				tx.rollback()
 				results[0] = messageResult{err: err}
-			} else if err := tx.Commit(); err != nil {
+			} else if err := tx.commit(); err != nil {
 				results[0] = messageResult{err: err}
 			} else {
 				results[0] = messageResult{message: m}
@@ -356,24 +349,24 @@ run:
 				results[i] = messageResult{err: err}
 				continue
 			}
-			if _, err := tx.Exec("SAVEPOINT w"); err != nil {
+			if err := tx.savepoint(); err != nil {
 				results[i] = messageResult{err: err}
 				continue
 			}
 			m, err := job.run(tx)
 			if err != nil {
-				tx.Exec("ROLLBACK TO w")
-				tx.Exec("RELEASE w")
+				tx.rollbackTo()
+				tx.releaseSavepoint()
 				results[i] = messageResult{err: err}
 				continue
 			}
-			if _, err := tx.Exec("RELEASE w"); err != nil {
+			if err := tx.releaseSavepoint(); err != nil {
 				results[i] = messageResult{err: err}
 				continue
 			}
 			results[i] = messageResult{message: m}
 		}
-		if err := tx.Commit(); err != nil {
+		if err := tx.commit(); err != nil {
 			commitErr = err
 		}
 	}()

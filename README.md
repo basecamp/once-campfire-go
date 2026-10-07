@@ -160,6 +160,26 @@ the pre-lane behaviour; the checksum of the response bytes is covered by the wri
 tests. The sidebar and search-cache version counters move with the shared commit on both paths
 (group-commit and per-request), so the write lane never serves a version-keyed cache that hides a
 committed message.
+`CAMPFIRE_FASTDB_WRITE` (default `on`; accepts the same value shapes and warning policy as
+`CAMPFIRE_WRITE_QUEUE`) runs the message create transaction as direct prepared statements on one
+serialized fastdb connection (`internal/fastdb/write` over `internal/fastdb/csqlite`) instead of
+`database/sql`: the same eight statements — membership check, creator name, message insert, room
+touch, rich-text body, attachment, then the search-index insert and unread bump in
+after-commit order — bound positionally (int64/text/null), prepared once and reused across jobs,
+with the same `BEGIN IMMEDIATE`, savepoint-per-job, single-commit-per-batch and
+after-commit-tx-of-its-own shapes the `database/sql` lane has. The pragma set is identical
+(`busy_timeout=5000`, `foreign_keys=on`, WAL, `synchronous=NORMAL`, `cache_size=2000`,
+`wal_autocheckpoint=0` with the off-writer PASSIVE checkpointer unchanged), and the error
+mapping matches (`errors.Is` against the same sentinels: `sql.ErrNoRows`, the csqlite
+constraint/busy codes; only the error text formatting differs). The statement-count tests pin
+the per-post text/order/count on both lanes: 12 counted statements with the flag off, 5 with it
+on (the create transaction's seven statements leave the counted driver), and the direct lane's
+recorded stream is pinned by text and order in `internal/database/fastwrite_test.go`. The
+twin-database differential test drives identical create workloads (plain, attachment, staged
+upload, webhook, queued, and the forbidden/no-creator/FK failure cases) through both lanes and
+compares every touched row byte-for-byte. The flag only affects the queued lane: with
+`CAMPFIRE_WRITE_QUEUE=off` the per-request transaction path stays `database/sql`, exactly as
+before.
 `CAMPFIRE_AUTH_FAST` (default `on`; same value shapes and warning on anything else) is the
 auth/session fast path: a bounded in-process cache of verified `session_token` cookie values keeps
 their token and signed expiry, so a previously verified cookie is not re-HMACed and re-decoded on
