@@ -2,18 +2,45 @@
 
 Status: implemented; **default on** for the internal listener since
 ENGINE-53 (this branch, commit `fastserve: close adapter gaps and
-evidence-based default`). `CAMPFIRE_SERVER_LOOP=off` rolls the internal
-listener back to net/http. The public listeners never use the loop.
+evidence-based default`) and for the plain-HTTP public listener since
+ENGINE-62 (`front: owned loop and precomposed assets on the public
+listener`): with TLS unconfigured (`DISABLE_SSL`, the benchmark
+configuration) the public listener is served by the loop too, with the
+recorded-replay lane (below) for the cached auxiliary routes. TLS/ACME
+listeners are never affected. `CAMPFIRE_SERVER_LOOP=off` rolls both
+listeners back to net/http.
 
 ## Scope
 
-The internal (target) listener only. The public front (TLS/ACME/HTTP2/
-compression/cache) stays on net/http. With the flag off, `front.Serve` runs
-exactly the listener net/http served before; the flag selects
-`internal/fastserve.Serve` for the target listener with the same handler, the
-same timing envelope (`ReadTimeout`/`ReadHeaderTimeout`/`WriteTimeout`/
-`IdleTimeout`/`MaxHeaderBytes`, `MaxRequestBody` as the reader cap) and the
-same protocol configuration for its handoff server.
+The internal (target) listener and, since ENGINE-62, the plain-HTTP public
+listener. The public front (TLS/ACME/HTTP2/compression/cache) stays on
+net/http when TLS is configured; with the flag off, `front.Serve` runs
+exactly the listeners net/http served before. The flag selects
+`internal/fastserve.Serve` with the same handler, the same timing envelope
+(`ReadTimeout`/`ReadHeaderTimeout`/`WriteTimeout`/`IdleTimeout`/
+`MaxHeaderBytes`, `MaxRequestBody` as the reader cap) and the same protocol
+configuration for its handoff server. The public chain additionally brings:
+- `forward` header edits (in place on the fresh per-request map),
+- `PublicCompression` (header policy plus, for pre-encoded bodies, no-op),
+- the response cache, whose **recorded-replay lane** (ENGINE-62) emits cached
+  hits and the fixed `/up` table from per-entry precomposed head blocks
+  (fastserve.AppendHeaderLines) through `response.WriteRecorded`: no header
+  map, no sort, one writev, byte-identical to the map path (pinned by
+  `internal/front/recorded_test.go` across gzip/identity/zstd/absent, HEAD,
+  304, Range and keep-alive streams). The lane only engages for HTTP/1.1
+  GET/HEAD without request bodies against entries with reproducible heads
+  (no Date/Content-Length/Transfer-Encoding/Trailer/Connection captured, a
+  Content-Type whenever the body is non-empty); everything else, including
+  captures whose body the public policy encoded (the CE delta tell) and
+  HTTP/1.0, takes the byte-identical map path.
+- The front capture wrapper (`recordResponse`) deliberately does **not**
+  implement Unwrap, so the web layer's precomposed-receiver walk cannot
+  bypass the front cache's `X-Cache` bookkeeping on the public listener; the
+  internal listener (no wrapper) is unaffected.
+- The loop's documented strictness deltas (bare-LF, non-token names,
+  duplicate CL/TE, 431 verdicts from the Compatible profile) now apply to
+  the public listener as well; they are the same deltas already documented
+  below for the internal listener.
 
 ## Files
 
@@ -52,6 +79,20 @@ same protocol configuration for its handoff server.
 - `internal/fastserve/ab_bench_test.go` — the ENGINE-53 in-app A/B: the
   application request set (room page, sidebar, search, post) through both
   loops on the same handler.
+- `internal/fastserve/request.go` — ENGINE-62: `canonicalHeaderKey` fast path
+  for the common request header names (textproto fallback for the rest) and
+  `conn.go` drops the dead idle-deadline clear (the header deadline replaces
+  it before anything reads; one fewer syscall per keep-alive request).
+- `internal/fastserve/response.go` — `AppendHeaderLines` (the composeHead
+  line pass exported for the front's recorded head blocks) and
+  `WriteRecorded` (a fully recorded response: precomposed head + body, one
+  writev, the map path's auto-Content-Length/chunked/close decisions).
+- `internal/front/recorded.go` — the recorded-replay lane (above);
+  `internal/front/recorded_test.go` — wire parity across the negotiation
+  shapes and the engagement pins; `internal/front/loop_bench_test.go` — the
+  public-loop end-to-end benchmarks. `recordResponse` no longer implements
+  Unwrap (the capture participates in the response, so downstream
+  precomposed walks must stop at it).
 - `internal/fastserve/soak_test.go` — concurrent keep-alive soak with
   open-fd stability checks (/proc/self/fd before, during and after).
 - `internal/front/config.go`, `internal/front/server.go` — the flag and the

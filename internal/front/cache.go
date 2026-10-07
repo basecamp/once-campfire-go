@@ -20,6 +20,9 @@ type cacheEntry struct {
 	variant map[string]string
 	expires time.Time
 	size    int64
+	// recorded is the precomposed replay lane's state (ENGINE-62); nil when
+	// the entry must be served through the header-map path.
+	recorded *recordedResponse
 }
 type Cache struct {
 	mu                      sync.Mutex
@@ -128,12 +131,24 @@ func (c *Cache) put(entry *cacheEntry) {
 	c.size += entry.size
 }
 
-// replay writes one stored entry through the response writer: the single-alloc
-// header copy, the validator check and the body write are shared by ordinary
-// hits and fixed-route replays. hit reports whether the ordinary X-Cache: hit
-// marker applies; fixed replays keep the captured X-Cache value, which is the
-// miss marker the application path produced when the fixed table was filled.
+// replay writes one stored entry through the response writer: the recorded
+// lane first (precomposed head + body, one writev, no map work; see
+// recorded.go), then the single-alloc header copy, validator check and body
+// write shared by ordinary hits and fixed-route replays. hit reports whether
+// the ordinary X-Cache: hit marker applies; fixed replays keep the captured
+// X-Cache value, which is the miss marker the application path produced when
+// the fixed table was filled.
 func replay(w http.ResponseWriter, r *http.Request, entry *cacheEntry, hit bool) {
+	if recorded := entry.recorded; recorded != nil && recordedRequestEligible(r) {
+		if receiver := findRecordedReceiver(w); receiver != nil {
+			status, head, body := entry.status, recorded.head, entry.body
+			if recorded.etag != "" && ifNoneMatch(r.Header.Get("If-None-Match"), recorded.etag) {
+				status, head, body = http.StatusNotModified, recorded.head304, nil
+			}
+			_ = receiver.WriteRecorded(status, head, body)
+			return
+		}
+	}
 	if marker, ok := w.(finalMarker); ok {
 		// The recorded bytes are final; skip the compression wrapper's
 		// buffering pass. Its header policy still runs in WriteHeader.
@@ -185,9 +200,24 @@ type recordResponse struct {
 	ttl           time.Duration
 	overflow      bool
 	captureAlways bool
+	// wireHeader is the second snapshot, taken after the wrapped response
+	// policy (PublicCompression) has run its WriteHeader: the map as the wire
+	// sees it, including the policy's Vary/Content-Encoding additions. The
+	// recorded-replay lane renders its head block from it (recorded.go). It
+	// stays nil when the policy encoded a body this capture holds in identity
+	// form (the recorded bytes would not be the wire bytes) and for captures
+	// that do not participate in the lane.
+	wireHeader http.Header
 }
 
-func (w *recordResponse) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+// Unwrap deliberately does NOT exist on this wrapper. The web layer's
+// precomposed-receiver lookup walks Unwrap chains, and this wrapper sits
+// between the public response policy and the application on every public
+// miss: were it transparent, a fastserve public listener would let an
+// application precomposed write bypass the front cache entirely (its X-Cache
+// marker and the capture above). Keeping it opaque pins the public chain's
+// semantics; the internal listener has no wrapper here and is unaffected.
+
 func (w *recordResponse) WriteHeader(status int) {
 	if w.status != 0 {
 		return
@@ -201,6 +231,26 @@ func (w *recordResponse) WriteHeader(status int) {
 	}
 	w.header = w.Header().Clone()
 	w.ResponseWriter.WriteHeader(status)
+	if w.ttl <= 0 && !w.captureAlways {
+		return
+	}
+	// Post-policy snapshot for the recorded-replay lane (see wireHeader).
+	// The policy may have compressed a body the capture holds in identity
+	// form; the Content-Encoding delta is the tell, and such a capture must
+	// stay on the map path where the wrapper re-encodes it.
+	if live := w.Header(); live.Get("Content-Encoding") == w.header.Get("Content-Encoding") {
+		w.wireHeader = live.Clone()
+	}
+}
+
+// wire is the post-policy header snapshot used by the recorded-replay lane,
+// with the pre-policy clone as a defensive fallback (a capture whose policy
+// mutated nothing is the same map either way).
+func (w *recordResponse) wire() http.Header {
+	if w.wireHeader != nil {
+		return w.wireHeader
+	}
+	return w.header
 }
 func (w *recordResponse) Write(b []byte) (int, error) {
 	if w.status == 0 {
@@ -282,6 +332,9 @@ func (c *Cache) Handler(next http.Handler) http.Handler {
 				size += int64(len(name) + len(value))
 			}
 		}
-		c.put(&cacheEntry{key: key, header: capture.header, body: bytes.Clone(capture.body.Bytes()), status: capture.status, variant: variant, expires: time.Now().Add(capture.ttl), size: size})
+		body := bytes.Clone(capture.body.Bytes())
+		entry := &cacheEntry{key: key, header: capture.header, body: body, status: capture.status, variant: variant, expires: time.Now().Add(capture.ttl), size: size}
+		entry.recorded = newRecordedResponse(capture.wire(), capture.status, body, "hit")
+		c.put(entry)
 	})
 }

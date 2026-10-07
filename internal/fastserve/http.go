@@ -1,6 +1,7 @@
 // Package fastserve is the owned HTTP/1.x server loop for the internal
-// (target) listener, the default since ENGINE-53 (CAMPFIRE_SERVER_LOOP=off
-// rolls back to net/http on that listener).
+// (target) listener and, since ENGINE-62, for the plain-HTTP public listener
+// (TLS/ACME listeners stay on net/http). CAMPFIRE_SERVER_LOOP=off rolls both
+// back to net/http.
 //
 // It replaces net/http's conn loop on that listener only: request heads are
 // parsed by github.com/sebishogun/simdhttp/http1 (vector scans, zero

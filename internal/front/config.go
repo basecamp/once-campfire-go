@@ -15,11 +15,12 @@ type Config struct {
 	CacheSize, MaxCacheItemSize, MaxRequestBody               int64
 	Gzip, DisableGzipOnAuth, H2C, ForwardHeaders, LogRequests bool
 	// ServerLoop selects the owned server loop (internal/fastserve) for the
-	// internal target listener instead of net/http's conn loop. It is on by
+	// internal target listener and, when TLS is not configured, the public
+	// plain-HTTP listener instead of net/http's conn loop. It is on by
 	// default (ENGINE-53 measured it faster across the application request
 	// set with byte-equal responses; see plans/engine-41.md); set
-	// CAMPFIRE_SERVER_LOOP=off to roll back to net/http on that listener.
-	// The public listeners are never affected.
+	// CAMPFIRE_SERVER_LOOP=off to roll back to net/http on both. TLS/ACME
+	// listeners always stay on net/http + autocert.
 	ServerLoop bool
 	// FixedRoutes enables the fixed-route table (CAMPFIRE_FRONT_FIXED): the
 	// front answers /up from a captured precomputed response instead of
