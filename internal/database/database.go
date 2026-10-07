@@ -89,6 +89,12 @@ func checkpointIntervalMS() time.Duration {
 }
 
 func Open(path string, readers int) (*DB, error) {
+	return open("sqlite3", path, readers)
+}
+
+// open builds a DB over the given sqlite driver; tests swap in a counting
+// driver wrapper via OpenCounting.
+func open(driver, path string, readers int) (*DB, error) {
 	if readers < 1 {
 		return nil, errors.New("database readers must be positive")
 	}
@@ -102,7 +108,7 @@ func Open(path string, readers int) (*DB, error) {
 	uri := (&url.URL{Scheme: "file", Path: path}).String()
 	// Reuse transaction statements on the single writer connection. The driver
 	// resets bindings on reuse; results and authorization are never cached.
-	w, err := sql.Open("sqlite3", uri+options+"&_txlock=immediate&_stmt_cache_size=64")
+	w, err := sql.Open(driver, uri+options+"&_txlock=immediate&_stmt_cache_size=64")
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +121,7 @@ func Open(path string, readers int) (*DB, error) {
 	if err = prepare(w); err != nil {
 		return fail(err)
 	}
-	r, err := sql.Open("sqlite3", uri+options+"&mode=ro&_query_only=on")
+	r, err := sql.Open(driver, uri+options+"&mode=ro&_query_only=on")
 	if err != nil {
 		return fail(err)
 	}
@@ -147,7 +153,7 @@ func Open(path string, readers int) (*DB, error) {
 			return fail(err)
 		}
 		writer := newMessageWriter(w)
-		checkpoints, err := startCheckpointer(uri+options, checkpointIntervalMS())
+		checkpoints, err := startCheckpointer(driver, uri+options, checkpointIntervalMS())
 		if err != nil {
 			writer.Close()
 			r.Close()

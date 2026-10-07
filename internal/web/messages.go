@@ -156,6 +156,46 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 	return views, nil
 }
 
+// freshMessageView builds the view of a message this request just created
+// from data already in hand — the authenticated creator, the room the
+// handler already read for membership, the body, and the empty boosts and
+// attachment that cannot exist for a brand-new id (ENGINE-45). It skips the
+// per-view reads messageViews performs (room, creator, boosts, attachment
+// blob) and is byte-identical to it for the same rows: the same fields feed
+// the same fragment renderer, and nil and empty boosts range identically.
+// Callers keep the messageViews path for attachment posts and direct rooms
+// (whose display name needs the other member).
+func (s *Server) freshMessageView(r *http.Request, u database.User, m database.Message, room database.Room) (messageView, error) {
+	view := messageView{Message: m}
+	view.RoomName = room.Name
+	view.CreatorTitle = u.Title()
+	view.CreatorUpdatedAt = u.UpdatedAt
+	view.Permalink = messagePermalink(r.Context(), m.RoomID, m.ID)
+	result, _ := richtext.Display(m.Body, s.richContext(r.Context()))
+	view.HTML = template.HTML(result.Presentation)
+	view.AllEmoji = allEmoji(result.Plain)
+	if sound := soundHTML(result.Plain); sound != "" {
+		view.HTML = template.HTML(sound)
+	}
+	key := messageCacheKey(view.Message)
+	if html, ok := s.fragments.get(key); ok {
+		view.Fragment = html
+	} else if s.fastRender != nil {
+		body, err := s.renderMessageFragment(&view)
+		if err != nil {
+			return view, err
+		}
+		view.Fragment = s.fragments.put(key, template.HTML(body))
+	} else {
+		body, err := s.markup("message-uncached", view)
+		if err != nil {
+			return view, err
+		}
+		view.Fragment = s.fragments.put(key, template.HTML(body))
+	}
+	return view, nil
+}
+
 // viewRoom returns the room record by id, through fastdb when c is set (a
 // missing room is ErrNoRows, the same sentinel database/sql returns).
 func (s *Server) viewRoom(c *fastdb.Conn, ctx context.Context, id int64) (database.Room, error) {

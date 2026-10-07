@@ -121,11 +121,84 @@ func parityPost(t *testing.T, server *httptest.Server, body string, cookie *http
 	return response, data
 }
 
+// TestCreateMessageStatementCount pins the statement budget of one
+// POST /messages request (ENGINE-45): queue on, fast reads off so every read
+// is a counted database/sql statement, checkpoints off the clock, one plain
+// post. The number is part of the contract — the fresh-message view, the
+// reused room record and the in-line lane are what keep it at 12 instead of
+// 17 — so a change must update the count consciously.
+func TestCreateMessageStatementCount(t *testing.T) {
+	t.Setenv("CAMPFIRE_WRITE_QUEUE", "on")
+	t.Setenv("CAMPFIRE_FASTDB", "off")
+	t.Setenv("CAMPFIRE_CHECKPOINT_MS", "3600000")
+	t.Setenv("CAMPFIRE_FROZEN_TIME", "2026-01-02T03:04:05Z")
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "test.sqlite3")
+	db, count, reset, dump, err := database.OpenCounting(dbPath, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	ctx := context.Background()
+	user, err := db.Setup(ctx, "Owner", "owner@test", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateUser(ctx, "Alice", "alice@test", "digest", "", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	rooms, err := db.Rooms(ctx, user.ID)
+	if err != nil || len(rooms) == 0 {
+		t.Fatalf("rooms: %v %v", rooms, err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := db.CreateMessage(ctx, user.ID, rooms[0].ID, fmt.Sprintf("seed-%d", i), fmt.Sprintf("<p>seed %d</p>", i), fmt.Sprintf("seed %d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	secrets, err := rails.NewSecrets("write-lane-parity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := db.StartSession(ctx, user.ID, "test", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := secrets.SignCookie("session_token", token, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := &http.Cookie{Name: "session_token", Value: rails.EscapeCookie(signed)}
+	app, err := New(db, secrets, false, dbPath, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
+
+	form := url.Values{"message[body]": {"hello lane"}, "message[client_message_id]": {"count-1"}}.Encode()
+	reset()
+	response, data := parityPost(t, server, form, cookie)
+	// The createMessage response for a browser-style Accept (", */*" tails)
+	// is 406 by negotiation — the reference behaviour the parity test also
+	// compares on; the message is created regardless.
+	if response.StatusCode != 406 {
+		t.Fatalf("post status %d body=%s, want 406-by-negotiation", response.StatusCode, data)
+	}
+	if got := count(); got != 12 {
+		t.Fatalf("POST /messages statements = %d, want 12\n%s", got, dump())
+	}
+}
+
 // TestWriteLaneParity compares the createMessage response across every
-// combination of the two A/B switches using three identically seeded
-// databases: queue on/off (CAMPFIRE_WRITE_QUEUE) and fast reads on/off
+// combination of the two A/B switches using identically seeded databases:
+// queue on/off (CAMPFIRE_WRITE_QUEUE) and fast reads on/off
 // (CAMPFIRE_FASTDB, which now supplies messageViews' per-view reads). All
-// three responses must be byte-identical.
+// responses must be byte-identical. The queued server posts through the
+// batch path (its lane is held busy by a blocker job while the post is
+// submitted), so the adaptive in-line path and the queued path are both
+// compared byte-for-byte against the direct path.
 func TestWriteLaneParity(t *testing.T) {
 	dbQF, pathQF, _ := seedLaneDB(t, "on")
 	rootQF := filepath.Dir(pathQF)
@@ -139,6 +212,12 @@ func TestWriteLaneParity(t *testing.T) {
 	rootDF := filepath.Dir(pathDF)
 	_, dfServer, dfCookie := laneServer(t, dbDF, "on", pathDF, rootDF)
 
+	dbQU, pathQU, _ := seedLaneDB(t, "on")
+	rootQU := filepath.Dir(pathQU)
+	_, quServer, quCookie := laneServer(t, dbQU, "off", pathQU, rootQU)
+	release := dbQU.LaneBlocker() // the post below can only batch behind it
+	defer release()
+
 	form := url.Values{"message[body]": {"hello lane"}, "message[client_message_id]": {"parity-1"}}.Encode()
 	type result struct {
 		status int
@@ -148,10 +227,19 @@ func TestWriteLaneParity(t *testing.T) {
 		response, data := parityPost(t, server, form, cookie)
 		return result{response.StatusCode, data}
 	}
-	fast := run(qfServer, qfCookie)   // queue on,  fastdb on
-	slow := run(qlServer, qlCookie)   // queue on,  fastdb off
+	fast := run(qfServer, qfCookie)   // queue on,  fastdb on, in-line
+	slow := run(qlServer, qlCookie)   // queue on,  fastdb off, in-line
 	direct := run(dfServer, dfCookie) // queue off, fastdb on
-	for name, got := range map[string]result{"fastdb=off": slow, "queue=off": direct} {
+	// The queued post runs on its own goroutine: it must be submitted while
+	// the lane is still held (the blocker keeps the lane busy until
+	// release(), so the post can only batch behind it), then the gate opens
+	// and the batch commits.
+	queuedResult := make(chan result, 1)
+	go func() { queuedResult <- run(quServer, quCookie) }()
+	time.Sleep(50 * time.Millisecond) // let the request reach the queue
+	release()
+	queued := <-queuedResult
+	for name, got := range map[string]result{"fastdb=off": slow, "queue=off": direct, "queued": queued} {
 		if got.status != fast.status {
 			t.Errorf("%s: status %d != %d", name, got.status, fast.status)
 		}

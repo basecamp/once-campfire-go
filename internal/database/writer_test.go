@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -499,21 +500,73 @@ func TestWriteQueueWebhookReply(t *testing.T) {
 // contract: the message row commits in the shared transaction, and a failure
 // of the search-index insert after commit is reported to the caller while the
 // message stays — the same window the Rust port's after_commit hooks have
-// (the direct path rolls the row back instead; see TestSchemaAndMessageTransaction).
+// (the in-line and direct paths roll the row back instead, because their
+// after-commit statements commit atomically with the row; see
+// TestWriteQueueAdaptiveAfterCommitAtomicity).
 func TestWriteQueueAfterCommitFailure(t *testing.T) {
 	d, owner, _, _, room := seededWriterTest(t)
 	ctx := context.Background()
 	if _, err := d.Write.Exec("DROP TABLE message_search_index"); err != nil {
 		t.Fatal(err)
 	}
-	m, err := d.CreateMessage(ctx, owner, room, "keeps-row", "<p>keeps row</p>", "keeps row")
-	if err == nil {
+	// Force the queued path: a blocker job claims the lane and holds the
+	// write connection inside its transaction, so the post below can only be
+	// batched behind it. Releasing the gate lets the batch commit the post's
+	// message row before the caller's after-commit transaction fails.
+	gate := make(chan struct{})
+	blocker := &messageJob{
+		ctx:  ctx,
+		run:  func(tx *sql.Tx) (Message, error) { <-gate; return Message{}, nil },
+		done: make(chan messageResult, 1),
+	}
+	go func() { _ = d.writer.submit(blocker) }()
+	for {
+		d.writer.mu.Lock()
+		busy := d.writer.busy
+		d.writer.mu.Unlock()
+		if busy {
+			break
+		}
+		runtime.Gosched()
+	}
+	var m Message
+	var postErr error
+	posted := make(chan struct{})
+	go func() {
+		defer close(posted)
+		m, postErr = d.CreateMessage(ctx, owner, room, "keeps-row", "<p>keeps row</p>", "keeps row")
+	}()
+	// The blocker holds the lane; the post is queued behind it and cannot
+	// run in-line while the gate is shut.
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	<-posted
+	if postErr == nil {
 		t.Fatal("expected the failed index insert to surface")
 	}
 	if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE client_message_id='keeps-row'"); err != nil || n != 1 {
 		t.Fatalf("message row after after-commit failure = %d %v, want 1 (committed before the index)", n, err)
 	}
 	_ = m
+}
+
+// TestWriteQueueAdaptiveAfterCommitAtomicity pins the in-line path's
+// after-commit contract: on a lone post the search index and unread bump
+// commit atomically with the message row, so a failing index insert rolls the
+// row back too (the direct path's behaviour).
+func TestWriteQueueAdaptiveAfterCommitAtomicity(t *testing.T) {
+	d, owner, _, _, room := seededWriterTest(t)
+	ctx := context.Background()
+	if _, err := d.Write.Exec("DROP TABLE message_search_index"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := d.CreateMessage(ctx, owner, room, "atomic-row", "<p>atomic</p>", "atomic")
+	if err == nil {
+		t.Fatal("expected the failed index insert to surface")
+	}
+	if n, err := d.readInt(ctx, "SELECT count(*) FROM messages WHERE client_message_id='atomic-row'"); err != nil || n != 0 {
+		t.Fatalf("message row after in-line failure = %d %v, want 0 (rolled back with the index)", n, err)
+	}
 }
 
 // benchLane seeds one user and room and runs b.N message creates on the given

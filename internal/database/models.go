@@ -227,9 +227,9 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 	// run executes the statements that commit together with the message row:
 	// membership check, creator name, staged blob, the message itself, the
 	// room touch, body and attachment. The search index and unread bump run
-	// around it: inside the same transaction on the direct path, after the
-	// shared commit on the queued path, exactly as the Rust port shapes the
-	// same Rails callbacks.
+	// as after-commit work around it: inside the same transaction on the
+	// direct and in-line paths, after the shared commit on the queued path,
+	// exactly as the Rust port shapes the same Rails callbacks.
 	run := func(tx *sql.Tx) (Message, error) {
 		created := m
 		if checkMembership {
@@ -275,25 +275,35 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 		}
 		return created, nil
 	}
+	// afterCommit runs the statements the Rust port runs in its after_commit
+	// hooks, in the documented order: the search row first, then the unread
+	// bump. On the direct and in-line paths it runs inside the job's own
+	// transaction; on the queued path it runs after the shared commit, in one
+	// transaction of its own, so the pair commits together behind the batch
+	// (ENGINE-45 batching) and the crash window ENGINE-31 documents — a
+	// committed message row without its index and unread rows — is unchanged.
+	afterCommit := func(ctx context.Context, conn execer, created Message) error {
+		stamp := Stamp(now)
+		for _, q := range []struct {
+			sql  string
+			args []any
+		}{
+			{"INSERT INTO message_search_index(rowid,body) VALUES (?,?)", []any{created.ID, plain}},
+			{"UPDATE memberships SET unread_at=?,updated_at=? WHERE room_id=? AND user_id!=? AND involvement!='invisible' AND (connected_at IS NULL OR connected_at < ?)", []any{stamp, stamp, room, user, Stamp(now.Add(-60 * time.Second))}},
+		} {
+			if _, err := conn.ExecContext(ctx, q.sql, q.args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if d.writer == nil {
 		err := d.Transaction(ctx, func(tx *sql.Tx) error {
 			var err error
 			if m, err = run(tx); err != nil {
 				return err
 			}
-			stamp := Stamp(now)
-			for _, q := range []struct {
-				sql  string
-				args []any
-			}{
-				{"UPDATE memberships SET unread_at=?,updated_at=? WHERE room_id=? AND user_id!=? AND involvement!='invisible' AND (connected_at IS NULL OR connected_at < ?)", []any{stamp, stamp, room, user, Stamp(now.Add(-60 * time.Second))}},
-				{"INSERT INTO message_search_index(rowid,body) VALUES (?,?)", []any{m.ID, plain}},
-			} {
-				if _, err = tx.ExecContext(ctx, q.sql, q.args...); err != nil {
-					return err
-				}
-			}
-			return nil
+			return afterCommit(ctx, tx, m)
 		})
 		if err == nil {
 			// ENGINE-20/ENGINE-30 registries: bump after the commit so no
@@ -306,38 +316,28 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 		}
 		return m, err
 	}
-	// Queued path: group commit. The writer commits the batch transaction
-	// before any job's caller resumes, so the response is never sent ahead of
-	// the message's persistence. The search row and the unread bump run here,
-	// after the shared commit, on a context that survives the request
-	// disconnecting mid-write (the Rust after_commit hooks and Rails'
-	// after_commit callbacks are not request-cancellable either); their error
-	// is reported to the caller the way Rails raises from the save that
-	// committed.
+	// Queued path: group commit, or the adaptive in-line path when the lane
+	// is idle (the writer decides; the create work is the same either way,
+	// and the in-line path additionally folds afterCommit into the job's own
+	// transaction). On the queued path the writer commits the batch
+	// transaction before any job's caller resumes, so the response is never
+	// sent ahead of the message's persistence. The search row and the unread
+	// bump run after the shared commit, on a context that survives the
+	// request disconnecting mid-write (the Rust after_commit hooks and
+	// Rails' after_commit callbacks are not request-cancellable either);
+	// their error is reported to the caller the way Rails raises from the
+	// save that committed.
 	job := &messageJob{
-		ctx: ctx,
-		run: run,
-		after: func(ctx context.Context, created Message) error {
-			stamp := Stamp(now)
-			for _, q := range []struct {
-				sql  string
-				args []any
-			}{
-				{"INSERT INTO message_search_index(rowid,body) VALUES (?,?)", []any{created.ID, plain}},
-				{"UPDATE memberships SET unread_at=?,updated_at=? WHERE room_id=? AND user_id!=? AND involvement!='invisible' AND (connected_at IS NULL OR connected_at < ?)", []any{stamp, stamp, room, user, Stamp(now.Add(-60 * time.Second))}},
-			} {
-				if _, err := d.Write.ExecContext(ctx, q.sql, q.args...); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
-		done: make(chan messageResult, 1),
+		ctx:   ctx,
+		run:   run,
+		after: afterCommit,
+		done:  make(chan messageResult, 1),
 	}
 	// The commit gate: this caller will run after() on d.Write once the
-	// shared commit lands, so count it before submitting — Close waits for
-	// the count to drain before closing the pool. The defer covers every
-	// exit, including a panic in after().
+	// shared commit lands (or, on the in-line path, inside the job's own
+	// transaction), so count it before submitting — Close waits for the
+	// count to drain before closing the pool. The defer covers every exit,
+	// including a panic in after().
 	d.afterMu.Lock()
 	d.afterN++
 	d.afterMu.Unlock()
@@ -360,15 +360,34 @@ func (d *DB) createMessage(ctx context.Context, user, room int64, client string,
 	// with it so no reader serves a version-keyed cache that hides the
 	// committed message. The crash window the writer documents (message row
 	// without its index row) applies here exactly as to the search/unread
-	// statements below, so the bumps go with the commit, not with after().
+	// statements below, so the bumps go with the commit, not with after(). On
+	// the in-line path everything — row, index, unread — committed together,
+	// and the bumps follow that single commit.
 	d.bumpSidebarVersion()
 	d.corpusVersion.Add(1)
 	if staged != nil {
 		staged.Keep()
 	}
+	if job.after == nil || result.inline {
+		// The in-line path already ran the after-commit work inside the
+		// job's own transaction; replaying it here would hit the rows it
+		// just committed.
+		return result.message, nil
+	}
 	afterCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := job.after(afterCtx, result.message); err != nil {
+	// One transaction of the after-commit pair on the write pool: the two
+	// statements commit together instead of in two implicit transactions,
+	// halving the after-work's hold on the single write connection.
+	btx, err := d.Write.BeginTx(context.Background(), nil)
+	if err != nil {
+		return result.message, err
+	}
+	if err := job.after(afterCtx, btx, result.message); err != nil {
+		btx.Rollback()
+		return result.message, err
+	}
+	if err := btx.Commit(); err != nil {
 		return result.message, err
 	}
 	return result.message, nil
