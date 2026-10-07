@@ -110,6 +110,10 @@ with four hardware threads allocated to each app.
 | Search | 415 | 120 | 1,291 | 6,725 | 1,907 | 30,239 | 34,199 |
 | Post a message | 244 | 113 | 498 | 2,183 | 1,431 | 9,413 | 8,995 |
 
+The historical Go sidebar results used a bare frame, not the reference's complete layout. The
+handler now renders an application or Turbo-Frame document around the cached frame; those historical
+numbers do not establish full-page sidebar performance.
+
 See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 
 ## Known differences

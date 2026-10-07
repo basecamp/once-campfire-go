@@ -2,41 +2,37 @@ package web
 
 import (
 	"bytes"
-	"github.com/basecamp/once-campfire-go/internal/database"
-	"html/template"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/basecamp/once-campfire-go/internal/database"
 )
 
 func TestSidebarCacheTracksRenderedChanges(t *testing.T) {
 	app, _, _, user := testApp(t)
 	makePage := func() page {
-		return page{User: user, CanCreateRooms: true, RoomsStream: "rooms", UserRoomsStream: "user",
-			SidebarRooms: []sidebarRoom{{Room: database.Room{ID: 1, Name: "Chat", Type: "Rooms::Open"}}, {Room: database.Room{ID: 2, Type: "Rooms::Direct"}, Members: []database.User{{ID: 2, Name: "Second Person"}}}},
-			Placeholders: []database.User{{ID: 3, Name: "Third Person"}}}
+		return page{
+			User: user, CanCreateRooms: true, RoomsStream: "rooms", UserRoomsStream: "user",
+			SidebarRooms: []sidebarRoom{
+				{Room: database.Room{ID: 1, Name: "Chat", Type: "Rooms::Open"}},
+				{
+					Room:    database.Room{ID: 2, Type: "Rooms::Direct"},
+					Members: []database.User{{ID: 2, Name: "Second Person"}},
+				},
+			},
+			Placeholders: []database.User{{ID: 3, Name: "Third Person"}},
+		}
 	}
 	render := func(p page) string {
 		var b bytes.Buffer
-		if err := app.templates.ExecuteTemplate(&b, "sidebar", p); err != nil {
+		if err := app.templates.ExecuteTemplate(&b, "sidebar-frame", p); err != nil {
 			t.Fatal(err)
 		}
 		return b.String()
 	}
 	original := makePage()
 	body, key := render(original), sidebarCacheKey(original)
-	if !strings.Contains(body, "<!DOCTYPE html>") {
-		t.Fatal("standalone sidebar must render a complete page")
-	}
-	loaded := original
-	loaded.LoadedAt = "new-request-time"
-	if render(loaded) != body || sidebarCacheKey(loaded) != key {
-		t.Fatal("an unused room refresh cursor must not invalidate the sidebar")
-	}
 	changes := map[string]func(*page){
-		"frame layout":       func(p *page) { p.Frame = true },
-		"styles":             func(p *page) { p.CustomStyles = template.HTML("<style>body{color:red}</style>") },
-		"flash":              func(p *page) { p.Notice = "Notice" },
 		"unread":             func(p *page) { p.SidebarRooms[0].Unread = true },
 		"rename":             func(p *page) { p.SidebarRooms[0].Name = "Renamed" },
 		"membership removed": func(p *page) { p.SidebarRooms = p.SidebarRooms[1:] },

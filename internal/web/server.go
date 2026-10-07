@@ -29,8 +29,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-const HealthBody = `<!DOCTYPE html><html><body style="background-color: green"></body></html>`
-const MaxBody = 16 << 20
+const (
+	HealthBody = `<!DOCTYPE html><html><body style="background-color: green"></body></html>`
+	MaxBody    = 16 << 20
+)
 
 type Server struct {
 	fragments      *fragmentCache
@@ -68,6 +70,7 @@ type page struct {
 	messageBody    *responsebody.Part
 
 	MessagesHTML                 template.HTML
+	SidebarHTML                  template.HTML
 	Version                      string
 	UserDivider                  int
 	BackPath                     string
@@ -131,7 +134,12 @@ type messageView struct {
 	Boosts           []database.Boost
 }
 
-func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...string) (*Server, error) {
+func New(
+	db *database.DB,
+	secrets *rails.Secrets,
+	secure bool,
+	storagePaths ...string,
+) (*Server, error) {
 	// Same cost-12 dummy digest as reference/crates/db/src/models/user.rs.
 	// Unknown-user login still pays bcrypt; startup need not create a new hash.
 	hash := []byte("$2a$12$FiKmSp4UhLvSB4Sd/ZUjQunyKP6.NjDRHdr5LnKUVk.BUn4Mq12WS")
@@ -146,7 +154,18 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 			return nil, fmt.Errorf("invalid CAMPFIRE_FRAGMENT_CACHE_MB %q", raw)
 		}
 	}
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, messageLayouts: layouts, attempts: map[string]attempt{}, dummyHash: hash}
+	s := &Server{
+		fragments:      newFragmentCache(cacheMB << 20),
+		Cable:          cable.New(db, secrets),
+		DB:             db,
+		Secrets:        secrets,
+		Secure:         secure,
+		mux:            &router{},
+		templates:      t,
+		messageLayouts: layouts,
+		attempts:       map[string]attempt{},
+		dummyHash:      hash,
+	}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -186,8 +205,15 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, storagePaths ...s
 	s.mux.HandleFunc("DELETE /searches/clear", s.auth(s.search))
 	return s, nil
 }
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r = r.WithContext(context.WithValue(r.Context(), requestInfoKey{}, &requestInfo{host: r.Host, origin: s.origin(r)}))
+	r = r.WithContext(
+		context.WithValue(
+			r.Context(),
+			requestInfoKey{},
+			&requestInfo{host: r.Host, origin: s.origin(r)},
+		),
+	)
 	if assets.Serve(w, r) {
 		return
 	}
@@ -219,7 +245,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	w.Header().Set("X-XSS-Protection", "0")
 	w.Header().Set("X-Permitted-Cross-Domain-Policies", "none")
-	if r.Method != "GET" && r.Method != "HEAD" && !strings.HasPrefix(r.URL.Path, "/rails/active_storage/") {
+	if r.Method != "GET" && r.Method != "HEAD" &&
+		!strings.HasPrefix(r.URL.Path, "/rails/active_storage/") {
 		banned, err := s.DB.BannedIP(r.Context(), remoteIP(r))
 		if err != nil {
 			s.fail(w, err)
@@ -303,6 +330,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	normalizeScalarParams(r)
 	s.routeHTTP(w, r)
 }
+
 func (s *Server) sameOrigin(r *http.Request) bool {
 	site := r.Header.Get("Sec-Fetch-Site")
 	if site == "cross-site" || s.Secure && (site != "same-origin" && site != "same-site") {
@@ -310,12 +338,16 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 	}
 	if origin := r.Header.Get("Origin"); origin != "" {
 		u, err := url.Parse(origin)
-		if err != nil || u.Scheme+"://"+u.Host != s.origin(r) || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" {
+		if err != nil || u.Scheme+"://"+u.Host != s.origin(r) || u.User != nil ||
+			u.RawQuery != "" ||
+			u.Fragment != "" ||
+			u.Path != "" {
 			return false
 		}
 	}
 	return true
 }
+
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	format := respondFormat(w, r, "html", "json")
 	if format == "" {
@@ -332,6 +364,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, HealthBody)
 }
+
 func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, status int, p page) {
 	if name != "incompatible-browser" && respondFormat(w, r, "html") == "" {
 		return
@@ -366,7 +399,9 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 		}
 	}
 	p.Version = appVersion()
-	if r.Header.Get("Turbo-Frame") != "" && name != "edit-message" && name != "show-message" && name != "incompatible-browser" && name != "room-not-found" {
+	if r.Header.Get("Turbo-Frame") != "" && name != "edit-message" && name != "show-message" &&
+		name != "incompatible-browser" &&
+		name != "room-not-found" {
 		p.Frame = true
 	}
 	p.Platform = requestAgent(r).View()
@@ -431,13 +466,10 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	if recorded != nil {
 		p.MessagesHTML = template.HTML("\x00campfire-" + rand.Text() + "\x00")
 	}
-	sidebarKey := ""
 	if name == "sidebar" {
-		sidebarKey = sidebarCacheKey(p)
-		if fragment, ok := s.fragments.get(sidebarKey); ok {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(status)
-			w.Write([]byte(fragment))
+		p.SidebarHTML, err = s.sidebarHTML(p)
+		if err != nil {
+			s.fail(w, err)
 			return
 		}
 	}
@@ -447,9 +479,6 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 		s.fail(w, err)
 		return
 	}
-	if sidebarKey != "" {
-		s.fragments.put(sidebarKey, template.HTML(b.String()))
-	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if recorded != nil {
 		writeRecorded(w, status, b.String(), string(p.MessagesHTML), *recorded)
@@ -458,6 +487,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	w.WriteHeader(status)
 	w.Write(b.Bytes())
 }
+
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	status := 500
 	if errors.Is(err, sql.ErrNoRows) {
@@ -473,12 +503,20 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		http.Error(w, http.StatusText(status), status)
 	}
 }
-func (s *Server) auth(next func(http.ResponseWriter, *http.Request, database.User)) http.HandlerFunc {
+
+func (s *Server) auth(
+	next func(http.ResponseWriter, *http.Request, database.User),
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var token string
 		c, err := r.Cookie("session_token")
 		if err == nil {
-			err = s.Secrets.VerifyCookie("session_token", rails.UnescapeCookie(c.Value), s.DB.Now(), &token)
+			err = s.Secrets.VerifyCookie(
+				"session_token",
+				rails.UnescapeCookie(c.Value),
+				s.DB.Now(),
+				&token,
+			)
 		}
 		if err != nil || token == "" {
 			s.requestAuthentication(w, r)
@@ -510,11 +548,13 @@ func (s *Server) auth(next func(http.ResponseWriter, *http.Request, database.Use
 		next(w, r, u)
 	}
 }
+
 func (s *Server) hasAccount(ctx context.Context) (bool, error) {
 	var n int
 	err := s.DB.Read.QueryRowContext(ctx, "SELECT count(*) FROM accounts").Scan(&n)
 	return n > 0, err
 }
+
 func (s *Server) loginForm(w http.ResponseWriter, r *http.Request) {
 	if !s.requireUnauthenticated(w, r) {
 		return
@@ -530,6 +570,7 @@ func (s *Server) loginForm(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, r, "login", 200, page{Title: "Sign in"})
 }
+
 func (s *Server) setupForm(w http.ResponseWriter, r *http.Request) {
 	exists, err := s.hasAccount(r.Context())
 	if err != nil {
@@ -542,6 +583,7 @@ func (s *Server) setupForm(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, r, "first-run", 200, page{Title: "Set up Campfire", Setup: true})
 }
+
 func (s *Server) allowLogin(ip string) bool {
 	s.attemptsMu.Lock()
 	defer s.attemptsMu.Unlock()
@@ -562,12 +604,19 @@ func (s *Server) allowLogin(ip string) bool {
 	s.attempts[ip] = a
 	return a.Count <= 10
 }
+
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !s.requireUnauthenticated(w, r) {
 		return
 	}
 	if !s.allowLogin(remoteIP(r)) {
-		s.render(w, r, "login", 429, page{Title: "Sign in", Error: "Too many requests or unauthorized."})
+		s.render(
+			w,
+			r,
+			"login",
+			429,
+			page{Title: "Sign in", Error: "Too many requests or unauthorized."},
+		)
 		return
 	}
 	u, err := s.DB.UserByEmail(r.Context(), r.Form.Get("email_address"))
@@ -581,15 +630,32 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	valid := bcrypt.CompareHashAndPassword(hash, []byte(r.Form.Get("password"))) == nil
 	if err != nil || !valid {
-		s.render(w, r, "login", 401, page{Title: "Sign in", Error: "Too many requests or unauthorized."})
+		s.render(
+			w,
+			r,
+			"login",
+			401,
+			page{Title: "Sign in", Error: "Too many requests or unauthorized."},
+		)
 		return
 	}
 	s.startSession(w, r, u)
 }
+
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	password := r.Form.Get("user[password]")
 	if password == "" || len(password) > 72 {
-		s.render(w, r, "first-run", 422, page{Title: "Set up Campfire", Setup: true, Error: "Password must contain 1 to 72 bytes."})
+		s.render(
+			w,
+			r,
+			"first-run",
+			422,
+			page{
+				Title: "Set up Campfire",
+				Setup: true,
+				Error: "Password must contain 1 to 72 bytes.",
+			},
+		)
 		return
 	}
 	digest, err := bcrypt.GenerateFromPassword([]byte(password), 12)
@@ -605,13 +671,29 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	if upload != nil {
 		defer upload.Discard()
 	}
-	u, err := s.DB.Setup(r.Context(), r.Form.Get("user[name]"), r.Form.Get("user[email_address]"), string(digest), pendingBlob(upload))
+	u, err := s.DB.Setup(
+		r.Context(),
+		r.Form.Get("user[name]"),
+		r.Form.Get("user[email_address]"),
+		string(digest),
+		pendingBlob(upload),
+	)
 	if errors.Is(err, database.ErrForbidden) {
 		http.Redirect(w, r, "/", 302)
 		return
 	}
 	if errors.Is(err, database.ErrValidation) {
-		s.render(w, r, "first-run", 422, page{Title: "Set up Campfire", Setup: true, Error: "Name and email address are required."})
+		s.render(
+			w,
+			r,
+			"first-run",
+			422,
+			page{
+				Title: "Set up Campfire",
+				Setup: true,
+				Error: "Name and email address are required.",
+			},
+		)
 		return
 	}
 	if err != nil {
@@ -621,6 +703,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	s.analyzeUpload(upload)
 	s.startSession(w, r, u)
 }
+
 func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u database.User) {
 	token, err := s.DB.StartSession(r.Context(), u.ID, r.UserAgent(), remoteIP(r))
 	if err != nil {
@@ -638,6 +721,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u database
 	}
 	http.Redirect(w, r, location, 302)
 }
+
 func (s *Server) logout(w http.ResponseWriter, r *http.Request, u database.User) {
 	c, err := r.Cookie("session_token")
 	if err != nil {
@@ -661,9 +745,19 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, u database.User)
 		}
 	}
 	browserState(r).reset()
-	http.SetCookie(w, &http.Cookie{Name: "session_token", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(
+		w,
+		&http.Cookie{
+			Name:     "session_token",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		},
+	)
 	http.Redirect(w, r, "/", 302)
 }
+
 func (s *Server) lastRoom(r *http.Request, user int64) (int64, error) {
 	if cookie, err := r.Cookie("last_room"); err == nil {
 		if id, err := strconv.ParseInt(cookie.Value, 10, 64); err == nil {
@@ -674,6 +768,7 @@ func (s *Server) lastRoom(r *http.Request, user int64) (int64, error) {
 	}
 	return s.DB.OriginalRoom(r.Context(), user)
 }
+
 func (s *Server) home(w http.ResponseWriter, r *http.Request, u database.User) {
 	id, err := s.lastRoom(r, u.ID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -686,6 +781,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request, u database.User) {
 	}
 	http.Redirect(w, r, fmt.Sprintf("%s/rooms/%d", s.origin(r), id), 302)
 }
+
 func roomID(r *http.Request) int64 {
 	value := r.PathValue("room_id")
 	if value == "" {
@@ -697,6 +793,7 @@ func roomID(r *http.Request) int64 {
 	id, _ := strconv.ParseInt(value, 10, 64)
 	return id
 }
+
 func viewMessages(messages []database.Message) []messageView {
 	result := make([]messageView, 0, len(messages))
 	for _, m := range messages {
@@ -704,6 +801,7 @@ func viewMessages(messages []database.Message) []messageView {
 	}
 	return result
 }
+
 func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
 	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
 	if err != nil {
@@ -731,8 +829,22 @@ func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
 		return
 	}
 	s.rememberRoom(w, r, strconv.FormatInt(room.ID, 10))
-	s.render(w, r, "room", 200, page{Invitation: invitation, Stream: s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)), Title: room.Name, User: u, Room: room, messageRecords: messages})
+	s.render(
+		w,
+		r,
+		"room",
+		200,
+		page{
+			Invitation:     invitation,
+			Stream:         s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)),
+			Title:          room.Name,
+			User:           u,
+			Room:           room,
+			messageRecords: messages,
+		},
+	)
 }
+
 func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.User) {
 	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
 	if err != nil {
@@ -759,6 +871,7 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.Use
 	}
 	s.render(w, r, "messages", 200, page{messageRecords: messages})
 }
+
 func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u database.User) {
 	if !requireMessage(w, r) {
 		return
@@ -788,7 +901,15 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 		value := r.Form.Get("message[body]")
 		body = &value
 	}
-	m, err := s.saveNewMessage(r.Context(), u.ID, roomID(r), r.Form.Get("message[client_message_id]"), body, staged, false)
+	m, err := s.saveNewMessage(
+		r.Context(),
+		u.ID,
+		roomID(r),
+		r.Form.Get("message[client_message_id]"),
+		body,
+		staged,
+		false,
+	)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -821,6 +942,7 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 		writeStream(w, stream)
 	}
 }
+
 func (s *Server) sidebar(w http.ResponseWriter, r *http.Request, u database.User) {
 	items, err := s.sidebarRooms(r.Context(), u)
 	if err != nil {
@@ -832,8 +954,21 @@ func (s *Server) sidebar(w http.ResponseWriter, r *http.Request, u database.User
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "sidebar", 200, page{Placeholders: placeholders, SidebarRooms: items, User: u, RoomsStream: s.Secrets.SignStream("rooms"), UserRoomsStream: s.Secrets.SignStream(rails.UserRoomsStream(u.ID))})
+	s.render(
+		w,
+		r,
+		"sidebar",
+		200,
+		page{
+			Placeholders:    placeholders,
+			SidebarRooms:    items,
+			User:            u,
+			RoomsStream:     s.Secrets.SignStream("rooms"),
+			UserRoomsStream: s.Secrets.SignStream(rails.UserRoomsStream(u.ID)),
+		},
+	)
 }
+
 func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User) {
 	q := database.SearchQuery(r.FormValue("q"))
 	if r.Method == "POST" {
