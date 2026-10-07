@@ -274,3 +274,35 @@ deliveries.
 Room p50 0.261 ms vs Rust 0.499; sidebar p50 0.097 vs 0.383. p99 tails for
 room/messages/post remain worse than Rust (2.55/2.31/13.0 ms vs 0.93/0.76/5.5).
 Raw: `bench/results/merged-20261007/`.
+
+## Official merged acceptance run (2026-10-07, once-campfire-go:merged)
+
+Elixir harness, production Docker images, HTTP + cable, 2 rotating reps, c=16
+medians [min–max], same seed for all apps (note: seed hash at run start was
+`fea8d18a…`, mutated from the canonical `64ecbb80…`; applied identically to
+every app and responses validated, so internally fair — restore before the
+final run). Zero HTTP errors for all apps; responses gzip-validated with body
+hashes in `*-validation.json`.
+
+| Route c=16 | Rails | Go merged | Rust | Go vs Rust |
+|---|---:|---:|---:|---:|
+| room_show | 201 | 63,890 | 36,613 | **1.75×** |
+| messages_page | 407 | 68,910 | 41,986 | **1.64×** |
+| sidebar | 536 | 55,831 | 34,940 | **1.60×** |
+| search | 369 | 74,264 | 34,267 | **2.17×** |
+| post_message | 252 | 5,468 | 6,756 | 0.81× |
+| up | 4,182 | 178,323 | 245,202 | 0.73× |
+| avatar | 94,920 | 216,792 | 394,856 | 0.55× |
+| static_css | 132,466 | 311,152 | 414,252 | 0.75× |
+
+CPU µs/success: room 58.0 vs 104; messages 53.6 vs 90.1; sidebar 69.0 vs 109;
+search 49.8 vs 97.1; post 427 vs 381. Go does roughly half Rust's CPU on every
+read row. Against the published Go row (room 3,860) this is 16.6×.
+
+Cable: connect+subscribe tied (0.06 s / 0.15 s at 100/1000). 100 clients:
+paced all-clients p50 2.16 vs 2.05 ms, sustained 3,354 vs 4,061 msgs/s (0.83×).
+1000 clients: paced p50 6.90 vs 6.04 ms, p99 18.1 vs 8.38, sustained 514 vs 545
+(0.94×), saturated post→all p50 13.7 vs 15.8 ms (**Go faster**). Memory:
+151→225 MiB Go vs 119→126 MiB Rust (5–10× below Rails).
+
+Raw: `../once-campfire-elixir/bench/results/merged-official-20261007/`.
