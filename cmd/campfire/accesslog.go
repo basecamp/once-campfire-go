@@ -159,12 +159,13 @@ func renderAccessLine(writer *bufio.Writer, now time.Time, entry accessLogEntry)
 	writer.Write(b)
 }
 
-// needsQuoting mirrors slog's textHandler rule: a value is quoted when it is
-// empty or contains space, =, quote, backslash, or non-printable bytes.
+// needsQuoting mirrors slog's TextHandler rule exactly: a value is quoted
+// when it is empty or contains space, =, quote, or a byte below 0x20.
+// Backslashes and non-ASCII bytes pass through raw, as slog renders them.
 func needsQuoting(value string) bool {
 	for i := 0; i < len(value); i++ {
 		c := value[i]
-		if c == ' ' || c == '=' || c == '"' || c == '\\' || c < 0x20 || c >= 0x7f {
+		if c == ' ' || c == '=' || c == '"' || c < 0x20 {
 			return true
 		}
 	}

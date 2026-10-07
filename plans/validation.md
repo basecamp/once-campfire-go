@@ -566,3 +566,121 @@ the min range; medians within spread). Correctness on `cfdc2e4`: bin/check
 EXIT 0, browser PASS, 178/178 screen pixels+a11y, interop PASS, native run
 463k writes verified, zero delivery failures. Raw:
 `../once-campfire-elixir/bench/results/FINAL4-official-20261007/`.
+## ENGINE-62 record (2026-10-07, owned loop + precomposed assets on the public listener)
+
+The `up` row crossed in FINAL3 (274,711 vs 245,753); avatar stood at 0.58×
+and static_css at 0.74× because the remaining per-request cost was
+`net/http` on the **public** listener (~18 vs ~8-10 µs CPU per success in the
+official FINAL3 accounting), while the owned loop (fastserve, ~6.3 µs per
+exchange) only served the internal listener. ENGINE-62 closes the front
+transport and write path:
+
+- **Public listener on the owned loop when TLS is not configured**
+  (DISABLE_SSL / plain HTTP — the benchmark configuration). TLS/ACME
+  listeners keep net/http + autocert unchanged. `CAMPFIRE_SERVER_LOOP=off`
+  rolls both listeners back. The loop's documented strictness deltas now
+  apply to the public listener as well; `TestServerLoopFlagDiff` runs the
+  full public composition both ways and stays byte-equal.
+- **Recorded replay lane**: every cache hit (ordinary or fixed `/up`) emits
+  status line + a precomputed header block (rendered once per entry from the
+  post-policy capture with the X-Cache marker substituted, sorted and
+  sanitized exactly like `composeHead`) + body through
+  `fastserve.response.WriteRecorded`: no header map, no sort, no middleware,
+  one writev, with the receiver making the map path's auto Content-Length /
+  chunked / close and 304 decisions. The lane engages only for HTTP/1.1
+  GET/HEAD without request bodies against entries with reproducible heads
+  (no Date/Content-Length/Transfer-Encoding/Trailer/Connection captured,
+  Content-Type present when a body exists, and the capture's
+  Content-Encoding unchanged by the public policy); everything else takes
+  the byte-identical map path. Wire parity pinned by
+  `internal/front/recorded_test.go` against the same-loop map path and the
+  net/http public path across gzip/identity/zstd-only/gzip+zstd/absent, HEAD,
+  304, Range and keep-alive streams.
+- `recordResponse` no longer implements Unwrap: on the public listener the
+  web layer's precomposed-receiver walk stops at the cache, so X-Cache and
+  the capture always participate (the internal listener is unaffected).
+- Request path: a `canonicalHeaderKey` fast path for the common header names
+  (textproto fallback for the rest) and the dead idle-deadline clear dropped
+  (one fewer syscall per keep-alive request).
+- **Async access-log pipeline** (cmd/campfire/accesslog.go): the per-request
+  access log (LOG_REQUESTS, default on) is the hottest write in the public
+  chain — every request used to queue on the shared slog formatting lock and
+  do one small write to the log pipe, so a slow sink stalled whole
+  measurement windows. Records are now appended to a bounded queue (no
+  formatting, no allocation, strings alias the request) and a dedicated
+  goroutine renders them with slog's exact spelling (a hand-rolled fast path
+  pinned byte-for-byte by `TestAccessLogFastPathPins`; the slog fallback
+  covers values needing quoting) and drains to stderr in 2 ms / 64 KiB
+  batches. Line content, ordering, the default and the destination are
+  unchanged; overflow drops records with a warning instead of blocking.
+
+Package micro-benchmarks (`taskset -c 16-31 nice -n 19 env GOMAXPROCS=4`,
+single keep-alive connection, loadgen header shape; server+client in
+process; before = FINAL3 tree, net/http public chain):
+
+| Benchmark | Before (net/http) | After (loop+recorded) |
+|---|---:|---:|
+| FrontUp | 17.3 µs | 15.2 µs (LoopUp; 97 allocs) |
+| FrontAvatarHit | 20.8 µs | 18.8 µs (LoopAvatarHit; 111 allocs) |
+| FrontStaticCSSHit | 18.2 µs | 15.8 µs (LoopStaticCSSHit; 101 allocs) |
+| LoopAvatarHit map path (lane hidden) | — | 22.3 µs |
+| LoopStaticCSSHit map path (lane hidden) | — | 17.1 µs |
+
+The map-path rows show the loop and lane contributions separately: the loop
+is worth ~1.7-2 µs end to end and the recorded lane another ~3 µs on the
+chunked avatar.
+
+Same-conditions A/B against the pinned Rust loadgen (native binaries, seed
+9f6241dc, server and loadgen each pinned to 4 CPUs, c=16, gzip, keep-alive,
+rotating reps; `tmp/local_ab.py`), clean windows (medians):
+
+| Route c=16 | go-before | go-after | Rust | go-after vs Rust |
+|---|---:|---:|---:|---:|
+| avatar rps | ~234k | ~400k | ~484k | 0.83× |
+| avatar CPU µs/success | 14.7 | 6.8 | 7.3 | Go lower |
+| static_css rps | ~361k | ~480k | ~500k | 0.96× |
+| static_css CPU µs/success | 9.4 | 5.9 | 6.9 | Go lower |
+| up rps | ~296k | ~470k | ~268k | **1.76×** |
+| up CPU µs/success | 11.6 | 6.5 | 13.5 | Go lower |
+
+Go's per-request CPU is at or below Rust's on every row and its p50 is at or
+below Rust's; the remaining rps gap on the two asset rows is a wall-latency
+tail (Go p99 ~0.14 ms vs Rust ~0.06 ms at c=16), not CPU. Disabling the
+access log (LOG_REQUESTS=false, same conditions) lifts Go to ~428k avatar /
+~480k css — i.e. the access-log formatting+write still costs ~7% of the
+avatar row; the async pipeline (above) keeps the line while capping that
+cost.
+
+Official harness run (Elixir bench/run, production images, cpus 8-11/12-15,
+seed 9f6241dc, HTTP_SECS=4, c=16, SUITES=http, 4 rotating reps; image
+`once-campfire-go:engine62` @ cf2bb5b+dfe8310 — the run predates the async
+log):
+
+| Route c=16 medians | Go | Rust | vs Rust |
+|---|---:|---:|---:|
+| room_show | 82,903 | 36,350 | **2.28×** |
+| messages_page | 90,234 | 41,583 | **2.17×** |
+| sidebar | 54,332 | 35,585 | **1.53×** |
+| search | 107,301 | 34,302 | **3.13×** |
+| post_message | 8,213 | 6,634 | **1.24×** |
+| avatar | 362,768 | 387,913 | 0.94× |
+| static_css | 292,898 | 421,961 | 0.69× |
+| up | 404,469 | 247,698 | **1.63×** |
+
+Raw: `../once-campfire-elixir/bench/results/engine62-official-20261007/`.
+Cell spreads in this run were wide for both apps (e.g. Go avatar
+115,660-374,498; Rust avatar 322,407-431,308): the machine carried a
+parallel benchmark stream on the same CPU sets and load average 5-8
+throughout, crushing individual 4 s windows (the crushed cells hit both apps;
+Go's 2-3× p99 tail makes it more sensitive). Manual docker A/B in clean
+windows with the access log off: avatar 401-404k, css 459-481k, up 455-462k
+— all three above Rust's official median for the same harness conditions
+(387,913 / 421,961 / 247,698); with the log on, avatar measured ~352-362k in
+clean windows.
+
+Correctness on this tree: mandated full suite `go test -race -count=1
+-timeout 800s -p 2 -tags sqlite_fts5 ./...` green (22 packages), the nested
+websocket module (`third_party/websocket`) green, vet and gofmt clean. A
+pre-existing front-package port flake (`TestServerLoopFlagDiff` freePort
+race under `-p 2` with sibling packages binding the same ephemeral pool) is
+documented in plans/engine-41.md; it reproduces without this change's route.
