@@ -209,19 +209,39 @@ func (s *Server) messageCreated(message database.Message, room database.Room, me
 			s.Cable.PublishStream(ctx, fmt.Sprintf("user_%d_unreads", id), payload)
 		}
 	}
+	// Web Push is the reference's Room::PushMessageJob (the Rails app's
+	// push_message_job.rb): recipients, badge counts and delivery run on the
+	// job worker, never on the posting request. The request enqueues one job
+	// per message and renders on. mentioned travels with the job when the
+	// create path already derived it; the job derives it itself otherwise
+	// (the bot and webhook callers).
 	if s.Push.VAPID == nil {
 		return
 	}
+	s.Jobs.Enqueue("push", func(ctx context.Context) error {
+		return s.deliverPush(ctx, message, room, mentioned)
+	})
+}
+
+// pushRequestTimeout bounds one push job's queries and delivery attempts, the
+// same budget the inline path gave the whole chain.
+const pushRequestTimeout = 5 * time.Second
+
+// deliverPush is the moved Room::PushMessageJob: the recipient query, the
+// per-subscriber badge and payload, and the delivery attempts, all after the
+// posting request has responded (the reference runs this job async).
+func (s *Server) deliverPush(ctx context.Context, message database.Message, room database.Room, mentioned []int64) error {
+	ctx, cancel := context.WithTimeout(ctx, pushRequestTimeout)
+	defer cancel()
 	if mentioned == nil {
 		mentioned = s.mentionedIDs(ctx, message.Body)
 	}
 	subscriptions, err := s.DB.PushRecipients(ctx, room.ID, message.CreatorID, mentioned)
 	if err != nil {
-		slog.Error("push recipients failed", "error", err)
-		return
+		return err
 	}
 	if len(subscriptions) == 0 {
-		return
+		return nil
 	}
 	body := s.plainText(ctx, message.Body)
 	if attachment, err := s.Storage.Attached(ctx, "Message", message.ID, "attachment"); err == nil && attachment.ID != 0 && strings.TrimSpace(body) == "" {
@@ -242,12 +262,12 @@ func (s *Server) messageCreated(message database.Message, room database.Room, me
 			continue
 		}
 		payload := notificationJSON(title, body, fmt.Sprintf("/rooms/%d", room.ID), badge)
-		s.Jobs.Enqueue("push", func(ctx context.Context) error {
-			err := s.Push.Send(ctx, subscription.Endpoint, subscription.Key, subscription.Auth, payload)
+		if err := s.Push.Send(ctx, subscription.Endpoint, subscription.Key, subscription.Auth, payload); err != nil {
 			if errors.Is(err, integrations.ErrPushGone) || errors.Is(err, integrations.ErrPushPoint) {
 				return s.DB.DeletePushSubscription(ctx, subscription.UserID, subscription.ID)
 			}
 			return err
-		})
+		}
 	}
+	return nil
 }

@@ -120,6 +120,9 @@ type Server struct {
 	// frame content key), the ENGINE-20 gate that lets warm sidebar requests
 	// skip room/membership/placeholder reads; see sidebar_cache.go.
 	sidebarGates sync.Map
+	// sidebarPages holds fully assembled, precompressed sidebar documents
+	// keyed by (gate version, user); see sidebar_page_cache.go.
+	sidebarPages *sidebarPageCache
 	// searchCache stores search pages keyed by (user, query, corpus,
 	// membership versions) so hits skip Search, Rooms and RecentSearches
 	// (CAMPFIRE_SEARCH_CACHE=off leaves it nil and the handler keeps the
@@ -385,7 +388,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 			readCache = nil
 		}
 	}
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), responses: newResponseCache(0), refsCache: newMessageRefsCache(refsMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, zstdPieces: zstdPieces, precomposed: precomposed, arenaOn: arenaOn, xVersion: appVersion(), xRev: revision(), readCache: readCache, searchCache: searchCache, fastdb: openFastPool(dbPath), fastRender: renderer, authFast: authFast, authCache: authCache, avatars: avatars, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), sidebarPages: newSidebarPageCache(cacheMB << 20), responses: newResponseCache(0), refsCache: newMessageRefsCache(refsMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, zstdPieces: zstdPieces, precomposed: precomposed, arenaOn: arenaOn, xVersion: appVersion(), xRev: revision(), readCache: readCache, searchCache: searchCache, fastdb: openFastPool(dbPath), fastRender: renderer, authFast: authFast, authCache: authCache, avatars: avatars, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -759,6 +762,12 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	if err := s.templates.ExecuteTemplate(b, name, p); err != nil {
 		s.fail(w, err)
 		return
+	}
+	// A full sidebar render (miss path, or a warm layout render that found
+	// no page) fills the whole-page cache under the served gate version.
+	// Flash-carrying renders are per-request state and never stored.
+	if name == "sidebar" && p.gateVersion > 0 && p.Notice == "" && p.Error == "" {
+		s.storeSidebarPage(p, b.Bytes())
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if recorded != nil {
@@ -1164,7 +1173,19 @@ func (s *Server) sidebar(w http.ResponseWriter, r *http.Request, u database.User
 	}
 	if gate, ok := s.sidebarGate(u.ID); ok && gate.version == version {
 		if frame, ok := s.fragments.get(gate.frameKey); ok {
-			s.render(w, r, "sidebar", 200, page{User: u, SidebarHTML: frame})
+			// Whole-page serve: the gate version covers every page input,
+			// so the precompressed document built for it is the page this
+			// request would render. A session flash is per-request state
+			// and never cached; requests carrying one render fresh.
+			state := browserState(r)
+			state.load()
+			if state.values["flash"] == nil {
+				if entry, ok := s.sidebarPages.get(sidebarPageKey(version, u, r.Header.Get("Turbo-Frame") != "")); ok {
+					s.serveSidebarPage(w, r, entry)
+					return
+				}
+			}
+			s.render(w, r, "sidebar", 200, page{User: u, SidebarHTML: frame, gateVersion: version})
 			return
 		}
 	}

@@ -438,3 +438,9 @@ search, 24,430 sidebar and 7,628 post message per second. Against the published
 table's shared-harness numbers that is 2.20× Rust on the room page, 2.25×
 messages, 3.29× search; sidebar (0.71×) and post message (0.85×) remain behind
 Rust under this referee and are the current targets.
+
+With the sidebar whole-page precompressed cache and the reference-shaped push
+delivery (plans/validation.md), the same referee measured sidebar at 134,692
+and post message at 8,239: 3.91× Rust on the sidebar; post is 0.92× Rust with
+the residual being the harness host's btrfs writeback ceiling shared by every
+implementation (C 7,460 – upstream Go 9,073).

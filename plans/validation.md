@@ -743,3 +743,49 @@ search 3.29×, post_message 0.85×, sidebar 0.71×. Raw:
 `/tmp/opencode/verification-go/summary.json`. The sidebar and post_message
 gaps under this referee (both were ahead on the Elixir harness) are the next
 targets; profile before changing anything.
+
+## Sidebar and post_message closing (2026-10-08, engine-v2)
+
+Same referee, same image after the two fixes below, 3 rounds of 8 s:
+
+| Route | Before | After | Rust (published) | Go upstream (published) | C (published) |
+|---|---:|---:|---:|---:|---:|
+| sidebar | 24,430 | 134,692 | 34,479 | 18,586 | 159,850 |
+| post_message | 7,628 | 8,239 | 8,998 | 9,073 | 7,460 |
+
+### Sidebar: whole-page precompressed cache
+
+Profile (page under this referee, gzip, gate-hit steady state): gzip level-6
+of the 29.7 KB page 38%, layout template walk/eval 15%, weak-ETag sha256 8%,
+syscalls 6% — the frame was cached but the layout was re-rendered and the
+whole page re-compressed per request. Fix (`internal/web/sidebar_page_cache.go`):
+the gate version (which every sidebar-visible write — user/account rows,
+custom styles, room/membership state — bumps) keys the complete assembled
+document, stored gzip-compressed with the front compressor's own parameters
+(level 6, OS=3, no MTIME, byte-identical to a fresh stream) plus the plain
+body and the weak validator. A warm request (gate hit, frame hit, no session
+flash) serves the bytes with no template execution and no compression; the
+user-row markers the layout renders are part of the key, so direct SQL on
+users still changes the page (the account side carries the same version-only
+limit the read cache documents). Turbo-Frame requests key separately (frame
+shell) and flash-carrying requests render fresh and are never stored. Served
+bytes are byte-identical across identity/gzip/conditional requests, pinned by
+tests and by the referee's cross-request equality check (0 failures).
+
+### Post message: reference-shaped push delivery
+
+Profile (this referee, btrfs seed): the request path ran the whole web-push
+chain synchronously in `messageCreated` — `PushRecipients` (~5%),
+`UnreadCount` per subscriber (~2%) and the job enqueues — while the reference
+runs `Room::PushMessageJob` (`reference/app/jobs/room/push_message_job.rb`)
+off the request. Fix: the recipient/badge/delivery chain moved into one
+"push" job per message; the request keeps the unread cable pings, exactly the
+reference's split. The remaining post gap is the shared filesystem ceiling:
+the referee's harness data lives on btrfs (zstd, COW). Measured on the same
+seed and machine, post_message on tmpfs does 12,157 rps (this app) and 9,529
+(Rust reference); on btrfs 6.9–8.6K (this app, run-to-run) and 6,650 (Rust).
+Every implementation lands in a ~20% band (C 7,460, Rust 8,998, upstream Go
+9,073) that is the btrfs writeback of schema-mandated WAL frames (~11.7
+4 KB frames per post — room/membership/sqlite_sequence/FTS leaf pages), not
+an app cost; no further change forced. Raw: `/tmp/opencode/vg-postfix/` and
+`/tmp/opencode/vg-full/`.
