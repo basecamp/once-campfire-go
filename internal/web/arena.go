@@ -198,6 +198,8 @@ func releaseResponseBuffer(b *responseBuffer) {
 	b.precomposed = false
 	b.recordedEtag = nil
 	b.recordedStatus = 0
+	b.server = nil
+	b.wireEncoding = ""
 	responseBufferPool.Put(b)
 }
 

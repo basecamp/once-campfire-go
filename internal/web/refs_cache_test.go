@@ -104,6 +104,9 @@ func TestMessageRefsVersionsBumpOnWrites(t *testing.T) {
 // and every write helper invalidates the window (next read is a miss again)
 // and changes the served validator.
 func TestMessageRefsCacheInvalidation(t *testing.T) {
+	// The refs cache under test sits below the whole-response cache (which
+	// would serve warm without consulting it); exercise the refs path itself.
+	t.Setenv("CAMPFIRE_RESPONSE_CACHE_MB", "0")
 	app, server, cookie, user := testApp(t)
 	ctx := context.Background()
 	rooms, err := app.DB.Rooms(ctx, user.ID)

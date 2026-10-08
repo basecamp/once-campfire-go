@@ -51,13 +51,18 @@ func parseRecordedPieces(raw string) (enabled, valid bool) {
 
 type Server struct {
 	fragments *fragmentCache
-	// responses is upstream's completed-response cache layer (e3a1309): an
-	// unconditional cache of whole HTML responses for the four page routes.
-	// It duplicates our piece/refs/shell/search/sidebar caches byte for byte,
-	// so it is created budget-zero (unwired) and never stores; the requests
-	// use the finer-grained engine caches. The per-request generation
-	// observation inside beginResponseCache (ef00d84) IS wired: fragmentKey
-	// namespaces the message fragment and piece caches by it.
+	// responses is upstream's completed-response cache layer (e3a1309 / the
+	// C port's 64 MiB response-body cache): whole HTML responses for the room
+	// and messages-page routes, keyed by the observed database generation,
+	// the authenticated user and the request's byte-producing inputs. A warm
+	// request re-checks the session and then serves the stored body — no
+	// message reads, no template execution, no per-request compression or
+	// assembly — exactly the shape of the C reference's cache hits. It sits
+	// above the finer-grained engine caches (pieces, refs, search), which
+	// still serve the miss path under writes; search and sidebar keep their
+	// own warm paths (see beginResponseCache). The single-process observation
+	// limit is the same generation gate the fragment and piece caches carry
+	// (README.md).
 	responses *responseCache
 	// fastRender is the compiled message-fragment renderer (ENGINE-32). nil
 	// when CAMPFIRE_FAST_RENDER=off or the fragment compile failed; messageViews
@@ -376,6 +381,15 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 		}
 	}
 	slog.Info("request arena", "enabled", arenaOn)
+	// CAMPFIRE_RESPONSE_CACHE_MB sizes the whole-response cache (upstream
+	// e3a1309, CAMPFIRE_RESPONSE_CACHE_MB in the published topology defaults
+	// to 64 MiB). 0 disables storage; every lookup misses and the requests
+	// use the finer-grained engine caches, byte-identical.
+	responseBytes, err := responseCacheBudget()
+	if err != nil {
+		return nil, fmt.Errorf("invalid CAMPFIRE_RESPONSE_CACHE_MB: %w", err)
+	}
+	slog.Info("response cache", "enabled", responseBytes > 0, "bytes", responseBytes)
 	// CAMPFIRE_READ_CACHE turns the ENGINE-43/44 read caches on (default) or
 	// off; off is the uncached fastdb/database/sql reads, byte-identical.
 	readCache := newReadCache(8 << 20)
@@ -388,7 +402,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 			readCache = nil
 		}
 	}
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), sidebarPages: newSidebarPageCache(cacheMB << 20), responses: newResponseCache(0), refsCache: newMessageRefsCache(refsMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, zstdPieces: zstdPieces, precomposed: precomposed, arenaOn: arenaOn, xVersion: appVersion(), xRev: revision(), readCache: readCache, searchCache: searchCache, fastdb: openFastPool(dbPath), fastRender: renderer, authFast: authFast, authCache: authCache, avatars: avatars, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), sidebarPages: newSidebarPageCache(cacheMB << 20), responses: newResponseCache(responseBytes), refsCache: newMessageRefsCache(refsMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, zstdPieces: zstdPieces, precomposed: precomposed, arenaOn: arenaOn, xVersion: appVersion(), xRev: revision(), readCache: readCache, searchCache: searchCache, fastdb: openFastPool(dbPath), fastRender: renderer, authFast: authFast, authCache: authCache, avatars: avatars, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -456,6 +470,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		defer releaseRequestArena(arena)
 		buffered := borrowResponseBuffer(w, arena)
+		buffered.server = s
 		// ENGINE-49 writer gate: when the chain ends in a writer that takes
 		// precomposed responses and the flags are on, the fixed security and
 		// recorded headers skip the http.Header map entirely (they live in
@@ -467,6 +482,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer func() { buffered.finish(r) }()
 	}
 	w, r = s.withBrowserSession(w, r)
+	// The completed-response cache round starts here (upstream e3a1309): the
+	// observed generation is captured and the request's cacheability decided
+	// before any read, so a warm hit serves the stored page from inside the
+	// handler. Only the room and messages-page endpoints qualify; everything
+	// else (sidebar and search included — each has its own whole-page or
+	// result cache) does no extra work.
+	s.beginResponseCache(r)
 	state := browserState(r)
 	defer releaseBrowserSession(state)
 	defer releaseSessionWriter(w.(*sessionWriter))
@@ -1042,6 +1064,16 @@ func viewMessages(messages []database.Message) []messageView {
 	return result
 }
 func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
+	// A warm response-cache hit serves the stored page before any database
+	// read: the key covers version, user and request inputs, and the session
+	// was re-checked by auth. The remembered-room cookie is per-request state
+	// and set fresh either way (the id is the same path segment the fresh
+	// room read would parse).
+	if hit := s.responseHit(r); hit != nil {
+		s.rememberRoom(w, r, strconv.FormatInt(roomID(r), 10))
+		s.serveCached(hit, w, r)
+		return
+	}
 	room, messages, view, invitation, err := s.roomData(r, u)
 	if err != nil {
 		s.roomLookupFailure(w, r, err)
@@ -1052,6 +1084,10 @@ func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
 	s.render(w, r, "room", 200, page{Invitation: invitation, Stream: s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)), Title: room.Name, User: u, Room: room, Messages: viewMessages(messages)})
 }
 func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.User) {
+	if hit := s.responseHit(r); hit != nil {
+		s.serveCached(hit, w, r)
+		return
+	}
 	messages, validator, err := s.messageData(r, u)
 	if err != nil {
 		s.fail(w, err)
@@ -1221,6 +1257,13 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 			s.searchCache.purgeUser(u.ID)
 		}
 		http.Redirect(w, r, "/searches", 302)
+		return
+	}
+	// A warm response-cache hit serves the stored page — only the room and
+	// messages-page routes take part; search renders fresh (the search result
+	// cache serves its warm shape; see beginResponseCache).
+	if hit := s.responseHit(r); hit != nil {
+		s.serveCached(hit, w, r)
 		return
 	}
 	if s.searchCache != nil {

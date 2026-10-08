@@ -430,6 +430,24 @@ func (s *Server) writeRecordedPieces(w http.ResponseWriter, r *http.Request, sta
 	case "zstd":
 		encodingTag, wireEncoding = encodeZstd, "zstd"
 	}
+	if buffered != nil {
+		// The response cache keys on the final wire coding; the framed path
+		// never touches the header map (which feeds the response cache and
+		// the front middleware's encoding pass-through), so the buffer
+		// carries it.
+		buffered.wireEncoding = wireEncoding
+	}
+	// The front middleware (gzipResponse) decides pass-through from the
+	// header map. On the framed path the map is not emitted, so setting the
+	// coding here changes nothing on the wire, but a missing Content-Encoding
+	// makes the middleware start its own gzip writer over a pre-encoded body:
+	// at close it writes a lone gzip header after the recorded response,
+	// which trips the owned loop's Content-Length guard and kills the
+	// keep-alive connection. The map path already sets it before emission;
+	// this makes the framed path behave identically for middleware.
+	if wireEncoding != "" {
+		h.Set("Content-Encoding", wireEncoding)
+	}
 	var etagDigest *[32]byte
 	if h.Get("ETag") == "" {
 		variantKey := variantKeyDigest(shell.identity, payload.Digest, encodingTag)

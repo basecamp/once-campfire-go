@@ -46,6 +46,15 @@ type responseBuffer struct {
 	// arena is the per-request block the recorded path carves its head
 	// scratch and body from; nil when the arena path is off.
 	arena *requestArena
+	// server is the owning application, wired by ServeHTTP on borrow; nil for
+	// test writers that don't participate in the response cache. It lets
+	// finish store the completed response in the whole-response cache
+	// (response_cache.go) before the bytes are emitted.
+	server *Server
+	// wireEncoding names the response's final content coding as decided by
+	// writeRecordedPieces: "" (identity) or "gzip". zstd-coded responses never
+	// enter the response cache. The legacy recorded path leaves it empty.
+	wireEncoding string
 	// framed is the writer-side precomposed gate: the response buffer sits on
 	// a writer chain that ends in a precomposedReceiver (fastserve) and the
 	// precomposed/arena flags are on. When framed, the fixed security and
@@ -96,6 +105,15 @@ func (w *responseBuffer) finish(r *http.Request) {
 	}
 	if w.status == 0 {
 		w.status = 200
+	}
+	// The completed-response cache stores the wire body before emission, so
+	// the store sees exactly the bytes (and the final header state) the
+	// request is about to receive — on the framed path and the map path
+	// alike. It runs after the status settles and before the notModified
+	// emission below so that conditional requests never fill, and before the
+	// precomposed branch so framed responses store too.
+	if w.server != nil {
+		w.server.cacheResponse(r, w)
 	}
 	// The precomposed path emits the recorded head and body directly to the
 	// owned writer; every header is already in the head block, so the map

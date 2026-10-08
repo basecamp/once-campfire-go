@@ -231,6 +231,22 @@ text, author, boosts) hydrate exactly where they always did, on a per-message fr
 which also keeps the around/after pages on the same hydration path the before pages always used.
 The cache is bounded by bytes and by 4096 entries, pruned oldest-first to 75% of the budget like
 the fragment cache; a single window never exceeds a quarter of the budget.
+`CAMPFIRE_RESPONSE_CACHE_MB` sizes the whole-response cache (default 64, the published topology of the
+C reference's response-body cache; `0` disables storage and every lookup misses, leaving the
+finer-grained caches below in charge — byte-identical). It stores the completed HTML responses of the
+room and messages-page routes — the exact wire bytes a fresh render produced (the assembled gzip
+member for gzip clients, the joined pieces for identity clients) with their entity headers. A
+warm request re-checks the session and the observed database generation, then serves the stored body:
+no message reads, no template execution, no per-request compression or assembly. The key covers the
+generation (`PRAGMA data_version` on the pinned reader), the authenticated user, the request URI and
+form, the identity headers (cookie, Accept, Turbo-Frame, user agent, origin), the negotiated encoding
+and the process revision, so a hit is byte-identical to a fresh render by construction and a commit —
+local or external — moves the generation and misses. A session flash renders fresh and never stores.
+Search and sidebar are served by their own warm caches (the search result cache and the sidebar
+whole-page cache) rather than this one: the response-cache round measured slower than those paths.
+Entries are LRU, pruned to fit the budget, and a single entry is capped at an eighth of it. The
+single-process observation limit is the same generation gate the fragment and piece caches carry:
+writes are observed by generation alone and an un-audited write is picked up on restart, not live.
 `CAMPFIRE_FAST_RENDER` (default `on`; also accepts `true`/`1` and `off`/`false`/`0`, warning on anything else) compiles the `message-uncached` fragment — with
 its `message-actions`, `presentation`, `boosts` and `boost` partials — once at startup into a flat
 program of literal and field ops (`internal/web/fastrender.go`): the compiled renderer appends the
@@ -264,6 +280,11 @@ net/http server). `CAMPFIRE_SERVER_LOOP` (default `on`; accepts `on`/`true`/`1` 
 rolls that listener back to net/http with `off`. The public listeners never use the owned loop. Its
 deliberate HTTP differences from net/http and its verification limits are recorded in
 `plans/engine-41.md`; the ENGINE-53 measurement that made it the default is in the same file.
+The recorded-response path sets the negotiated `Content-Encoding` in the header map before emission
+even on the precomposed-framed path (where the map never reaches the wire), so the front middleware
+passes a pre-encoded body through instead of starting its own gzip member after it — a lone gzip
+header emitted at close had tripped the owned loop's Content-Length guard and ended the keep-alive
+connection after every framed gzip response.
 
 ## Validation
 

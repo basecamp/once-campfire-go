@@ -1194,6 +1194,10 @@ func TestRecordedPiecesFlagParsing(t *testing.T) {
 // incrementing the fallback counter each time but warning only once.
 func TestRecordedPiecesShellSplitFallback(t *testing.T) {
 	t.Setenv("CAMPFIRE_FROZEN_TIME", "2026-01-02T03:04:05Z")
+	// The split-fallback path under test sits below the whole-response cache
+	// (which would serve the tombstoned page warm); exercise the piece path
+	// itself.
+	t.Setenv("CAMPFIRE_RESPONSE_CACHE_MB", "0")
 	var logs bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
