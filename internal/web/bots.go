@@ -52,7 +52,7 @@ func (s *Server) botRequest(w http.ResponseWriter, r *http.Request) bool {
 			s.requestAuthentication(w, r)
 			return true
 		}
-	} else if r.Method != "GET" && r.Method != "HEAD" && !s.sameOrigin(r) {
+	} else if r.Method != "GET" && r.Method != "HEAD" && !s.browserWriteAllowed(r) {
 		http.Error(w, "Invalid request origin", 422)
 		return true
 	}

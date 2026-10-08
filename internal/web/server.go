@@ -268,18 +268,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.routeHTTP(w, r)
 		return
 	}
-	if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
+	if r.Method != "GET" && r.Method != "HEAD" {
 		limit := int64(MaxBody)
 		if multipartBoundary(r) != "" {
 			limit = maxMultipartBody
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
-		if !s.sameOrigin(r) {
-			http.Error(w, "Invalid request origin", 422)
-			return
-		}
+		// The disk PUT authenticates a session and a signed upload capability;
+		// direct-upload creation and every other browser write use Fetch Metadata.
 		if r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/rails/active_storage/disk/") {
 			s.routeHTTP(w, r)
+			return
+		}
+		if !s.browserWriteAllowed(r) {
+			http.Error(w, "Invalid request origin", 422)
 			return
 		}
 		if err := r.ParseForm(); err != nil {
@@ -336,6 +338,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	normalizeScalarParams(r)
 	s.routeHTTP(w, r)
+}
+
+// Matches Rust's token-free unsafe-request policy. An explicitly empty header is
+// malformed, not the plain-HTTP compatibility case where the header is absent.
+func (s *Server) browserWriteAllowed(r *http.Request) bool {
+	if values, provided := r.Header["Origin"]; provided && (len(values) == 0 || values[0] != s.origin(r)) {
+		return false
+	}
+	values, provided := r.Header["Sec-Fetch-Site"]
+	if !provided {
+		return !s.Secure && !s.requestHTTPS(r)
+	}
+	return len(values) > 0 && (values[0] == "same-origin" || values[0] == "same-site")
 }
 
 func (s *Server) sameOrigin(r *http.Request) bool {

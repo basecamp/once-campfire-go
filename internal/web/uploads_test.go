@@ -189,3 +189,51 @@ func TestMessageImageUploadAndVariant(t *testing.T) {
 		t.Fatalf("search attachment: %s %s", response.Status, data)
 	}
 }
+
+func TestSignedDiskUploadCapabilityDoesNotRequireFetchMetadata(t *testing.T) {
+	app, server, cookie, _ := testApp(t)
+	content := "signed upload capability"
+	sum := md5.Sum([]byte(content))
+	raw, _ := json.Marshal(map[string]any{"blob": map[string]any{"filename": "capability.txt", "content_type": "text/plain", "byte_size": len(content), "checksum": base64.StdEncoding.EncodeToString(sum[:])}})
+	response, body := perform(t, server, "POST", "/rails/active_storage/direct_uploads", "application/json", bytes.NewReader(raw), cookie)
+	if response.StatusCode != 200 {
+		t.Fatalf("create upload: %d %s", response.StatusCode, body)
+	}
+	var created struct {
+		Direct struct {
+			URL string `json:"url"`
+		} `json:"direct_upload"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatal(err)
+	}
+	for _, control := range []struct {
+		name, data              string
+		authenticated, tampered bool
+		status                  int
+	}{
+		{"signed capability", content, true, false, 204},
+		{"requires session", content, false, false, 401},
+		{"rejects tampered signature", content, true, true, 404},
+		{"rejects changed checksum", strings.Repeat("x", len(content)), true, false, 422},
+	} {
+		t.Run(control.name, func(t *testing.T) {
+			url := created.Direct.URL
+			if control.tampered {
+				url += "bad"
+			}
+			r := httptest.NewRequest("PUT", url, strings.NewReader(control.data))
+			r.Header.Set("Content-Type", "text/plain")
+			r.Header.Set("Origin", "https://other.test")
+			r.Header.Set("Sec-Fetch-Site", "cross-site")
+			if control.authenticated {
+				r.AddCookie(cookie)
+			}
+			w := httptest.NewRecorder()
+			app.ServeHTTP(w, r)
+			if w.Code != control.status {
+				t.Fatalf("got %d want %d: %s", w.Code, control.status, w.Body.String())
+			}
+		})
+	}
+}

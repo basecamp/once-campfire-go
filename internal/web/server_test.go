@@ -126,10 +126,113 @@ func TestOriginPolicy(t *testing.T) {
 	}{{false, "", "", true}, {true, "", "", false}, {true, "same-origin", "https://chat.test", true}, {true, "same-site", "https://evil.test", false}, {false, "cross-site", "", false}, {false, "same-origin", "null", false}} {
 		s := &Server{Secure: c.secure}
 		r := httptest.NewRequest("POST", "http://chat.test/session", nil)
-		r.Header.Set("Sec-Fetch-Site", c.site)
-		r.Header.Set("Origin", c.origin)
-		if got := s.sameOrigin(r); got != c.want {
+		if c.site != "" {
+			r.Header.Set("Sec-Fetch-Site", c.site)
+		}
+		if c.origin != "" {
+			r.Header.Set("Origin", c.origin)
+		}
+		if got := s.browserWriteAllowed(r); got != c.want {
 			t.Errorf("%+v: %v", c, got)
 		}
+	}
+}
+
+func TestFetchMetadataCanonicalPolicyAndProxyHTTPS(t *testing.T) {
+	for _, secure := range []bool{false, true} {
+		for _, scheme := range []string{"http", "https"} {
+			for _, site := range []string{"absent", "", "same-origin", "same-site", "cross-site", "none", "bogus", "Same-Origin"} {
+				for _, proxy := range []bool{false, true} {
+					s := &Server{Secure: secure}
+					r := httptest.NewRequest("POST", scheme+"://chat.test/session", nil)
+					if proxy {
+						r.Header.Set("X-Forwarded-Proto", "https")
+						r.Header.Set("X-Forwarded-Host", "public.test")
+					}
+					if site != "absent" {
+						r.Header.Set("Sec-Fetch-Site", site)
+					}
+					want := site == "same-origin" || site == "same-site" || site == "absent" && !secure && scheme == "http" && !proxy
+					if got := s.browserWriteAllowed(r); got != want {
+						t.Errorf("secure=%v scheme=%s site=%q proxy=%v: got %v want %v", secure, scheme, site, proxy, got, want)
+					}
+					for _, origin := range []string{s.origin(r), "null", "", "https://evil.test", s.origin(r) + "/"} {
+						r.Header.Set("Origin", origin)
+						if got := s.browserWriteAllowed(r); got != (want && origin == s.origin(r)) {
+							t.Errorf("origin=%q site=%q scheme=%s secure=%v proxy=%v: %v", origin, site, scheme, secure, proxy, got)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestFetchMetadataRejectsUnsafeRoutesBeforeSideEffects(t *testing.T) {
+	app, _, cookie, _ := testApp(t)
+	for _, route := range []struct{ method, path string }{
+		{"POST", "/session"}, {"POST", "/first_run"}, {"POST", "/users"},
+		{"PATCH", "/session/transfers/invalid"}, {"POST", "/rails/active_storage/direct_uploads"},
+		{"PATCH", "/account"}, {"DELETE", "/session"}, {"OPTIONS", "/session"},
+	} {
+		for _, auth := range []bool{false, true} {
+			for _, site := range []string{"cross-site", "none", "invalid", ""} {
+				r := httptest.NewRequest(route.method, "http://chat.test"+route.path, strings.NewReader("authenticity_token=old-tab-token"))
+				r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				r.Header.Set("Sec-Fetch-Site", site)
+				if auth {
+					r.AddCookie(cookie)
+				}
+				w := httptest.NewRecorder()
+				app.ServeHTTP(w, r)
+				if w.Code != 422 {
+					t.Errorf("%s %s auth=%v site=%q: %d", route.method, route.path, auth, site, w.Code)
+				}
+			}
+		}
+	}
+}
+
+func TestTokenBearingOldTabsStillWriteWithFetchMetadata(t *testing.T) {
+	app, _, cookie, user := testApp(t)
+	rooms, err := app.DB.Rooms(context.Background(), user.ID)
+	if err != nil || len(rooms) == 0 {
+		t.Fatal(err)
+	}
+	body := "authenticity_token=old-tab-token&message%5Bbody%5D=old+tab+still+writes"
+	r := httptest.NewRequest("POST", fmt.Sprintf("http://chat.test/rooms/%d/messages", rooms[0].ID), strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("Accept", "*/*")
+	r.Header.Set("Origin", "http://chat.test")
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	r.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	app.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("old tab write: %d %s", w.Code, w.Body.String())
+	}
+	messages, err := app.DB.Messages(context.Background(), rooms[0].ID, 0)
+	if err != nil || len(messages) == 0 {
+		t.Fatal(err)
+	}
+	if !strings.Contains(w.Body.String(), "old tab still writes") {
+		t.Fatal("accepted write must return persisted message")
+	}
+}
+
+func TestBotKeyPathDoesNotExemptSessionCookieWrites(t *testing.T) {
+	app, _, cookie, user := testApp(t)
+	rooms, err := app.DB.Rooms(context.Background(), user.ID)
+	if err != nil || len(rooms) == 0 {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("POST", fmt.Sprintf("http://chat.test/rooms/%d/not-a-bot-key/messages", rooms[0].ID), strings.NewReader("body=forged"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	r.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	app.ServeHTTP(w, r)
+	if w.Code != 422 {
+		t.Fatalf("session cookie on bot route bypassed policy: %d", w.Code)
 	}
 }

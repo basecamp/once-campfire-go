@@ -116,6 +116,12 @@ See [`bench/`](bench/) for benchmark tooling and earlier measurements.
 
 ## Known differences
 
+Browser writes use Rust’s token-free Fetch Metadata policy: exact `same-origin` or
+`same-site`, a matching Origin when provided, and absent metadata only on plain
+HTTP with TLS disabled. Signed disk uploads retain their authenticated capability
+exemption; bot-key endpoints exempt authenticated bots only.
+
+
 - Session-transfer auto-submit forms explicitly close their form tag; the pinned Rails
   reference omitted it.
 - Background sidebar refreshes preserve an open New Ping form and selected recipients.
