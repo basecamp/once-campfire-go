@@ -92,14 +92,15 @@ func TestLatestWindowAndGenerations(t *testing.T) {
 	if err = d.Presence(ctx, user.ID, room, "refresh"); err != nil {
 		t.Fatal(err)
 	}
-	if again, againContent := d.UserGeneration(user.ID); again != userGen || againContent != content {
-		t.Fatalf("refresh bumped generations: %d/%d -> %d/%d", userGen, content, again, againContent)
+	refreshedUser, refreshedContent := d.UserGeneration(user.ID)
+	if refreshedUser != userGen || refreshedContent == content {
+		t.Fatalf("refresh should bump only the content generation: %d/%d -> %d/%d", userGen, content, refreshedUser, refreshedContent)
 	}
 	if err = d.Presence(ctx, user.ID, room, "present"); err != nil {
 		t.Fatal(err)
 	}
-	if again, againContent := d.UserGeneration(user.ID); again != userGen+1 || againContent != content {
-		t.Fatalf("present should bump only the user generation: %d/%d -> %d/%d", userGen, content, again, againContent)
+	if again, againContent := d.UserGeneration(user.ID); again != userGen+1 || againContent == refreshedContent {
+		t.Fatalf("present should bump the user and content generations: %d/%d -> %d/%d", userGen, refreshedContent, again, againContent)
 	}
 }
 

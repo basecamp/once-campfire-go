@@ -180,3 +180,45 @@ func TestForeignCommitBetweenSampleAndBeginRefillsWindow(t *testing.T) {
 		t.Fatalf("window missed an interleaved message: %+v", window)
 	}
 }
+
+func TestForeignRenameAfterCommitBumpsContentGeneration(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	user, err := d.Setup(ctx, "David", "david@example.test", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rooms, err := d.Rooms(ctx, user.ID)
+	if err != nil || len(rooms) != 1 {
+		t.Fatal(rooms, err)
+	}
+	room := rooms[0].ID
+	before := d.ContentGeneration()
+	other := openExternal(t, d)
+	d.afterCommit = func() {
+		if _, err := other.Exec(`UPDATE rooms SET name=? WHERE id=?`, "Renamed Outside", room); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { d.afterCommit = nil }()
+	if err = d.Presence(ctx, user.ID, room, "refresh"); err != nil {
+		t.Fatal(err)
+	}
+	after := d.ContentGeneration()
+	if after == before {
+		t.Fatal("post-commit foreign rename left the content generation unchanged")
+	}
+	if again := d.ContentGeneration(); again != after {
+		t.Fatalf("foreign rename was not covered by the post-commit sample: %d -> %d", after, again)
+	}
+	visible, err := d.Rooms(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range visible {
+		if candidate.ID == room && candidate.Name == "Renamed Outside" {
+			return
+		}
+	}
+	t.Fatalf("room kept the old name: %+v", visible)
+}

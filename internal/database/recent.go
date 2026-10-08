@@ -113,11 +113,9 @@ func (d *DB) lockedVersion(ctx context.Context) (uint32, error) {
 
 // finishExternal runs after our commit. The watcher also moves for that
 // commit, and a foreign commit after the lock drops can collapse into the
-// same observation, so a changed version is not "only our write". Drop the
-// warm window and the account row so noteCreate cannot extend a page that
-// missed a foreign row. Leave the content generation alone: presence must
-// not invalidate sidebar HTML. A foreign membership change in this
-// post-commit gap is acknowledged without a generation bump.
+// same observation. A version other than the in-lock origin is therefore
+// not "only our write": drop the content generation as well as the window
+// and the account row. Sidebar and search HTML are keyed by that generation.
 func (d *DB) finishExternal(ctx context.Context, origin uint32) {
 	version, err := d.dataVersion(ctx)
 	s := d.state()
@@ -138,10 +136,7 @@ func (d *DB) finishExternal(ctx context.Context, origin uint32) {
 		s.have = true
 		return
 	}
-	s.epoch++
-	s.rooms = map[int64][]Message{}
-	s.hasAcct = false
-	s.account = Account{}
+	s.dropLocked()
 	s.seen = version
 	s.have = true
 }

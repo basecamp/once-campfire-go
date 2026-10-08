@@ -35,6 +35,9 @@ type DB struct {
 	// betweenObserve runs after the pre-lock data_version sample and before
 	// BEGIN. Tests commit on another connection in that gap.
 	betweenObserve func()
+	// afterCommit runs after COMMIT returns and before the watcher is read.
+	// Tests commit on another connection in that gap.
+	afterCommit func()
 }
 
 func Open(path string, readers int) (*DB, error) {
@@ -153,6 +156,9 @@ func (d *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {
 	}
 	if err = tx.Commit(); err != nil {
 		return err
+	}
+	if d.afterCommit != nil {
+		d.afterCommit()
 	}
 	d.finishExternal(ctx, origin)
 	return nil
