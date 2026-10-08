@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
@@ -307,7 +308,12 @@ func TestFastRenderBroadcast(t *testing.T) {
 		t.Fatalf("unexpected turbo-stream shape:\n%s", published)
 	}
 	fragment := published[len(head) : len(published)-len(tail)]
-	// The same fragment must come out of messageViews -> fastrender.
+	// The same fragment must come out of messageViews -> fastrender. Since
+	// the observed-generation namespacing and origin-scoped fragments were
+	// adopted, a fragment stored under one request's (generation, host,
+	// origin) is only served to a request with the same metadata; a bare
+	// background context renders the example.org fallback origin instead, so
+	// the comparison carries the same request metadata the POST had.
 	created, err := app.DB.Messages(ctx, room.ID, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -315,7 +321,15 @@ func TestFastRenderBroadcast(t *testing.T) {
 	if len(created) == 0 {
 		t.Fatal("no message created")
 	}
-	views, err := app.messageViews(ctx, []database.Message{created[len(created)-1]})
+	version, err := app.DB.ResponseVersion(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	comparison := httptest.NewRequest("GET", "/", nil)
+	info := &requestInfo{host: strings.TrimPrefix(server.URL, "http://"), origin: server.URL, databaseVersion: version}
+	comparison = comparison.WithContext(context.WithValue(comparison.Context(), requestInfoKey{}, info))
+	comparison = comparison.WithContext(context.WithValue(comparison.Context(), requestOriginKey{}, info.origin))
+	views, err := app.messageViews(comparison.Context(), []database.Message{created[len(created)-1]})
 	if err != nil {
 		t.Fatal(err)
 	}

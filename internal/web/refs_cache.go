@@ -62,12 +62,10 @@ type messageRefsKey struct {
 // copy. key rides on the entry so an eviction is O(1), the same arrangement
 // fragmentEntry uses.
 type messageRefsEntry struct {
-	key       messageRefsKey
-	refs      []database.Message
-	etag      string
-	etagFrame string
-	modified  time.Time
-	bytes     int
+	key   messageRefsKey
+	refs  []database.Message
+	etag  string
+	bytes int
 }
 
 // messageRefsCache is a byte- and entry-bounded LRU of reference windows,
@@ -118,17 +116,15 @@ func (c *messageRefsCache) store(key messageRefsKey, refs []database.Message, va
 	if c == nil {
 		return
 	}
-	size := 240 + 40*len(refs) + len(validator.etag) + len(validator.etagFrame)
+	size := 240 + 40*len(refs) + len(validator.etag)
 	if size > c.limit/4 {
 		return
 	}
 	entry := messageRefsEntry{
-		key:       key,
-		refs:      make([]database.Message, len(refs)),
-		etag:      validator.etag,
-		etagFrame: validator.etagFrame,
-		modified:  validator.modified,
-		bytes:     size,
+		key:   key,
+		refs:  make([]database.Message, len(refs)),
+		etag:  validator.etag,
+		bytes: size,
 	}
 	for i := range refs {
 		entry.refs[i] = database.Message{ID: refs[i].ID, RoomID: refs[i].RoomID, UpdatedAt: refs[i].UpdatedAt}
@@ -158,41 +154,35 @@ func (c *messageRefsCache) store(key messageRefsKey, refs []database.Message, va
 // messageValidator carries the messages page's conditional-GET validator,
 // precomputed from the cached references. The zero value is not usable.
 type messageValidator struct {
-	etag      string
-	etagFrame string
-	modified  time.Time
+	etag string
 }
 
 // apply writes the validator headers and reports whether the request is
-// conditionally fresh (a 304 was written) — the exact contract the removed
-// per-request messageFreshness served: the same ETag (frame variant selected
-// by the Turbo-Frame header), Last-Modified, Cache-Control, and the same
-// notModified precedence of If-None-Match over If-Modified-Since.
+// conditionally fresh (a 304 was written). Since upstream b345ea4 the
+// rendered representation — including related users and boosts — defines
+// freshness: the page carries no Last-Modified (timestamps alone miss
+// external edits and association changes) and If-Modified-Since cannot 304
+// it, only the ETag comparison can.
 func (v messageValidator) apply(w http.ResponseWriter, r *http.Request) bool {
 	etag := v.etag
-	if r.Header.Get("Turbo-Frame") != "" {
-		etag = v.etagFrame
-	}
 	h := w.Header()
 	h.Set("ETag", etag)
-	h.Set("Last-Modified", v.modified.UTC().Format(http.TimeFormat))
 	h.Set("Cache-Control", "max-age=0, private, must-revalidate")
-	return notModified(w, r, etag, v.modified)
+	return notModified(w, r, etag, time.Time{})
 }
 
 // messageValidatorOf precomputes the messages-page validator from message
 // references. The digest input is built exactly as conditional.go's former
 // messageFreshness built it — per message "messages/<id>-<stamp without
-// dots>", joined with "/", suffixed "/messages/index" plus "/frame" when a
-// Turbo-Frame header is present — so the cached validator is byte-for-byte
-// what the per-request rebuild produced, minus the rebuilding.
+// dots>", joined with "/", suffixed "/messages/index" — so the cached
+// validator is byte-for-byte what the per-request rebuild produced, minus the
+// rebuilding. Only the ETag survives that contract: the Last-Modified branch
+// and the Turbo-Frame variant were removed with messageFreshness (b345ea4 —
+// the rendered representation defines freshness, and this page's rendered
+// frame equals its document).
 func messageValidatorOf(refs []database.Message) messageValidator {
 	var parts strings.Builder
-	var modified time.Time
 	for _, m := range refs {
-		if m.UpdatedAt.After(modified) {
-			modified = m.UpdatedAt
-		}
 		parts.WriteString("messages/")
 		parts.WriteString(strconv.FormatInt(m.ID, 10))
 		parts.WriteByte('-')
@@ -202,7 +192,5 @@ func messageValidatorOf(refs []database.Message) messageValidator {
 	prefix := strings.TrimSuffix(parts.String(), "/")
 	var v messageValidator
 	v.etag = weakETag(sha256.Sum256([]byte(prefix + "/messages/index")))
-	v.etagFrame = weakETag(sha256.Sum256([]byte(prefix + "/frame/messages/index")))
-	v.modified = modified
 	return v
 }

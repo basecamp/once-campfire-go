@@ -394,6 +394,13 @@ and `bench/results/final4-native-20261007/`.
   Room pages also cache their surrounding HTML keyed by fresh page data, inserting the current
   messages and refresh timestamp on every request. Responses assemble cached message bytes with fresh page HTML and derive validators from part
   lengths and hashes, so ETag values differ from both the original Go implementation and Rust.
+- Message and message-list fragments carry the observed database generation and the request
+  host/origin in their cache keys (a dedicated pinned SQLite reader observes local and foreign
+  commits, `PRAGMA data_version`), so external edits without timestamp changes and
+  host-dependent rich-text filtering are reflected in the caches without manual invalidation.
+- Message pagination uses its complete rendered body for its ETag, including related-user and
+  boost changes. It omits Last-Modified because message timestamps cannot describe external
+  presentation edits.
 - The front answers `/up` from a fixed-response table (`CAMPFIRE_FRONT_FIXED`, default `on`;
   same value shapes and warning policy as the other switches): the first unconditional GET
   captures the health response once per content encoding (identity and gzip) and later

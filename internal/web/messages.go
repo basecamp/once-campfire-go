@@ -136,7 +136,7 @@ func (s *Server) messageViews(ctx context.Context, messages []database.Message) 
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		key := messageCacheKey(views[i].Message)
+		key := s.fragmentKey(ctx, messageCacheKey(views[i].Message))
 		if html, ok := s.fragments.get(key); ok {
 			views[i].Fragment = html
 		} else if s.fastRender != nil {

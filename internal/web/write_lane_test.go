@@ -190,8 +190,12 @@ func TestCreateMessageStatementCount(t *testing.T) {
 	if response.StatusCode != 406 {
 		t.Fatalf("post status %d body=%s, want 406-by-negotiation", response.StatusCode, data)
 	}
-	if got := count(); got != 12 {
-		t.Fatalf("POST /messages statements = %d, want 12\n%s", got, dump())
+	// 13 = 12 request statements + the PRAGMA data_version generation
+	// observation on the pinned version connection (one read per request,
+	// adopted from upstream ef00d84 to namespace the caches by observed
+	// commits).
+	if got := count(); got != 13 {
+		t.Fatalf("POST /messages statements = %d, want 13 (12 + generation PRAGMA)\n%s", got, dump())
 	}
 }
 
@@ -261,8 +265,10 @@ func TestCreateMessageFastWriteStatementCount(t *testing.T) {
 	if response.StatusCode != 406 {
 		t.Fatalf("post status %d body=%s, want 406-by-negotiation", response.StatusCode, data)
 	}
-	if got := count(); got != 5 {
-		t.Fatalf("direct-lane POST /messages statements = %d, want 5 (12 − 7 write-side)", got)
+	// 6 = 5 request statements + the PRAGMA data_version generation
+	// observation (see TestCreateMessageStatementCount).
+	if got := count(); got != 6 {
+		t.Fatalf("direct-lane POST /messages statements = %d, want 6 (13 − 7 write-side)", got)
 	}
 	hits, err := db.Search(ctx, user.ID, "lane")
 	if err != nil || len(hits) != 1 {

@@ -233,10 +233,12 @@ func TestMessageRefsCacheInvalidation(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Validator byte parity with the removed per-request messageFreshness.
 
-// TestMessageValidatorParity reconstructs the deleted messageFreshness
-// computation inline and asserts the cached validator is byte-for-byte what
-// the per-request rebuild produced: same ETag (both Turbo-Frame variants),
-// same Last-Modified, and the same conditional decisions.
+// TestMessageValidatorParity reconstructs the former messageFreshness ETag
+// computation inline and asserts the cached validator keeps that ETag record
+// (both Turbo-Frame variants); since upstream b345ea4 the page carries no
+// Last-Modified and If-Modified-Since cannot 304 it — the rendered
+// representation defines freshness, timestamps alone miss external edits and
+// association changes.
 func TestMessageValidatorParity(t *testing.T) {
 	root := time.Date(2026, 10, 6, 12, 30, 45, 123456000, time.UTC)
 	refs := []database.Message{
@@ -244,70 +246,52 @@ func TestMessageValidatorParity(t *testing.T) {
 		{ID: 22, UpdatedAt: root.Add(2 * time.Second)},
 		{ID: 33, UpdatedAt: root.Add(-time.Minute)},
 	}
-	// The removed implementation, verbatim logic from conditional.go.
-	legacy := func(frame bool) (etag string, modified time.Time) {
+	// The former implementation's ETag, verbatim logic from conditional.go.
+	legacy := func(frame bool) string {
 		parts := make([]string, 0, len(refs)+2)
 		for _, m := range refs {
 			parts = append(parts, fmt.Sprintf("messages/%d-%s", m.ID, m.UpdatedAt.UTC().Format("20060102150405.000000")))
 			parts[len(parts)-1] = strings.ReplaceAll(parts[len(parts)-1], ".", "")
-			if m.UpdatedAt.After(modified) {
-				modified = m.UpdatedAt
-			}
 		}
 		if frame {
 			parts = append(parts, "frame")
 		}
 		parts = append(parts, "messages/index")
 		hash := sha256.Sum256([]byte(strings.Join(parts, "/")))
-		return fmt.Sprintf("W/\"%x\"", hash[:16]), modified
+		return fmt.Sprintf("W/\"%x\"", hash[:16])
 	}
 	v := messageValidatorOf(refs)
-	wantEtag, wantModified := legacy(false)
-	if v.etag != wantEtag {
-		t.Fatalf("etag %q vs legacy %q", v.etag, wantEtag)
+	if v.etag != legacy(false) {
+		t.Fatalf("etag %q vs legacy %q", v.etag, legacy(false))
 	}
-	wantFrame, _ := legacy(true)
-	if v.etagFrame != wantFrame {
-		t.Fatalf("frame etag %q vs legacy %q", v.etagFrame, wantFrame)
-	}
-	if !v.modified.Equal(wantModified) {
-		t.Fatalf("modified %v vs legacy %v", v.modified, wantModified)
-	}
-	// The header dance must reproduce the old behavior record-for-record.
-	for _, frame := range []bool{false, true} {
+	// The header dance must reproduce the surviving contract record-for-record.
+	// The rendered frame equals the document on this page, so the validator
+	// does not vary by the Turbo-Frame header (b345ea4).
+	for range 2 {
 		r := httptest.NewRequest("GET", "/rooms/1/messages", nil)
-		if frame {
-			r.Header.Set("Turbo-Frame", "messages")
-		}
 		w := httptest.NewRecorder()
 		if v.apply(w, r) {
-			t.Fatalf("frame %t: unexpected 304 without a conditional header", frame)
+			t.Fatal("unexpected 304 without a conditional header")
 		}
-		etag := v.etag
-		if frame {
-			etag = v.etagFrame
+		if got := w.Header().Get("ETag"); got != v.etag {
+			t.Fatalf("ETag %q", got)
 		}
-		if got := w.Header().Get("ETag"); got != etag {
-			t.Fatalf("frame %t: ETag %q", frame, got)
-		}
-		if got := w.Header().Get("Last-Modified"); got != wantModified.UTC().Format(http.TimeFormat) {
-			t.Fatalf("frame %t: Last-Modified %q", frame, got)
-		}
-		if got := w.Header().Get("Cache-Control"); got != "max-age=0, private, must-revalidate" {
-			t.Fatalf("frame %t: Cache-Control %q", frame, got)
+		// If-Modified-Since alone can never 304 the rendered representation.
+		r = httptest.NewRequest("GET", "/rooms/1/messages", nil)
+		r.Header.Set("If-Modified-Since", root.Add(24*time.Hour).UTC().Format(http.TimeFormat))
+		w = httptest.NewRecorder()
+		if v.apply(w, r) {
+			t.Fatal("a date cannot validate the rendered representation")
 		}
 		// A matching If-None-Match must 304 and clear the body headers.
 		r = httptest.NewRequest("GET", "/rooms/1/messages", nil)
-		if frame {
-			r.Header.Set("Turbo-Frame", "messages")
-		}
-		r.Header.Set("If-None-Match", etag)
+		r.Header.Set("If-None-Match", v.etag)
 		w = httptest.NewRecorder()
 		if !v.apply(w, r) {
-			t.Fatalf("frame %t: matching INM did not 304", frame)
+			t.Fatal("matching INM did not 304")
 		}
 		if w.Code != http.StatusNotModified || w.Body.Len() != 0 {
-			t.Fatalf("frame %t: 304 status/body %d", frame, w.Code)
+			t.Fatalf("304 status/body %d", w.Code)
 		}
 	}
 }

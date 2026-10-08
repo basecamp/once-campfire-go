@@ -21,6 +21,11 @@ var gzipPool = sync.Pool{New: func() any { writer, _ := gzip.NewWriterLevel(nil,
 // middleware and the application's pre-encoded responses always agree; see
 // httpcompat.Encoding.
 func encoding(header string) string { return httpcompat.Encoding(header) }
+
+// ResponseEncoding shares the application compressor's negotiation with the
+// body cache (upstream e3a1309). It delegates to the same httpcompat.Encoding
+// so every layer agrees.
+func ResponseEncoding(header string) string { return encoding(header) }
 func addVary(h http.Header, name string) {
 	for _, line := range h.Values("Vary") {
 		for _, value := range strings.Split(line, ",") {

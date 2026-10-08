@@ -40,6 +40,13 @@ type DB struct {
 	Read                *readPool
 	Write               *sql.DB
 	Now                 func() time.Time
+	// versionDB/version is the pinned read-only connection that observes
+	// every writer's commits (upstream ef00d84): PRAGMA data_version is
+	// connection-local, so it must never run on the read pool. The observed
+	// generation namespaces the web caches, covering commits by external
+	// processes the in-process version counters cannot see.
+	versionDB *sql.DB
+	version   *sql.Conn
 	// sidebar is the in-process sidebar fragment version registry
 	// (internal/database/versions.go); see DB.SidebarVersion.
 	sidebar sidebarVersions
@@ -146,7 +153,25 @@ func open(driver, path string, readers int) (*DB, error) {
 		r.Close()
 		return fail(err)
 	}
-	db := &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w}
+	// The pinned generation-observation connection (upstream ef00d84):
+	// PRAGMA data_version is connection-local, so it must never run on the
+	// read pool.
+	v, err := sql.Open(driver, uri+options+"&mode=ro&_query_only=on")
+	if err != nil {
+		r.Close()
+		return fail(err)
+	}
+	v.SetMaxOpenConns(1)
+	version, err := v.Conn(context.Background())
+	if err != nil {
+		v.Close()
+		r.Close()
+		return fail(err)
+	}
+	// The checkpointer opens a second connection to the same file below;
+	// a checkpointed WAL read is not a commit observation, so it must not
+	// share the pinned connection's data_version state.
+	db := &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, versionDB: v, version: version}
 	db.afterCV = sync.NewCond(&db.afterMu)
 	queue := true
 	if raw, ok := os.LookupEnv("CAMPFIRE_WRITE_QUEUE"); ok {
@@ -208,6 +233,8 @@ func open(driver, path string, readers int) (*DB, error) {
 	if raw := os.Getenv("CAMPFIRE_FROZEN_TIME"); raw != "" {
 		frozen, err := time.Parse(time.RFC3339Nano, raw)
 		if err != nil {
+			version.Close()
+			v.Close()
 			r.Close()
 			return fail(err)
 		}
@@ -240,6 +267,16 @@ func (d *DB) Close() error {
 	// d.Write, closed below.
 	if d.lane != nil {
 		if err := d.lane.close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if d.version != nil {
+		if err := d.version.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if d.versionDB != nil {
+		if err := d.versionDB.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -338,4 +375,12 @@ func (t timestamp) Scan(value any) error {
 		}
 	}
 	return fmt.Errorf("invalid timestamp %q", raw)
+}
+
+// A pinned reader observes commits from every writer, including this process.
+// PRAGMA data_version is connection-local, so it must never use the read pool.
+func (d *DB) ResponseVersion(ctx context.Context) (uint64, error) {
+	var version uint64
+	err := d.version.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version)
+	return version, err
 }

@@ -51,6 +51,14 @@ func parseRecordedPieces(raw string) (enabled, valid bool) {
 
 type Server struct {
 	fragments *fragmentCache
+	// responses is upstream's completed-response cache layer (e3a1309): an
+	// unconditional cache of whole HTML responses for the four page routes.
+	// It duplicates our piece/refs/shell/search/sidebar caches byte for byte,
+	// so it is created budget-zero (unwired) and never stores; the requests
+	// use the finer-grained engine caches. The per-request generation
+	// observation inside beginResponseCache (ef00d84) IS wired: fragmentKey
+	// namespaces the message fragment and piece caches by it.
+	responses *responseCache
 	// fastRender is the compiled message-fragment renderer (ENGINE-32). nil
 	// when CAMPFIRE_FAST_RENDER=off or the fragment compile failed; messageViews
 	// then falls back to html/template's message-uncached.
@@ -377,7 +385,7 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 			readCache = nil
 		}
 	}
-	s := &Server{fragments: newFragmentCache(cacheMB << 20), refsCache: newMessageRefsCache(refsMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, zstdPieces: zstdPieces, precomposed: precomposed, arenaOn: arenaOn, xVersion: appVersion(), xRev: revision(), readCache: readCache, searchCache: searchCache, fastdb: openFastPool(dbPath), fastRender: renderer, authFast: authFast, authCache: authCache, avatars: avatars, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
+	s := &Server{fragments: newFragmentCache(cacheMB << 20), responses: newResponseCache(0), refsCache: newMessageRefsCache(refsMB << 20), pieces: piececache.New(recordedMB << 20), recordedPieces: recordedPieces, zstdPieces: zstdPieces, precomposed: precomposed, arenaOn: arenaOn, xVersion: appVersion(), xRev: revision(), readCache: readCache, searchCache: searchCache, fastdb: openFastPool(dbPath), fastRender: renderer, authFast: authFast, authCache: authCache, avatars: avatars, Cable: cable.New(db, secrets), DB: db, Secrets: secrets, Secure: secure, mux: &router{}, templates: t, attempts: map[string]attempt{}, dummyHash: hash}
 	storageRoot := "storage"
 	if len(storagePaths) > 0 {
 		storageRoot = storagePaths[0]
@@ -418,6 +426,16 @@ func New(db *database.DB, secrets *rails.Secrets, secure bool, dbPath string, st
 	return s, nil
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The observed database generation (upstream ef00d84) is captured once
+	// per request, before any reads: fragmentKey and the piece identities
+	// namespace their caches by it, so an in-flight render can never populate
+	// a newer generation after a commit and external-process commits are
+	// observed by generation alone.
+	info := &requestInfo{host: r.Host, origin: s.origin(r)}
+	if version, err := s.DB.ResponseVersion(r.Context()); err == nil {
+		info.databaseVersion = version
+	}
+	r = r.WithContext(context.WithValue(r.Context(), requestInfoKey{}, info))
 	r = r.WithContext(context.WithValue(r.Context(), requestHostKey{}, r.Host))
 	r = r.WithContext(context.WithValue(r.Context(), requestOriginKey{}, s.origin(r)))
 	if assets.Serve(w, r) {
@@ -808,6 +826,9 @@ func (s *Server) auth(next func(http.ResponseWriter, *http.Request, database.Use
 		}
 		if s.blockBrowser(w, r) {
 			return
+		}
+		if info := requestMetadata(r.Context()); info != nil && info.response != nil {
+			info.response.user = u.ID
 		}
 		next(w, r, u)
 	}

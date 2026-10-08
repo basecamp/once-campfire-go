@@ -3,12 +3,14 @@ package web
 import (
 	"container/list"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
-	"github.com/basecamp/once-campfire-go/internal/database"
 	"html/template"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/basecamp/once-campfire-go/internal/database"
 )
 
 type fragmentEntry struct {
@@ -58,8 +60,11 @@ func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
 		return e.Value.(fragmentEntry)
 	}
 	size := len(key) + len(html) + len(entry.messageMarker) + len(entry.loadedMarker) + 240
+	// fragmentKey namespaces message-list keys with the observed generation
+	// and origin, so the list marker is a path segment, not a prefix.
+	listEntry := strings.HasPrefix(key, "message-list/") || strings.Contains(key, "/message-list/")
 	var payload []byte
-	if strings.HasPrefix(key, "message-list/") {
+	if listEntry {
 		payload = []byte(html)
 		size += len(payload)
 	}
@@ -70,7 +75,7 @@ func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
 	// message-list payload; a single-message fragment's digest is never
 	// read, so only message-list entries pay for the hash (ENGINE-45b).
 	entry.bytes, entry.payload = size, payload
-	if strings.HasPrefix(key, "message-list/") {
+	if listEntry {
 		entry.digest = sha256.Sum256([]byte(html))
 	}
 	c.entries[key] = c.order.PushFront(entry)
@@ -89,11 +94,29 @@ func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
 func messageCacheKey(message database.Message) string {
 	return "message/" + database.Stamp(message.UpdatedAt) + "/" + strconv.FormatInt(message.ID, 10)
 }
+
+// Namespace timestamp fragments by the generation observed before request reads.
+// An older in-flight render cannot populate a newer generation after a commit.
+func (s *Server) fragmentKey(ctx context.Context, key string) string {
+	version := uint64(0)
+	var host, origin string
+	if info := requestMetadata(ctx); info != nil {
+		version = info.databaseVersion
+		host, origin = info.host, info.origin
+	} else {
+		version, _ = s.DB.ResponseVersion(ctx)
+	}
+	if version == 0 {
+		return "uncached/" + rand.Text() + "/" + key
+	}
+	return strconv.FormatUint(version, 10) + "/" + strconv.Quote(host) + "/" + strconv.Quote(origin) + "/" + key
+}
+
 func (s *Server) messageItems(ctx context.Context, messages []database.Message) ([]messageView, error) {
 	views := viewMessages(messages)
 	var missing []int64
 	for i, m := range messages {
-		if html, ok := s.fragments.get(messageCacheKey(m)); ok {
+		if html, ok := s.fragments.get(s.fragmentKey(ctx, messageCacheKey(m))); ok {
 			views[i].Fragment = html
 		} else if m.CreatorID == 0 {
 			missing = append(missing, m.ID)

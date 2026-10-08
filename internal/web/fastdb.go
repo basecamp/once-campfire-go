@@ -116,7 +116,7 @@ func (s *Server) messageRefs(c *fastdb.Conn, ctx context.Context, room, anchor i
 	key := messageRefsKey{room: room, version: version.UnixMicro(), anchor: anchor, direction: direction}
 	if entry, ok := s.refsCache.lookup(key); ok {
 		s.messageRefsHits.Add(1)
-		return entry.refs, messageValidator{etag: entry.etag, etagFrame: entry.etagFrame, modified: entry.modified}, nil
+		return entry.refs, messageValidator{etag: entry.etag}, nil
 	}
 	s.messageRefsMisses.Add(1)
 	var messages []database.Message

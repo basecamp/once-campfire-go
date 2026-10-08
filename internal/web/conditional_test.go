@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -31,22 +32,25 @@ func TestMessageConditionalGet(t *testing.T) {
 	first := request(nil)
 	etag := first.Header().Get("ETag")
 	modified := first.Header().Get("Last-Modified")
-	if first.Code != 200 || etag == "" || modified == "" {
+	if first.Code != 200 || etag == "" || modified != "" {
 		t.Fatal(first.Code, first.Header())
 	}
-	for _, headers := range []map[string]string{{"If-None-Match": etag}, {"If-None-Match": "\"other\", " + etag}, {"If-Modified-Since": modified}} {
+	for _, headers := range []map[string]string{{"If-None-Match": etag}, {"If-None-Match": "\"other\", " + etag}} {
 		w := request(headers)
 		if w.Code != 304 || w.Body.Len() != 0 {
 			t.Fatal(w.Code, w.Body.String())
 		}
+	}
+	if w := request(map[string]string{"If-Modified-Since": time.Now().Add(24 * time.Hour).UTC().Format(http.TimeFormat)}); w.Code != 200 {
+		t.Fatal("date cannot validate associated presentation", w.Code)
 	}
 	w := request(map[string]string{"If-None-Match": "\"stale\"", "If-Modified-Since": time.Now().Add(24 * time.Hour).UTC().Format(http.TimeFormat)})
 	if w.Code != 200 {
 		t.Fatal("ETag did not take precedence", w.Code)
 	}
 	frame := request(map[string]string{"Turbo-Frame": "messages"})
-	if frame.Header().Get("ETag") == etag {
-		t.Fatal("frame did not change validator")
+	if bytes.Equal(frame.Body.Bytes(), first.Body.Bytes()) != (frame.Header().Get("ETag") == etag) {
+		t.Fatal("validator does not match the rendered frame representation")
 	}
 	if !strings.Contains(first.Body.String(), "fresh") {
 		t.Fatal("empty response")

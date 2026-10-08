@@ -491,8 +491,11 @@ func TestRecordedPiecesPayloadReplacement(t *testing.T) {
 		}
 	}
 	// The published entry is the same immutable payload.
-	identity := messageListIdentity(messages)
-	stored := app.pieces.GetDigest(identity)
+	identity, cacheable := app.messageListIdentity(context.Background(), messages)
+	var stored *piececache.Entry
+	if cacheable {
+		stored = app.pieces.GetDigest(identity)
+	}
 	if stored == nil || !bytes.Equal(stored.Raw, first) {
 		t.Fatal("cache entry does not match the returned payload")
 	}
