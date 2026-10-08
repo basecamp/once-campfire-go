@@ -430,3 +430,11 @@ coverage and validation scope.
 MIT; see [MIT-LICENSE](MIT-LICENSE). Third-party notices for copied/adapted algorithms are in
 [licenses](licenses/) and [internal/html/LICENSE](internal/html/LICENSE); module dependencies retain
 their own licenses.
+
+Shared verification harness (`basecamp/once-campfire-verification`,
+route-contract-v1, revision 7b2dbc7, same machine, c=16, 3 rounds) measured the
+merged engine (`engine-v2` tree) at 77,913 room page, 91,533 messages, 113,169
+search, 24,430 sidebar and 7,628 post message per second. Against the published
+table's shared-harness numbers that is 2.20× Rust on the room page, 2.25×
+messages, 3.29× search; sidebar (0.71×) and post message (0.85×) remain behind
+Rust under this referee and are the current targets.

@@ -722,3 +722,24 @@ CPU per request is below Rust on all eight rows. Cable sustained: 100 clients
 1.29×, 500 and 1,000 parity (0.98× / 0.99×); saturated post→all p50 at 1,000
 clients 13.5 vs 16.1 ms. Container, ACME and native write/FTS checks pass on
 the same image.
+
+## Shared verification harness measurement (2026-10-08, engine-v2 tip e5c5f96)
+
+`basecamp/once-campfire-verification` (revision 7b2dbc7, route-contract-v1
+response validation), production image `once-campfire-go:engine-v2`, pinned
+Rails seed f5759058, server CPUs 8-11, client 12-15, c=16, 3 rounds of 8 s,
+zero contract failures. Medians:
+
+| Route | This fork | Rust (published) | Go upstream (published) | C (published) |
+|---|---:|---:|---:|---:|
+| room_show | 77,913 | 35,484 | 31,673 | 141,834 |
+| messages_page | 91,533 | 40,674 | 30,746 | 151,564 |
+| sidebar | 24,430 | 34,479 | 18,586 | 159,850 |
+| search | 113,169 | 34,432 | 29,765 | 155,456 |
+| post_message | 7,628 | 8,998 | 9,073 | 7,460 |
+
+Against the published shared-harness table: room 2.20× Rust, messages 2.25×,
+search 3.29×, post_message 0.85×, sidebar 0.71×. Raw:
+`/tmp/opencode/verification-go/summary.json`. The sidebar and post_message
+gaps under this referee (both were ahead on the Elixir harness) are the next
+targets; profile before changing anything.
