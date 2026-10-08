@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/textproto"
 	"net/url"
@@ -163,9 +164,31 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (_ *Con
 		return nil, err
 	}
 
+	// Campfire ENGINE-54: net/http's hijacked connection keeps Go's default
+	// TCP_NODELAY (newTCPConn sets it on accept and net/http never touches
+	// it again), yet the property is set explicitly here so it is this
+	// library's contract rather than the runtime's implicit default, and
+	// matches the Rust reference (tokio sets TCP_NODELAY on accepted
+	// streams). One setsockopt per accepted connection; connections that are
+	// not TCP (test doubles, pipes) are left untouched.
+	if tcp, ok := netConn.(*net.TCPConn); ok {
+		_ = tcp.SetNoDelay(true)
+	}
+
+	// Campfire ENGINE-40: header-first reads. net/http's hijacked buffered
+	// reader (4KiB) is discarded instead of being retained for the
+	// connection's life, so an idle socket holds no large read buffer and
+	// nothing is ever zeroed while idle. Any bytes net/http already buffered
+	// (usually none: the first client frame occasionally coalesces with the
+	// handshake) are copied exactly and replayed ahead of the raw connection.
+	// The raw connection stays the write target so batched writes can use
+	// writev.
 	// https://github.com/golang/go/issues/32314
 	b, _ := brw.Reader.Peek(brw.Reader.Buffered())
-	brw.Reader.Reset(io.MultiReader(bytes.NewReader(b), netConn))
+	var readSrc io.Reader = netConn
+	if len(b) > 0 {
+		readSrc = io.MultiReader(bytes.NewReader(append([]byte(nil), b...)), netConn)
+	}
 
 	return newConn(connConfig{
 		subprotocol:    w.Header().Get("Sec-WebSocket-Protocol"),
@@ -176,8 +199,8 @@ func accept(w http.ResponseWriter, r *http.Request, opts *AcceptOptions) (_ *Con
 		onPingReceived: opts.OnPingReceived,
 		onPongReceived: opts.OnPongReceived,
 
-		br: brw.Reader,
-		bw: brw.Writer,
+		readSrc: readSrc,
+		bw:      brw.Writer,
 	}), nil
 }
 

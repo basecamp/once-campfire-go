@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"uuid"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/integrations"
@@ -31,8 +30,7 @@ func (s *Server) initJobs() {
 	s.Jobs = jobs.New(concurrency, "push", "webhook", "purge", "ban", "analyze")
 	s.initCleanup()
 	var vapid *integrations.VAPID
-	if public, private := os.Getenv("VAPID_PUBLIC_KEY"), os.Getenv("VAPID_PRIVATE_KEY"); public != "" &&
-		private != "" {
+	if public, private := os.Getenv("VAPID_PUBLIC_KEY"), os.Getenv("VAPID_PRIVATE_KEY"); public != "" && private != "" {
 		subject := os.Getenv("VAPID_SUBJECT")
 		if subject == "" {
 			domain := strings.TrimSpace(strings.Split(os.Getenv("TLS_DOMAIN"), ",")[0])
@@ -51,16 +49,9 @@ func (s *Server) initJobs() {
 	s.Push = integrations.NewPushSender(vapid)
 	s.mux.HandleFunc("GET /users/{user}/push_subscriptions", s.auth(s.pushSubscriptions))
 	s.mux.HandleFunc("POST /users/{user}/push_subscriptions", s.auth(s.pushSubscriptions))
-	s.mux.HandleFunc(
-		"DELETE /users/{user}/push_subscriptions/{subscription}",
-		s.auth(s.deletePushSubscription),
-	)
-	s.mux.HandleFunc(
-		"POST /users/{user}/push_subscriptions"+"/{subscription}/test_notifications",
-		s.auth(s.testPushNotification),
-	)
+	s.mux.HandleFunc("DELETE /users/{user}/push_subscriptions/{subscription}", s.auth(s.deletePushSubscription))
+	s.mux.HandleFunc("POST /users/{user}/push_subscriptions"+"/{subscription}/test_notifications", s.auth(s.testPushNotification))
 }
-
 func subscriptionParams(r *http.Request) (map[string]*string, error) {
 	attrs := map[string]*string{}
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
@@ -103,7 +94,6 @@ func subscriptionParams(r *http.Request) (map[string]*string, error) {
 	}
 	return attrs, nil
 }
-
 func (s *Server) pushSubscriptions(w http.ResponseWriter, r *http.Request, u database.User) {
 	if r.Method == "GET" || r.Method == "HEAD" {
 		list, err := s.DB.PushSubscriptions(r.Context(), u.ID)
@@ -111,13 +101,7 @@ func (s *Server) pushSubscriptions(w http.ResponseWriter, r *http.Request, u dat
 			s.fail(w, err)
 			return
 		}
-		s.render(
-			w,
-			r,
-			"push-subscriptions",
-			200,
-			page{User: u, Title: "Push notification subscriptions", Subscriptions: list},
-		)
+		s.render(w, r, "push-subscriptions", 200, page{User: u, Title: "Push notification subscriptions", Subscriptions: list})
 		return
 	}
 	attrs, err := subscriptionParams(r)
@@ -151,7 +135,6 @@ func (s *Server) pushSubscriptions(w http.ResponseWriter, r *http.Request, u dat
 	}
 	w.WriteHeader(200)
 }
-
 func (s *Server) deletePushSubscription(w http.ResponseWriter, r *http.Request, u database.User) {
 	id, _ := strconv.ParseInt(r.PathValue("subscription"), 10, 64)
 	if err := s.DB.DeletePushSubscription(r.Context(), u.ID, id); err != nil {
@@ -160,7 +143,6 @@ func (s *Server) deletePushSubscription(w http.ResponseWriter, r *http.Request, 
 	}
 	http.Redirect(w, r, s.origin(r)+pushPath, 302)
 }
-
 func notificationJSON(title, body, path string, badge int64) []byte {
 	var b bytes.Buffer
 	e := json.NewEncoder(&b)
@@ -189,7 +171,6 @@ func notificationJSON(title, body, path string, badge int64) []byte {
 	encoded, _ := rails.CanonicalJSON(bytes.TrimSpace(b.Bytes()), false)
 	return encoded
 }
-
 func (s *Server) testPushNotification(w http.ResponseWriter, r *http.Request, u database.User) {
 	id, _ := strconv.ParseInt(r.PathValue("subscription"), 10, 64)
 	subscription, err := s.DB.PushSubscription(r.Context(), u.ID, id)
@@ -202,13 +183,7 @@ func (s *Server) testPushNotification(w http.ResponseWriter, r *http.Request, u 
 		s.fail(w, err)
 		return
 	}
-	err = s.Push.Send(
-		r.Context(),
-		subscription.Endpoint,
-		subscription.Key,
-		subscription.Auth,
-		notificationJSON("Campfire Test", uuid.NewV4().String(), s.origin(r)+pushPath, badge),
-	)
+	err = s.Push.Send(r.Context(), subscription.Endpoint, subscription.Key, subscription.Auth, notificationJSON("Campfire Test", database.UUID(), s.origin(r)+pushPath, badge))
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -216,33 +191,60 @@ func (s *Server) testPushNotification(w http.ResponseWriter, r *http.Request, u 
 	http.Redirect(w, r, s.origin(r)+pushPath, 302)
 }
 
-func (s *Server) messageCreated(message database.Message, room database.Room) {
+// messageCreated broadcasts the unread bumps and schedules push deliveries
+// for a created message. mentioned carries the mentioned user ids the create
+// path already derived from the body's single parse (ENGINE-45b); nil means
+// "derive here", which the bot and webhook callers rely on.
+func (s *Server) messageCreated(message database.Message, room database.Room, mentioned []int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	members, err := s.DB.RoomMemberIDs(ctx, room.ID)
 	if err != nil {
 		slog.Error("unread notification failed", "error", err)
 	} else {
+		// The payload is shared across members: json.Marshal and the frame
+		// cache only read it, so one map serves the whole loop.
+		payload := map[string]any{"roomId": room.ID}
 		for _, id := range members {
-			s.Cable.PublishStream(ctx, fmt.Sprintf("user_%d_unreads", id), map[string]any{"roomId": room.ID})
+			s.Cable.PublishStream(ctx, fmt.Sprintf("user_%d_unreads", id), payload)
 		}
 	}
+	// Web Push is the reference's Room::PushMessageJob (the Rails app's
+	// push_message_job.rb): recipients, badge counts and delivery run on the
+	// job worker, never on the posting request. The request enqueues one job
+	// per message and renders on. mentioned travels with the job when the
+	// create path already derived it; the job derives it itself otherwise
+	// (the bot and webhook callers).
 	if s.Push.VAPID == nil {
 		return
 	}
-	mentions := s.mentionedIDs(ctx, message.Body)
-	subscriptions, err := s.DB.PushRecipients(ctx, room.ID, message.CreatorID, mentions)
+	s.Jobs.Enqueue("push", func(ctx context.Context) error {
+		return s.deliverPush(ctx, message, room, mentioned)
+	})
+}
+
+// pushRequestTimeout bounds one push job's queries and delivery attempts, the
+// same budget the inline path gave the whole chain.
+const pushRequestTimeout = 5 * time.Second
+
+// deliverPush is the moved Room::PushMessageJob: the recipient query, the
+// per-subscriber badge and payload, and the delivery attempts, all after the
+// posting request has responded (the reference runs this job async).
+func (s *Server) deliverPush(ctx context.Context, message database.Message, room database.Room, mentioned []int64) error {
+	ctx, cancel := context.WithTimeout(ctx, pushRequestTimeout)
+	defer cancel()
+	if mentioned == nil {
+		mentioned = s.mentionedIDs(ctx, message.Body)
+	}
+	subscriptions, err := s.DB.PushRecipients(ctx, room.ID, message.CreatorID, mentioned)
 	if err != nil {
-		slog.Error("push recipients failed", "error", err)
-		return
+		return err
 	}
 	if len(subscriptions) == 0 {
-		return
+		return nil
 	}
 	body := s.plainText(ctx, message.Body)
-	if attachment, err := s.Storage.Attached(ctx, "Message", message.ID, "attachment"); err == nil &&
-		attachment.ID != 0 &&
-		strings.TrimSpace(body) == "" {
+	if attachment, err := s.Storage.Attached(ctx, "Message", message.ID, "attachment"); err == nil && attachment.ID != 0 && strings.TrimSpace(body) == "" {
 		body = attachment.Filename
 	}
 	title := room.Name
@@ -260,19 +262,12 @@ func (s *Server) messageCreated(message database.Message, room database.Room) {
 			continue
 		}
 		payload := notificationJSON(title, body, fmt.Sprintf("/rooms/%d", room.ID), badge)
-		s.Jobs.Enqueue("push", func(ctx context.Context) error {
-			err := s.Push.Send(
-				ctx,
-				subscription.Endpoint,
-				subscription.Key,
-				subscription.Auth,
-				payload,
-			)
-			if errors.Is(err, integrations.ErrPushGone) ||
-				errors.Is(err, integrations.ErrPushPoint) {
+		if err := s.Push.Send(ctx, subscription.Endpoint, subscription.Key, subscription.Auth, payload); err != nil {
+			if errors.Is(err, integrations.ErrPushGone) || errors.Is(err, integrations.ErrPushPoint) {
 				return s.DB.DeletePushSubscription(ctx, subscription.UserID, subscription.ID)
 			}
 			return err
-		})
+		}
 	}
+	return nil
 }

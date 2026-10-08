@@ -7,16 +7,28 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/basecamp/once-campfire-go/internal/fastdb/write"
 )
 
 //go:embed schema.sql
 var schema string
+
+// options is the pragma set every connection to the database file applies
+// (the write DSN adds _txlock and the statement-cache cap; the read DSN adds
+// mode=ro and query_only).
+const options = "?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_cache_size=2000"
 
 var migrations = []string{"20231215043540", "20231220143106", "20240110071740", "20240115124901", "20240130003150", "20240130213001", "20240131105830", "20240209110503", "20250825100957", "20250825100958", "20250825100959", "20251126092013", "20251126115722", "20251126130131", "20251212154340"}
 
@@ -28,11 +40,83 @@ type DB struct {
 	Read                *readPool
 	Write               *sql.DB
 	Now                 func() time.Time
-	versionDB           *sql.DB
-	version             *sql.Conn
+	// versionDB/version is the pinned read-only connection that observes
+	// every writer's commits (upstream ef00d84): PRAGMA data_version is
+	// connection-local, so it must never run on the read pool. The observed
+	// generation namespaces the web caches, covering commits by external
+	// processes the in-process version counters cannot see.
+	versionDB *sql.DB
+	version   *sql.Conn
+	// sidebar is the in-process sidebar fragment version registry
+	// (internal/database/versions.go); see DB.SidebarVersion.
+	sidebar sidebarVersions
+	// corpusVersion and membershipVersion are the ENGINE-30 search cache
+	// version counters (see versions.go). Owned by the writers; readers only
+	// load.
+	corpusVersion     atomic.Int64
+	membershipVersion atomic.Int64
+	// sessionVersion and userVersion are the ENGINE-40b publication
+	// authorization generations (see versions.go): sessions-table writes and
+	// users.status writes respectively.
+	sessionVersion atomic.Int64
+	userVersion    atomic.Int64
+	writer         *messageWriter
+	checkpoints    *checkpointer
+	lane           laneConn
+	// afterMu/afterN/afterCV count callers still inside the write lane's
+	// after-commit work (search index insert + unread bump), which runs in
+	// the request goroutine on the lane after the shared commit. DB.Close
+	// waits for the count to reach zero before closing Write so a committed
+	// write never fails its after() with "database is closed".
+	afterMu sync.Mutex
+	afterN  int
+	afterCV *sync.Cond
+}
+
+// parseWriteQueue maps a CAMPFIRE_WRITE_QUEUE value to its setting, accepting
+// the same shapes as the web flags. An unrecognised value reports valid=false
+// so the caller can warn while keeping the default on rather than silently
+// changing behaviour.
+func parseWriteQueue(raw string) (enabled, valid bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "on", "true", "1":
+		return true, true
+	case "off", "false", "0":
+		return false, true
+	default:
+		return true, false
+	}
+}
+
+// parseFastdbWrite maps a CAMPFIRE_FASTDB_WRITE value to its setting, with
+// the same value shapes (and warning policy) as CAMPFIRE_WRITE_QUEUE. The
+// default is on: the message create transaction runs as direct prepared
+// statements on the fastdb lane (ENGINE-55); off restores the database/sql
+// lane exactly.
+func parseFastdbWrite(raw string) (enabled, valid bool) { return parseWriteQueue(raw) }
+
+// checkpointIntervalMS reads CAMPFIRE_CHECKPOINT_MS (milliseconds, default
+// 1000): the schedule of the off-writer PASSIVE WAL checkpoint.
+func checkpointIntervalMS() time.Duration {
+	raw := os.Getenv("CAMPFIRE_CHECKPOINT_MS")
+	if raw == "" {
+		return time.Second
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms <= 0 {
+		slog.Warn("invalid CAMPFIRE_CHECKPOINT_MS; using 1000", "value", raw)
+		return time.Second
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 func Open(path string, readers int) (*DB, error) {
+	return open("sqlite3", path, readers)
+}
+
+// open builds a DB over the given sqlite driver; tests swap in a counting
+// driver wrapper via OpenCounting.
+func open(driver, path string, readers int) (*DB, error) {
 	if readers < 1 {
 		return nil, errors.New("database readers must be positive")
 	}
@@ -44,10 +128,9 @@ func Open(path string, readers int) (*DB, error) {
 		return nil, err
 	}
 	uri := (&url.URL{Scheme: "file", Path: path}).String()
-	options := "?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_cache_size=2000"
 	// Reuse transaction statements on the single writer connection. The driver
 	// resets bindings on reuse; results and authorization are never cached.
-	w, err := sql.Open("sqlite3", uri+options+"&_txlock=immediate&_stmt_cache_size=64")
+	w, err := sql.Open(driver, uri+options+"&_txlock=immediate&_stmt_cache_size=64")
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +143,7 @@ func Open(path string, readers int) (*DB, error) {
 	if err = prepare(w); err != nil {
 		return fail(err)
 	}
-	r, err := sql.Open("sqlite3", uri+options+"&mode=ro&_query_only=on")
+	r, err := sql.Open(driver, uri+options+"&mode=ro&_query_only=on")
 	if err != nil {
 		return fail(err)
 	}
@@ -70,7 +153,10 @@ func Open(path string, readers int) (*DB, error) {
 		r.Close()
 		return fail(err)
 	}
-	v, err := sql.Open("sqlite3", uri+options+"&mode=ro&_query_only=on")
+	// The pinned generation-observation connection (upstream ef00d84):
+	// PRAGMA data_version is connection-local, so it must never run on the
+	// read pool.
+	v, err := sql.Open(driver, uri+options+"&mode=ro&_query_only=on")
 	if err != nil {
 		r.Close()
 		return fail(err)
@@ -81,6 +167,67 @@ func Open(path string, readers int) (*DB, error) {
 		v.Close()
 		r.Close()
 		return fail(err)
+	}
+	// The checkpointer opens a second connection to the same file below;
+	// a checkpointed WAL read is not a commit observation, so it must not
+	// share the pinned connection's data_version state.
+	db := &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, versionDB: v, version: version}
+	db.afterCV = sync.NewCond(&db.afterMu)
+	queue := true
+	if raw, ok := os.LookupEnv("CAMPFIRE_WRITE_QUEUE"); ok {
+		var valid bool
+		queue, valid = parseWriteQueue(raw)
+		if !valid {
+			slog.Warn("invalid CAMPFIRE_WRITE_QUEUE; keeping the write queue on", "value", raw)
+		}
+	}
+	fastWrite := true
+	if raw, ok := os.LookupEnv("CAMPFIRE_FASTDB_WRITE"); ok {
+		var valid bool
+		fastWrite, valid = parseFastdbWrite(raw)
+		if !valid {
+			slog.Warn("invalid CAMPFIRE_FASTDB_WRITE; keeping the direct write lane on", "value", raw)
+		}
+	}
+	if queue {
+		// The writer connection never auto-checkpoints: the separate
+		// checkpointer pays the checkpoint fsyncs on its own schedule. The
+		// durability contract does not move — WAL mode, synchronous=NORMAL,
+		// journal_size_limit untouched (the default -1), so commits are not
+		// fsynced and what committed since the last checkpoint can be lost to
+		// a power failure, exactly as before. The fastdb write lane sets the
+		// same pragma on its direct connection at open (ENGINE-55).
+		if _, err := w.Exec("PRAGMA wal_autocheckpoint=0"); err != nil {
+			r.Close()
+			return fail(err)
+		}
+		var lane laneConn
+		if fastWrite {
+			// The direct lane: the create transaction runs as prepared
+			// statements on one fastdb connection instead of database/sql
+			// (its single-connection serialization is reproduced by the
+			// connection's transaction mutex).
+			conn, err := write.OpenWriter(path, 64)
+			if err != nil {
+				r.Close()
+				return fail(err)
+			}
+			conn.SetRecorder(fastWriteRecord)
+			lane = &fastLaneConn{conn: conn}
+		} else {
+			lane = &sqlLaneConn{db: w}
+		}
+		writer := newMessageWriter(lane)
+		checkpoints, err := startCheckpointer(driver, uri+options, checkpointIntervalMS())
+		if err != nil {
+			writer.Close()
+			r.Close()
+			return fail(err)
+		}
+		db.writer, db.checkpoints, db.lane = writer, checkpoints, lane
+		slog.Info("write queue", "enabled", true, "group_commit", true, "fastdb_writes", fastWrite)
+	} else {
+		slog.Info("write queue", "enabled", false)
 	}
 	now := time.Now
 	if raw := os.Getenv("CAMPFIRE_FROZEN_TIME"); raw != "" {
@@ -93,10 +240,53 @@ func Open(path string, readers int) (*DB, error) {
 		}
 		now = func() time.Time { return frozen }
 	}
-	return &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, Now: now, versionDB: v, version: version}, nil
+	db.Now = now
+	return db, nil
 }
 func (d *DB) Close() error {
-	return errors.Join(d.Read.Close(), d.Write.Close(), d.version.Close(), d.versionDB.Close())
+	// The writer drains queued messages first, then the final checkpoint
+	// moves their frames into the database file; only then do the pools close.
+	var errs []error
+	if d.writer != nil {
+		d.writer.Close()
+		// Wait for in-flight after-commit work (search insert and unread
+		// bump on the write lane) so a write whose commit landed shares the
+		// close rather than failing its after() statements on the closed
+		// lane, which would report a committed write as failed.
+		d.afterMu.Lock()
+		for d.afterN > 0 {
+			d.afterCV.Wait()
+		}
+		d.afterMu.Unlock()
+	}
+	if d.checkpoints != nil {
+		d.checkpoints.Close()
+	}
+	// The direct lane's own connection closes after the writer drained and
+	// the after-commit count reached zero; the database/sql lane's pool is
+	// d.Write, closed below.
+	if d.lane != nil {
+		if err := d.lane.close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if d.version != nil {
+		if err := d.version.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if d.versionDB != nil {
+		if err := d.versionDB.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := d.Read.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := d.Write.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 func Stamp(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05.000000") }
 func (d *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {

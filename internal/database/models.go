@@ -53,6 +53,16 @@ func Token() string {
 	}
 	return hex.EncodeToString(b[:])
 }
+func UUID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	b[6] = (b[6] & 15) | 64
+	b[8] = (b[8] & 63) | 128
+	s := hex.EncodeToString(b[:])
+	return s[:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:]
+}
 
 const userColumns = "u.id,u.name,coalesce(u.email_address,''),coalesce(u.password_digest,''),u.role,u.status,coalesce(u.bio,''),u.updated_at,coalesce(u.bot_token,'')"
 
@@ -105,7 +115,31 @@ func (d *DB) StartSession(ctx context.Context, user int64, agent, ip string) (st
 		now,
 		now,
 	)
+	if err == nil {
+		// A sessions-table write moves the authorization generation, keeping
+		// the ENGINE-40b audit contract "every session insert/delete bumps".
+		d.bumpSessionVersion()
+	}
 	return token, err
+}
+
+// DeleteSession removes one session row (logout). It bumps the session
+// generation so no cached publication authorization for the token can
+// outlive the deletion; callers that revoke a session must go through this
+// helper rather than writing the sessions table directly.
+func (d *DB) DeleteSession(ctx context.Context, token string, user int64) error {
+	r, err := d.Write.ExecContext(ctx, "DELETE FROM sessions WHERE token=? AND user_id=?", token, user)
+	if err != nil {
+		return err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		d.bumpSessionVersion()
+	}
+	return nil
 }
 
 func (d *DB) Setup(
@@ -171,6 +205,12 @@ func (d *DB) Setup(
 		u = User{ID: id, Name: name, Email: email, Role: 1}
 		return err
 	})
+	if err == nil {
+		// Setup creates the owner, the open room and its membership: the
+		// sidebar and the search membership scope both change.
+		d.bumpSidebarVersion()
+		d.membershipVersion.Add(1)
+	}
 	return u, err
 }
 
@@ -277,9 +317,11 @@ func (d *DB) CreateWebhookReply(
 }
 
 // BlobStager keeps file copying outside the SQLite writer while committing the blob
-// and its owning record together.
+// and its owning record together. Insert runs inside the record's transaction,
+// through UploadTx: *sql.Tx on the database/sql paths, the direct lane's
+// transaction on the fastdb path.
 type BlobStager interface {
-	Insert(context.Context, *sql.Tx) (int64, error)
+	Insert(context.Context, UploadTx) (int64, error)
 	Keep()
 	Discard()
 }
@@ -317,71 +359,165 @@ func (d *DB) createMessage(
 	if body != nil {
 		m.Body = *body
 	}
-	err := d.Transaction(ctx, func(tx *sql.Tx) error {
+	// run executes the statements that commit together with the message row:
+	// membership check, creator name, staged blob, the message itself, the
+	// room touch, body and attachment. The search index and unread bump run
+	// as after-commit work around it: inside the same transaction on the
+	// direct and in-line paths, after the shared commit on the queued path,
+	// exactly as the Rust port shapes the same Rails callbacks. The
+	// statements go through the lane's jobTx, so the two lanes run the same
+	// SQL in the same order (the statement-count tests pin both).
+	run := func(tx jobTx) (Message, error) {
+		created := m
 		if checkMembership {
-			var n int
-			if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.room_id=? AND m.user_id=? AND u.status=0", room, user).Scan(&n); err != nil {
-				return err
+			n, err := tx.MembershipCount(ctx, room, user)
+			if err != nil {
+				return created, err
 			}
 			if n != 1 {
-				return ErrForbidden
+				return created, ErrForbidden
 			}
 		}
-		if err := tx.QueryRowContext(ctx, "SELECT name FROM users WHERE id=?", user).Scan(&m.Creator); err != nil {
-			return err
+		name, err := tx.CreatorName(ctx, user)
+		if err != nil {
+			return created, err
 		}
+		created.Creator = name
 		if staged != nil {
-			var err error
 			blob, err = staged.Insert(ctx, tx)
 			if err != nil {
-				return err
+				return created, err
 			}
 		}
 		stamp := Stamp(now)
-		r, err := tx.ExecContext(
-			ctx,
-			"INSERT INTO messages(client_message_id,creator_id,room_id,created_at,updated_at) VALUES (?,?,?,?,?)",
-			client,
-			user,
-			room,
-			stamp,
-			stamp,
-		)
+		created.ID, err = tx.InsertMessage(ctx, client, user, room, stamp)
 		if err != nil {
-			return err
+			return created, err
 		}
-		m.ID, err = r.LastInsertId()
-		if err != nil {
-			return err
-		}
-		for _, q := range []struct {
-			sql  string
-			args []any
-		}{
-			{"UPDATE rooms SET updated_at=? WHERE id=?", []any{stamp, room}},
-			{"UPDATE memberships SET unread_at=?,updated_at=? WHERE room_id=? AND user_id!=? AND involvement!='invisible' AND (connected_at IS NULL OR connected_at < ?)", []any{stamp, stamp, room, user, Stamp(now.Add(-60 * time.Second))}},
-			{"INSERT INTO message_search_index(rowid,body) VALUES (?,?)", []any{m.ID, plain}},
-		} {
-			if _, err = tx.ExecContext(ctx, q.sql, q.args...); err != nil {
-				return err
-			}
+		if err := tx.TouchRoom(ctx, room, stamp); err != nil {
+			return created, err
 		}
 		if body != nil {
-			if _, err = tx.ExecContext(ctx, "INSERT INTO action_text_rich_texts(name,record_type,record_id,body,created_at,updated_at) VALUES ('body','Message',?,?,?,?)", m.ID, *body, stamp, stamp); err != nil {
-				return err
+			if err := tx.InsertRichText(ctx, created.ID, *body, stamp); err != nil {
+				return created, err
 			}
 		}
 		if blob != 0 {
-			if _, err = tx.ExecContext(ctx, "INSERT INTO active_storage_attachments(blob_id,record_type,record_id,name,created_at) VALUES (?,'Message',?,'attachment',?)", blob, m.ID, stamp); err != nil {
-				return err
+			if err := tx.InsertAttachment(ctx, blob, created.ID, stamp); err != nil {
+				return created, err
 			}
 		}
-		return nil
-	})
-	if err == nil && staged != nil {
+		return created, nil
+	}
+	// afterCommit runs the statements the Rust port runs in its after_commit
+	// hooks, in the documented order: the search row first, then the unread
+	// bump. On the direct and in-line paths it runs inside the job's own
+	// transaction; on the queued path it runs after the shared commit, in one
+	// transaction of its own, so the pair commits together behind the batch
+	// (ENGINE-45 batching) and the crash window ENGINE-31 documents — a
+	// committed message row without its index and unread rows — is unchanged.
+	afterCommit := func(ctx context.Context, conn jobTx, created Message) error {
+		stamp := Stamp(now)
+		if err := conn.InsertSearchIndex(ctx, created.ID, plain); err != nil {
+			return err
+		}
+		return conn.BumpUnread(ctx, room, user, stamp, Stamp(now.Add(-60*time.Second)))
+	}
+	if d.writer == nil {
+		err := d.Transaction(ctx, func(tx *sql.Tx) error {
+			lane := &sqlLaneTx{tx: tx}
+			var err error
+			if m, err = run(lane); err != nil {
+				return err
+			}
+			return afterCommit(ctx, lane, m)
+		})
+		if err == nil {
+			// ENGINE-20/ENGINE-30 registries: bump after the commit so no
+			// reader can see the new version with old rows.
+			d.bumpSidebarVersion()
+			d.corpusVersion.Add(1)
+		}
+		if err == nil && staged != nil {
+			staged.Keep()
+		}
+		return m, err
+	}
+	// Queued path: group commit, or the adaptive in-line path when the lane
+	// is idle (the writer decides; the create work is the same either way,
+	// and the in-line path additionally folds afterCommit into the job's own
+	// transaction). On the queued path the writer commits the batch
+	// transaction before any job's caller resumes, so the response is never
+	// sent ahead of the message's persistence. The search row and the unread
+	// bump run after the shared commit, on a context that survives the
+	// request disconnecting mid-write (the Rust after_commit hooks and
+	// Rails' after_commit callbacks are not request-cancellable either);
+	// their error is reported to the caller the way Rails raises from the
+	// save that committed.
+	job := &messageJob{
+		ctx:   ctx,
+		run:   run,
+		after: afterCommit,
+		done:  make(chan messageResult, 1),
+	}
+	// The commit gate: this caller will run after() on d.Write once the
+	// shared commit lands (or, on the in-line path, inside the job's own
+	// transaction), so count it before submitting — Close waits for the
+	// count to drain before closing the pool. The defer covers every exit,
+	// including a panic in after().
+	d.afterMu.Lock()
+	d.afterN++
+	d.afterMu.Unlock()
+	defer func() {
+		d.afterMu.Lock()
+		d.afterN--
+		if d.afterN == 0 {
+			d.afterCV.Broadcast()
+		}
+		d.afterMu.Unlock()
+	}()
+	if err := d.writer.submit(job); err != nil {
+		return Message{}, err
+	}
+	result := <-job.done
+	if result.err != nil {
+		return Message{}, result.err
+	}
+	// The shared commit landed; the ENGINE-20/ENGINE-30 registries must move
+	// with it so no reader serves a version-keyed cache that hides the
+	// committed message. The crash window the writer documents (message row
+	// without its index row) applies here exactly as to the search/unread
+	// statements below, so the bumps go with the commit, not with after(). On
+	// the in-line path everything — row, index, unread — committed together,
+	// and the bumps follow that single commit.
+	d.bumpSidebarVersion()
+	d.corpusVersion.Add(1)
+	if staged != nil {
 		staged.Keep()
 	}
-	return m, err
+	if job.after == nil || result.inline {
+		// The in-line path already ran the after-commit work inside the
+		// job's own transaction; replaying it here would hit the rows it
+		// just committed.
+		return result.message, nil
+	}
+	afterCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// One transaction of the after-commit pair on the write lane: the two
+	// statements commit together instead of in two implicit transactions,
+	// halving the after-work's hold on the single write connection.
+	btx, err := d.lane.begin(context.Background())
+	if err != nil {
+		return result.message, err
+	}
+	if err := job.after(afterCtx, btx, result.message); err != nil {
+		btx.rollback()
+		return result.message, err
+	}
+	if err := btx.commit(); err != nil {
+		return result.message, err
+	}
+	return result.message, nil
 }
 
 // AuthorizedSessions checks a publication's distinct sessions in one snapshot.

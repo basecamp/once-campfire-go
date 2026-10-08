@@ -54,7 +54,12 @@ func normalizedPath(path string) string {
 	parts := strings.FieldsFunc(path, func(r rune) bool { return r == '/' })
 	return escapedHex.ReplaceAllStringFunc("/"+strings.Join(parts, "/"), strings.ToUpper)
 }
-func recognize(method, path string) (*routeContract, map[string]string, error) {
+
+// legacyRecognize matches an escaped path against the contract table with the
+// per-route compiled regexes. The compiled matcher in route_compiled.go
+// replicates it exactly and runs instead unless CAMPFIRE_COMPILED_ROUTES=off
+// or a pattern class the compiler cannot prove identical appears.
+func legacyRecognize(method, path string) (*routeContract, map[string]string, error) {
 	path = normalizedPath(path)
 	if method == "HEAD" {
 		method = "GET"

@@ -40,8 +40,7 @@ func (s *Server) botRequest(w http.ResponseWriter, r *http.Request) bool {
 	var err error
 	fromCookie := false
 	if cookie, e := r.Cookie("session_token"); e == nil {
-		var token string
-		if s.Secrets.VerifyCookie("session_token", rails.UnescapeCookie(cookie.Value), s.DB.Now(), &token) == nil {
+		if token, err := s.verifiedSessionToken(rails.UnescapeCookie(cookie.Value), s.DB.Now()); err == nil {
 			user, err = s.DB.SessionUser(r.Context(), token)
 			fromCookie = err == nil
 		}
@@ -177,8 +176,9 @@ func (s *Server) botRequest(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		s.publish(room.ID, stream("append", room.DOM("messages"), markup))
-		s.messageCreated(message, room)
-		s.enqueueWebhooks(message, room)
+		s.messageCreated(message, room, nil)
+
+		s.enqueueWebhooks(message, room, nil)
 		w.Header().Set("Location", fmt.Sprintf("%s/messages/%d", s.origin(r), message.ID))
 		w.WriteHeader(201)
 	case "PATCH", "PUT":

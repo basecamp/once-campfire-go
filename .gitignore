@@ -7,3 +7,5 @@
 /assets/generated/
 
 __pycache__/
+
+/tmp/

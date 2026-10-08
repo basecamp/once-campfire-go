@@ -14,9 +14,38 @@ type Config struct {
 	TargetPort, HTTPPort, HTTPSPort                           int
 	CacheSize, MaxCacheItemSize, MaxRequestBody               int64
 	Gzip, DisableGzipOnAuth, H2C, ForwardHeaders, LogRequests bool
-	Domains                                                   []string
-	ACMEDirectory, StoragePath, EABKeyID, EABKey              string
-	IdleTimeout, ReadTimeout, WriteTimeout                    time.Duration
+	// AccessLog receives one access-log record (method, path, duration) after
+	// each request when LogRequests is on; nil keeps the slog default line.
+	// cmd/campfire wires it to the async access-log pipeline (a bounded queue
+	// drained and formatted by a dedicated goroutine; see
+	// cmd/campfire/accesslog.go), so neither the formatting lock nor the log
+	// pipe write lands on the request path in production.
+	AccessLog func(method, path string, duration time.Duration)
+	// ServerLoop selects the owned server loop (internal/fastserve) for the
+	// internal target listener and, when TLS is not configured, the public
+	// plain-HTTP listener instead of net/http's conn loop. It is on by
+	// default (ENGINE-53 measured it faster across the application request
+	// set with byte-equal responses; see plans/engine-41.md); set
+	// CAMPFIRE_SERVER_LOOP=off to roll back to net/http on both. TLS/ACME
+	// listeners always stay on net/http + autocert.
+	ServerLoop bool
+	// FixedRoutes enables the fixed-route table (CAMPFIRE_FRONT_FIXED): the
+	// front answers /up from a captured precomputed response instead of
+	// running the application on every request. Wire bytes are identical to
+	// the application path; the flag exists as the rollback switch.
+	FixedRoutes bool
+	// SkipDeflate hands response encoding to the application, for a
+	// precomposed handler such as the engine. The caller then owns
+	// Content-Encoding and Vary: Accept-Encoding on every cacheable
+	// response (the front cache keys variants on Vary and snapshots headers
+	// before the public chain adds it), the 406 negotiation policy, and the
+	// No-Gzip-Compression / DisableGzipOnAuth policy for responses the app
+	// pre-encodes: PublicCompression applies those vetoes only to bodies it
+	// compresses itself.
+	SkipDeflate                                  bool
+	Domains                                      []string
+	ACMEDirectory, StoragePath, EABKeyID, EABKey string
+	IdleTimeout, ReadTimeout, WriteTimeout       time.Duration
 }
 
 func FromEnv() Config { return FromLookup(os.LookupEnv) }
@@ -54,7 +83,30 @@ func FromLookup(lookup func(string) (string, bool)) Config {
 	seconds := func(key string, fallback int64) time.Duration {
 		return time.Duration(max(0, number(key, fallback))) * time.Second
 	}
-	c := Config{CompressionJitter: int(max(0, number("GZIP_COMPRESSION_JITTER", 32))), TargetBind: get("TARGET_BIND", "127.0.0.1"), TargetPort: port("TARGET_PORT", 3000), HTTPPort: port("HTTP_PORT", 80), HTTPSPort: port("HTTPS_PORT", 443), CacheSize: number("CACHE_SIZE", 64<<20), MaxCacheItemSize: number("MAX_CACHE_ITEM_SIZE", 1<<20), MaxRequestBody: number("MAX_REQUEST_BODY", 0), Gzip: boolean("GZIP_COMPRESSION_ENABLED", true), DisableGzipOnAuth: boolean("GZIP_COMPRESSION_DISABLE_ON_AUTH", false), H2C: boolean("H2C_ENABLED", false), LogRequests: boolean("LOG_REQUESTS", true), ACMEDirectory: get("ACME_DIRECTORY", "https://acme-v02.api.letsencrypt.org/directory"), StoragePath: get("STORAGE_PATH", "./storage/thruster"), EABKeyID: get("EAB_KID", ""), EABKey: get("EAB_HMAC_KEY", ""), IdleTimeout: seconds("HTTP_IDLE_TIMEOUT", 60), ReadTimeout: seconds("HTTP_READ_TIMEOUT", 30), WriteTimeout: seconds("HTTP_WRITE_TIMEOUT", 30)}
+	c := Config{CompressionJitter: int(max(0, number("GZIP_COMPRESSION_JITTER", 32))), TargetBind: get("TARGET_BIND", "127.0.0.1"), TargetPort: port("TARGET_PORT", 3000), HTTPPort: port("HTTP_PORT", 80), HTTPSPort: port("HTTPS_PORT", 443), CacheSize: number("CACHE_SIZE", 64<<20), MaxCacheItemSize: number("MAX_CACHE_ITEM_SIZE", 1<<20), MaxRequestBody: number("MAX_REQUEST_BODY", 0), Gzip: boolean("GZIP_COMPRESSION_ENABLED", true), DisableGzipOnAuth: boolean("GZIP_COMPRESSION_DISABLE_ON_AUTH", false), H2C: boolean("H2C_ENABLED", false), LogRequests: boolean("LOG_REQUESTS", true), ACMEDirectory: get("ACME_DIRECTORY", "https://acme-v02.api.letsencrypt.org/directory"), StoragePath: get("STORAGE_PATH", "./storage/thruster"), EABKeyID: get("EAB_KID", ""), EABKey: get("EAB_HMAC_KEY", ""), IdleTimeout: seconds("HTTP_IDLE_TIMEOUT", 60), ReadTimeout: seconds("HTTP_READ_TIMEOUT", 30), WriteTimeout: seconds("HTTP_WRITE_TIMEOUT", 30), ServerLoop: true}
+	// CAMPFIRE_SERVER_LOOP is read directly (not through the THRUSTER_
+	// pair) because it is this app's own rollback switch, like the other
+	// CAMPFIRE_* variables in cmd/campfire. The loop is the default; "off"
+	// (or false/0) rolls back to net/http on the internal listener. "on"/
+	// "true"/"1" spellings are accepted alongside ParseBool values; anything
+	// else keeps the default on.
+	if value, ok := lookup("CAMPFIRE_SERVER_LOOP"); ok {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "on", "true", "1":
+			c.ServerLoop = true
+		case "off", "false", "0":
+			c.ServerLoop = false
+		}
+	}
+	c.FixedRoutes = true
+	if value, ok := lookup("CAMPFIRE_FRONT_FIXED"); ok {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "on", "true", "1":
+			c.FixedRoutes = true
+		case "off", "false", "0":
+			c.FixedRoutes = false
+		}
+	}
 	if net.ParseIP(c.TargetBind) == nil {
 		c.TargetBind = "127.0.0.1"
 	}

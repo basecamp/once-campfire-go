@@ -4,22 +4,22 @@ import (
 	"container/list"
 	"context"
 	"crypto/rand"
-	"encoding/binary"
+	"crypto/sha256"
 	"html/template"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
-	"github.com/basecamp/once-campfire-go/internal/responsebody"
 )
 
 type fragmentEntry struct {
-	key   string
-	html  template.HTML
-	bytes int
-	part  responsebody.Part
-	shell *templateShell
+	key                         string
+	html                        template.HTML
+	bytes                       int
+	digest                      [32]byte
+	payload                     []byte
+	messageMarker, loadedMarker string
 }
 type fragmentCache struct {
 	mu           sync.Mutex
@@ -52,23 +52,31 @@ func (c *fragmentCache) put(key string, html template.HTML) template.HTML {
 	return c.putEntry(fragmentEntry{key: key, html: html}).html
 }
 func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
-	key := entry.key
-	size := len(key) + len(entry.html) + entry.part.Len() + 240
-	if entry.shell != nil {
-		// Charge owned payload once, plus the slice and Part headers/digests.
-		size += entry.shell.bytes + 32 + 56*len(entry.shell.parts)
-	}
-	if size > c.limit/4 {
-		return entry
-	}
-	entry.bytes = size
-	// Callers prepare owned payloads before admission. Oversized/disabled-cache
-	// responses remain usable, and hits never wait for copying or hashing.
+	key, html := entry.key, entry.html
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e, ok := c.entries[key]; ok {
 		c.order.MoveToFront(e)
 		return e.Value.(fragmentEntry)
+	}
+	size := len(key) + len(html) + len(entry.messageMarker) + len(entry.loadedMarker) + 240
+	// fragmentKey namespaces message-list keys with the observed generation
+	// and origin, so the list marker is a path segment, not a prefix.
+	listEntry := strings.HasPrefix(key, "message-list/") || strings.Contains(key, "/message-list/")
+	var payload []byte
+	if listEntry {
+		payload = []byte(html)
+		size += len(payload)
+	}
+	if size > c.limit/4 {
+		return entry
+	}
+	// The digest feeds recorded-page ETags, which only ever hash the
+	// message-list payload; a single-message fragment's digest is never
+	// read, so only message-list entries pay for the hash (ENGINE-45b).
+	entry.bytes, entry.payload = size, payload
+	if listEntry {
+		entry.digest = sha256.Sum256([]byte(html))
 	}
 	c.entries[key] = c.order.PushFront(entry)
 	c.bytes += size
@@ -83,33 +91,8 @@ func (c *fragmentCache) putEntry(entry fragmentEntry) fragmentEntry {
 	}
 	return entry
 }
-
-const messageVersionSize = 20
-
-// Match Stamp's UTC, microsecond-truncated identity without formatting dates.
-// Separate seconds and fractions avoid UnixNano/UnixMicro's narrower date range.
-func messageVersion(message database.Message) [messageVersionSize]byte {
-	var version [messageVersionSize]byte
-	binary.LittleEndian.PutUint64(version[:8], uint64(message.ID))
-	binary.LittleEndian.PutUint64(version[8:16], uint64(message.UpdatedAt.Unix()))
-	binary.LittleEndian.PutUint32(version[16:], uint32(message.UpdatedAt.Nanosecond()/1000))
-	return version
-}
-
 func messageCacheKey(message database.Message) string {
-	version := messageVersion(message)
-	return "message/" + string(version[:])
-}
-
-func messageListCacheKey(messages []database.Message) string {
-	var key strings.Builder
-	key.Grow(len("message-list/") + messageVersionSize*len(messages))
-	key.WriteString("message-list/")
-	for _, message := range messages {
-		version := messageVersion(message)
-		key.Write(version[:])
-	}
-	return key.String()
+	return "message/" + database.Stamp(message.UpdatedAt) + "/" + strconv.FormatInt(message.ID, 10)
 }
 
 // Namespace timestamp fragments by the generation observed before request reads.
@@ -161,10 +144,12 @@ func (s *Server) messageItems(ctx context.Context, messages []database.Message) 
 				continue
 			}
 		}
-		views[i].Message = m
-	}
-	if err := s.hydrateMessageViews(ctx, views); err != nil {
-		return nil, err
+
+		rendered, err := s.messageViews(ctx, []database.Message{m})
+		if err != nil {
+			return nil, err
+		}
+		views[i] = rendered[0]
 	}
 	return views, nil
 }

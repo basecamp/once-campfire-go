@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	xhtml "github.com/basecamp/once-campfire-go/internal/html"
 )
 
 // rails_autolink operates on serialized HTML, including entity references.
@@ -21,8 +23,18 @@ type tagIndex struct {
 	dangling         int
 }
 
-func indexTags(s string) tagIndex {
+func indexTags(a *xhtml.Arena, s string) tagIndex {
 	t := tagIndex{dangling: -1}
+	if a != nil {
+		// Preallocated slab regions sized by upper bounds (lts: every byte
+		// could be '<'; gts likewise; closes and anchors are a fraction of
+		// tags). Appends past these bounds reallocate from the arena slab
+		// via spare-capacity growth; the common case allocates nothing.
+		t.lts = a.IntsCap(len(s))
+		t.gts = a.IntsCap(len(s))
+		t.closes = a.IntsCap(len(s)/4 + 8)
+		t.anchors = a.PairsCap(len(s)/6 + 8)
+	}
 	unclosed := -1
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
@@ -34,7 +46,7 @@ func indexTags(s string) tagIndex {
 			if i+4 <= len(s) && strings.EqualFold(s[i:i+4], "</a>") {
 				t.closes = append(t.closes, i)
 			}
-			if len(t.anchors) == 0 || t.anchors[len(t.anchors)-1][1] <= i {
+			if (i+1 < len(s) && (s[i+1] == 'a' || s[i+1] == 'A')) && (len(t.anchors) == 0 || t.anchors[len(t.anchors)-1][1] <= i) {
 				if m := anchorPattern.FindStringIndex(s[i:]); m != nil {
 					t.anchors = append(t.anchors, [2]int{i, i + m[1]})
 				}
@@ -73,58 +85,68 @@ func (t tagIndex) linked(start, end int) bool {
 func word(c rune) bool {
 	return unicode.IsLetter(c) || unicode.IsNumber(c) || unicode.IsMark(c) || unicode.Is(unicode.Pc, c) || c == '\u200c' || c == '\u200d'
 }
-func sanitizeString(s string) (string, error) {
-	n, e := parse(s)
+func sanitizeString(a *xhtml.Arena, s string) (string, error) {
+	n, e := parse(a, s)
 	if e != nil {
 		return "", e
 	}
 	sanitizeDOM(n, "default")
-	return serialize(n), nil
+	return serialize(a, n), nil
 }
 
-// Every URL match contains :// or an ASCII-case-insensitive www. prefix.
-// Avoid regexp matching and tag indexing for ordinary message text.
-func urlCandidate(text string) bool {
-	if strings.Contains(text, "://") {
-		return true
-	}
-	for len(text) >= 4 {
-		i := strings.IndexAny(text, "wW")
-		if i < 0 || i+4 > len(text) {
-			return false
-		}
-		if strings.EqualFold(text[i:i+4], "www.") {
+// maybeLinkable reports whether text contains any byte pattern the autoLink
+// passes could match: a scheme followed by :// (the URL pattern's first
+// branch), www. in either case (its second branch), or an @ (mandatory in
+// the email pattern). The passes cannot match without one of these, so a
+// negative scan lets autoLink return its input unchanged, which is exactly
+// what the passes would produce (their no-match outputs are the input).
+func maybeLinkable(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case ':':
+			if i+2 < len(s) && s[i+1] == '/' && s[i+2] == '/' {
+				return true
+			}
+		case '@':
 			return true
+		case 'w', 'W':
+			if i+3 < len(s) && (s[i+1] == 'w' || s[i+1] == 'W') && (s[i+2] == 'w' || s[i+2] == 'W') && s[i+3] == '.' {
+				return true
+			}
 		}
-		text = text[i+1:]
 	}
 	return false
 }
-func autoLink(text string) (string, error) {
-	if !urlCandidate(text) {
-		return autoLinkEmails(text)
+
+func autoLink(a *xhtml.Arena, text string) (string, error) {
+	if !maybeLinkable(text) {
+		return text, nil
 	}
-	matches := urlPattern.FindAllStringIndex(text, -1)
-	if len(matches) == 0 {
-		return autoLinkEmails(text)
-	}
-	var out strings.Builder
+	out := a.NewBuilder()
 	last := 0
-	tags := indexTags(text)
-	for _, m := range matches {
-		out.WriteString(text[last:m[0]])
-		last = m[1]
-		whole := text[m[0]:m[1]]
-		if tags.linked(m[0], m[1]) {
+	tags := indexTags(a, text)
+	for _, m := range urlPattern.FindAllStringIndex(text, -1) {
+		m0, m1 := m[0], m[1]
+		out.WriteString(text[last:m0])
+		last = m1
+		whole := text[m0:m1]
+		if tags.linked(m0, m1) {
 			out.WriteString(whole)
 			continue
 		}
-		href := []rune(whole)
-		counts := map[rune]int{}
+		// Trim trailing non-word punctuation with bracket-balance
+		// restoration, tracking occurrence counts as the reference's map
+		// does. Only ASCII runes are ever compared (closing brackets are
+		// ASCII), so a stack table serves; the reference's map entries for
+		// other runes are never read.
+		href := arenaRunes(a, whole)
+		var counts [256]int32
 		for _, c := range href {
-			counts[c]++
+			if c < 256 {
+				counts[c]++
+			}
 		}
-		var punctuation []rune
+		punctuation := a.RunesCap(len(href))
 		for len(href) > 0 {
 			c := href[len(href)-1]
 			if word(c) || strings.ContainsRune("/-=;", c) {
@@ -132,15 +154,17 @@ func autoLink(text string) (string, error) {
 			}
 			href = href[:len(href)-1]
 			punctuation = append(punctuation, c)
-			counts[c]--
-			opening := map[rune]rune{')': '(', ']': '[', '}': '{'}[c]
-			if opening != 0 && counts[opening] > counts[c] {
+			if c < 256 {
+				counts[c]--
+			}
+			opening := pair[c]
+			if opening != 0 && int(counts[opening]) > int(counts[c]) {
 				href = append(href, c)
 				punctuation = punctuation[:len(punctuation)-1]
 				break
 			}
 		}
-		display := string(href)
+		display := runesString(a, href)
 		trailingGT := ""
 		if strings.HasSuffix(display, "&gt;") {
 			display = strings.TrimSuffix(display, "&gt;")
@@ -148,40 +172,70 @@ func autoLink(text string) (string, error) {
 		}
 		destination := display
 		if strings.HasPrefix(strings.ToLower(destination), "www.") {
-			destination = "http://" + destination
+			destination = a.Concat("http://", destination)
 		}
 		same := destination == display
-		display, e := sanitizeString(display)
+		display, e := sanitizeString(a, display)
 		if e != nil {
 			return "", e
 		}
 		if same {
 			destination = display
 		} else {
-			destination, e = sanitizeString(destination)
+			destination, e = sanitizeString(a, destination)
 			if e != nil {
 				return "", e
 			}
 		}
-		out.WriteString(`<a target="_blank" href="` + strings.ReplaceAll(destination, `"`, "&quot;") + `">` + display + `</a>`)
+		out.WriteString(`<a target="_blank" href="`)
+		out.WriteString(a.ReplaceAll(destination, `"`, "&quot;"))
+		out.WriteString(`">`)
+		out.WriteString(display)
+		out.WriteString("</a>")
 		for i := len(punctuation) - 1; i >= 0; i-- {
-			out.WriteString(erbEscape(string(punctuation[i])))
+			out.WriteString(erbEscape(a, string(punctuation[i])))
 		}
 		out.WriteString(trailingGT)
 	}
 	out.WriteString(text[last:])
-	return autoLinkEmails(out.String())
+	return autoLinkEmails(a, out.String())
 }
+
+// pair maps a closing rune to its opening match — the reference builds this
+// map literal on every link.
+var pair = map[rune]rune{')': '(', ']': '[', '}': '{'}
+
+// arenaRunes decodes s into a rune view in the arena's rune slab.
+func arenaRunes(a *xhtml.Arena, s string) []rune {
+	r := a.RunesCap(utf8.RuneCountInString(s))
+	for _, c := range s {
+		r = append(r, c)
+	}
+	return r
+}
+
+// runesString encodes the rune slice into the arena's byte slab.
+func runesString(a *xhtml.Arena, r []rune) string {
+	if len(r) == 0 {
+		return ""
+	}
+	b := a.BytesCap(utf8.RuneLen(r[0]) * len(r))
+	for _, c := range r {
+		b = utf8.AppendRune(b, c)
+	}
+	return a.View(b)
+}
+
 func emailLocal(c rune) bool {
 	return c < 128 && (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("_.!#$%&'*/=?^`{|}~+-", c))
 }
-func autoLinkEmails(text string) (string, error) {
-	if !strings.Contains(text, "@") {
+func autoLinkEmails(a *xhtml.Arena, text string) (string, error) {
+	if !strings.ContainsRune(text, '@') {
 		return text, nil
 	}
-	var out strings.Builder
+	out := a.NewBuilder()
 	copied, position := 0, 0
-	tags := indexTags(text)
+	tags := indexTags(a, text)
 	for position < len(text) {
 		var m []int
 		previous, _ := utf8.DecodeLastRuneInString(text[:position])
@@ -199,16 +253,20 @@ func autoLinkEmails(text string) (string, error) {
 		if tags.linked(start, end) {
 			out.WriteString(email)
 		} else {
-			sanitized, e := sanitizeString(email)
+			sanitized, e := sanitizeString(a, email)
 			if e != nil {
 				return "", e
 			}
 			display := sanitized
 			if sanitized == email {
-				display = erbEscape(email)
+				display = erbEscape(a, email)
 			}
-			href := "mailto:" + strings.ReplaceAll(url.QueryEscape(sanitized), "%40", "@")
-			out.WriteString(`<a target="_blank" href="` + erbEscape(href) + `">` + display + `</a>`)
+			quoted := url.QueryEscape(sanitized)
+			out.WriteString(`<a target="_blank" href="`)
+			out.WriteString(erbEscape(a, a.ReplaceAll(a.Concat("mailto:", quoted), "%40", "@")))
+			out.WriteString(`">`)
+			out.WriteString(display)
+			out.WriteString("</a>")
 		}
 		copied = end
 		position = end

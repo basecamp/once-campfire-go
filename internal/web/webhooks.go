@@ -17,7 +17,11 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/storage"
 )
 
-func (s *Server) enqueueWebhooks(message database.Message, room database.Room) {
+// enqueueWebhooks queues webhook deliveries to mentioned bots (or every
+// user, for direct rooms). mentioned carries the mentioned user ids the
+// create path already derived from the body's single parse (ENGINE-45b);
+// nil means "derive here".
+func (s *Server) enqueueWebhooks(message database.Message, room database.Room, mentioned []int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var candidates []database.User
@@ -25,8 +29,10 @@ func (s *Server) enqueueWebhooks(message database.Message, room database.Room) {
 	if room.Type == "Rooms::Direct" {
 		candidates, err = s.DB.Users(ctx, room.ID, true)
 	} else {
-		ids := s.mentionedIDs(ctx, message.Body)
-		for _, id := range ids {
+		if mentioned == nil {
+			mentioned = s.mentionedIDs(ctx, message.Body)
+		}
+		for _, id := range mentioned {
 			u, e := s.DB.User(ctx, id)
 			if errors.Is(e, sql.ErrNoRows) {
 				continue
@@ -142,7 +148,7 @@ func (s *Server) deliverWebhook(ctx context.Context, botID, messageID int64) err
 	if err != nil {
 		return err
 	}
-	s.messageCreated(created, room)
+	s.messageCreated(created, room, nil)
 	views, err := s.messageViews(ctx, []database.Message{created})
 	if err != nil {
 		return err

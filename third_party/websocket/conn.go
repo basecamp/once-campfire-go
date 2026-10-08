@@ -51,6 +51,20 @@ type Conn struct {
 	br             *bufio.Reader
 	bw             *bufio.Writer
 
+	// readSrc is the byte source for header-first reads. Server connections
+	// accepted via Accept read frames directly off this source (usually the
+	// raw net.Conn, with any handshake-buffered bytes replayed first) and
+	// hold no large buffered reader while idle. Client connections and
+	// tests keep the legacy br path (readSrc nil).
+	readSrc io.Reader
+
+	// Batch write scratch: reused across WritePreparedBatch calls so a wake
+	// coalescing up to batchMaxFrames frames performs no allocations.
+	batchHeader []byte
+	batchRsv1   []bool
+	batchData   [][]byte
+	batchBufs   net.Buffers
+
 	readTimeoutStop  atomic.Pointer[func() bool]
 	writeTimeoutStop atomic.Pointer[func() bool]
 
@@ -99,6 +113,10 @@ type connConfig struct {
 
 	br *bufio.Reader
 	bw *bufio.Writer
+
+	// readSrc enables the header-first read path (server connections).
+	// When set, br must be nil.
+	readSrc io.Reader
 }
 
 func newConn(cfg connConfig) *Conn {
@@ -111,6 +129,8 @@ func newConn(cfg connConfig) *Conn {
 
 		br: cfg.br,
 		bw: cfg.bw,
+
+		readSrc: cfg.readSrc,
 
 		closed:         make(chan struct{}),
 		activePings:    make(map[string]chan<- struct{}),
@@ -284,6 +304,13 @@ func (m *mu) tryLock() bool {
 }
 
 func (m *mu) lock(ctx context.Context) error {
+	// ENGINE-61: uncontended acquisition is the common case (one writer per
+	// connection drains its own queue), so try the lock once without the
+	// three-case select's full scan. The blocking select below is unchanged
+	// for the contended and cancellation cases.
+	if m.tryLock() {
+		return m.checkAlive()
+	}
 	select {
 	case <-m.c.closed:
 		return net.ErrClosed
@@ -293,15 +320,21 @@ func (m *mu) lock(ctx context.Context) error {
 		// To make sure the connection is certainly alive.
 		// As it's possible the send on m.ch was selected
 		// over the receive on closed.
-		select {
-		case <-m.c.closed:
-			// Make sure to release.
-			m.unlock()
-			return net.ErrClosed
-		default:
-		}
-		return nil
+		return m.checkAlive()
 	}
+}
+
+// checkAlive is the post-acquisition liveness check; the caller holds the lock
+// and must unlock (or let its defer do so) if it returns an error.
+func (m *mu) checkAlive() error {
+	select {
+	case <-m.c.closed:
+		// Make sure to release.
+		m.unlock()
+		return net.ErrClosed
+	default:
+	}
+	return nil
 }
 
 func (m *mu) unlock() {

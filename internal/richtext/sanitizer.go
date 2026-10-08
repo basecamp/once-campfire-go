@@ -67,7 +67,12 @@ func sanitizeDOM(root *xhtml.Node, mode string) {
 		}
 		if !allowed {
 			if n.Namespace == "" {
-				for _, c := range children(n) {
+				// Reparent every child before n, preserving order: popping
+				// the front child and inserting it right before n keeps the
+				// sequence c1..ck in the original order (each insertion
+				// lands after the ones already done).
+				for n.FirstChild != nil {
+					c := n.FirstChild
 					n.RemoveChild(c)
 					n.Parent.InsertBefore(c, n)
 				}

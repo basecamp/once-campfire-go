@@ -136,8 +136,8 @@ func (w *sessionWriter) Flush() {
 	http.NewResponseController(w.ResponseWriter).Flush()
 }
 func (s *Server) withBrowserSession(w http.ResponseWriter, r *http.Request) (http.ResponseWriter, *http.Request) {
-	state := &browserSession{server: s, request: r}
-	return &sessionWriter{ResponseWriter: w, session: state}, r.WithContext(context.WithValue(r.Context(), browserSessionKey{}, state))
+	state := borrowBrowserSession(s, r)
+	return borrowSessionWriter(w, state), r.WithContext(context.WithValue(r.Context(), browserSessionKey{}, state))
 }
 func (s *Server) requestAuthentication(w http.ResponseWriter, r *http.Request) {
 	browserState(r).set("return_to_after_authenticating", s.origin(r)+r.URL.RequestURI())
@@ -196,8 +196,8 @@ func (s *Server) requireUnauthenticated(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		return true
 	}
-	var token string
-	if s.Secrets.VerifyCookie("session_token", rails.UnescapeCookie(cookie.Value), s.DB.Now(), &token) != nil {
+	token, err := s.verifiedSessionToken(rails.UnescapeCookie(cookie.Value), s.DB.Now())
+	if err != nil {
 		return true
 	}
 	if _, err := s.DB.SessionUser(r.Context(), token); err != nil {

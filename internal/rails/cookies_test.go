@@ -3,6 +3,7 @@ package rails
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"reflect"
 	"testing"
@@ -116,5 +117,76 @@ func TestRailsCookieVectors(t *testing.T) {
 				t.Fatal("accepted tampered ciphertext")
 			}
 		})
+	}
+}
+
+func TestVerifyCookieExpires(t *testing.T) {
+	secrets, err := NewSecrets("expiry-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiry := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	now := time.Date(2026, 1, 2, 3, 0, 0, 0, time.UTC)
+	raw, err := secrets.SignCookie("session_token", "token-123", expiry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var token string
+	got, err := secrets.VerifyCookieExpires("session_token", raw, now, &token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "token-123" {
+		t.Fatalf("token = %q", token)
+	}
+	if !got.Equal(expiry) {
+		t.Fatalf("expiry = %v, want %v", got, expiry)
+	}
+	// VerifyCookie still behaves identically.
+	if err := secrets.VerifyCookie("session_token", raw, now, &token); err != nil {
+		t.Fatalf("VerifyCookie: %v", err)
+	}
+	// A cookie already expired at verification time fails like VerifyCookie.
+	if _, err := secrets.VerifyCookieExpires("session_token", raw, expiry.Add(time.Second), &token); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("expired cookie: got %v, want ErrInvalid", err)
+	}
+	// A cookie without an envelope expiry returns a zero expiry.
+	noExpiry, err := secrets.SignCookie("session_token", "token-456", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = secrets.VerifyCookieExpires("session_token", noExpiry, now, &token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.IsZero() {
+		t.Fatalf("expiry = %v, want zero", got)
+	}
+	// Tampered bytes never verify, in either shape.
+	mutated := []byte(raw)
+	mutated[len(mutated)/2] ^= 0x40
+	if _, err := secrets.VerifyCookieExpires("session_token", string(mutated), now, &token); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("tampered cookie: got %v, want ErrInvalid", err)
+	}
+}
+
+func TestSigningFingerprint(t *testing.T) {
+	a, err := NewSecrets("same-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewSecrets("same-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.SigningFingerprint() != b.SigningFingerprint() {
+		t.Fatal("fingerprints differ for the same secret")
+	}
+	c, err := NewSecrets("other-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.SigningFingerprint() == c.SigningFingerprint() {
+		t.Fatal("fingerprints match for different secrets")
 	}
 }

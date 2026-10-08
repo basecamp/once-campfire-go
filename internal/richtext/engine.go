@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
+	"unicode/utf8"
 
 	xhtml "github.com/basecamp/once-campfire-go/internal/html"
 )
@@ -25,10 +28,51 @@ type Result struct {
 	Mentioned                                         []int64
 }
 
+// arenaFreelist hands out per-call arena slabs: the whole rich-text pipeline
+// for one message — parse trees, serializations, plain text, presentation
+// building — lives in one arena, which is reset and returned here when the
+// call ends. A mutex-guarded freelist is used instead of sync.Pool
+// deliberately: pool entries are purged on every GC cycle, which under the
+// per-message output allocation pressure would rebuild the slabs on almost
+// every call. The freelist retains a bounded set of arenas per process; the
+// contract is one goroutine per arena at a time and exactly one return
+// (defer at the entry point). Output strings (Result fields, public
+// returns) are copied out of the arena before release; no value that
+// outlives the call may reference arena memory.
+var arenaFreelist struct {
+	sync.Mutex
+	slabs []*xhtml.Arena
+}
+
+const maxArenas = 8
+
+func acquireArena() *xhtml.Arena {
+	arenaFreelist.Lock()
+	if n := len(arenaFreelist.slabs); n > 0 {
+		a := arenaFreelist.slabs[n-1]
+		arenaFreelist.slabs = arenaFreelist.slabs[:n-1]
+		arenaFreelist.Unlock()
+		return a
+	}
+	arenaFreelist.Unlock()
+	return xhtml.NewArena()
+}
+
+func releaseArena(a *xhtml.Arena) {
+	a.Reset()
+	arenaFreelist.Lock()
+	if len(arenaFreelist.slabs) < maxArenas {
+		arenaFreelist.slabs = append(arenaFreelist.slabs, a)
+		arenaFreelist.Unlock()
+		return
+	}
+	arenaFreelist.Unlock()
+}
+
 var attributeOrder = []string{"sgid", "content-type", "url", "href", "filename", "filesize", "width", "height", "previewable", "presentation", "caption", "content"}
 
-func load(body string) (*xhtml.Node, error) {
-	root, err := parse(strings.Trim(body, "\x00\t\n\v\f\r "))
+func load(a *xhtml.Arena, body string) (*xhtml.Node, error) {
+	root, err := parse(a, strings.Trim(body, "\x00\t\n\v\f\r "))
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +88,7 @@ func load(body string) (*xhtml.Node, error) {
 			data := map[string]any{}
 			for _, key := range []string{"data-trix-attachment", "data-trix-attributes"} {
 				var parsed any
-				if rubyJSON(attr(n, key), &parsed) == nil && parsed != nil && parsed != false {
+				if rubyJSON(a, attr(n, key), &parsed) == nil && parsed != nil && parsed != false {
 					values, ok := parsed.(map[string]any)
 					if !ok {
 						failure = errors.New("missing merge on Trix attributes")
@@ -69,9 +113,9 @@ func load(body string) (*xhtml.Node, error) {
 					case nil:
 						text = ""
 					default:
-						text = fmt.Sprint(v)
+						text = fmtSprint(v)
 					}
-					attrs = append(attrs, xhtml.Attribute{Key: name, Val: text})
+					attrs = a.AttrAppend(attrs, xhtml.Attribute{Key: name, Val: text})
 				}
 			}
 			if len(attrs) == 0 {
@@ -85,7 +129,11 @@ func load(body string) (*xhtml.Node, error) {
 			n.Attr = attrs
 		}
 		if n.Data == "action-text-attachment" {
-			for _, c := range children(n) {
+			for {
+				c := n.FirstChild
+				if c == nil {
+					break
+				}
 				n.RemoveChild(c)
 			}
 		}
@@ -93,21 +141,33 @@ func load(body string) (*xhtml.Node, error) {
 	if failure != nil {
 		return nil, failure
 	}
-	galleries(root, false)
+	galleries(a, root, false)
 	return root, nil
 }
+
+// fmtSprint mirrors the reference's fmt.Sprint formatting for the
+// non-string attribute value forms the Trix JSON decodes into (numbers and
+// booleans): %v of float64 formats integral values without a decimal point
+// and switches to exponent notation at the same thresholds the reference
+// hits — the calls are byte-identical by virtue of using fmt itself.
+func fmtSprint(v any) string { return fmt.Sprintf("%v", v) }
 
 // PlainText follows the same attachment and whitespace rules as Process without
 // rendering HTML variants that callers storing the search text do not need.
 func PlainText(body string, ctx Context) (string, error) {
-	root, err := load(body)
+	a := acquireArena()
+	defer releaseArena(a)
+	return plainText(a, body, ctx)
+}
+func plainText(a *xhtml.Arena, body string, ctx Context) (string, error) {
+	root, err := load(a, body)
 	if err != nil {
 		return "", err
 	}
-	if err = replaceAttachments(root, ctx, true, 0); err != nil {
+	if err = replaceAttachments(a, root, ctx, true, 0); err != nil {
 		return "", err
 	}
-	return chomp(plain(root)), nil
+	return strings.Clone(chomp(plain(a, root))), nil
 }
 
 type outputFields uint8
@@ -120,94 +180,150 @@ const (
 )
 
 func Process(body string, ctx Context) (Result, error) {
-	return process(body, ctx, displayOutput|editableOutput|bodyOutput|mentionsOutput)
+	a := acquireArena()
+	defer releaseArena(a)
+	return process(a, body, ctx, displayOutput|editableOutput|bodyOutput|mentionsOutput)
 }
 
 // Display renders message HTML and plain text without computing editor markup,
 // API body HTML or mention recipients that the message template never reads.
 func Display(body string, ctx Context) (Result, error) {
-	return process(body, ctx, displayOutput)
+	a := acquireArena()
+	defer releaseArena(a)
+	return process(a, body, ctx, displayOutput)
 }
-func Editable(body string, ctx Context) (string, error) { return editable(body, ctx) }
+func Editable(body string, ctx Context) (string, error) {
+	a := acquireArena()
+	defer releaseArena(a)
+	return editable(a, body, ctx)
+}
 func MentionIDs(body string, ctx Context) ([]int64, error) {
-	result, err := process(body, ctx, mentionsOutput)
+	a := acquireArena()
+	defer releaseArena(a)
+	result, err := process(a, body, ctx, mentionsOutput)
 	if err == nil {
 		err = result.Errors["mentioned"]
 	}
 	return result.Mentioned, err
 }
 
-func process(body string, ctx Context, fields outputFields) (Result, error) {
-	result := Result{Mentioned: []int64{}, Errors: map[string]error{}}
+func process(a *xhtml.Arena, body string, ctx Context, fields outputFields) (Result, error) {
+	result := Result{Mentioned: []int64{}}
 	var err error
 	if fields&editableOutput != 0 {
-		result.Editable, err = editable(body, ctx)
+		result.Editable, err = editable(a, body, ctx)
 		if err != nil {
-			result.Errors["editable"] = err
+			setResultError(&result, "editable", err)
 		}
 	}
 
-	root, err := load(body)
+	root, err := load(a, body)
 	if err != nil {
 		for _, field := range []string{"plain", "body_html", "filtered", "mentioned"} {
-			result.Errors[field] = err
+			setResultError(&result, field, err)
 		}
 		return result, nil
 	}
+	return processRoot(a, result, root, ctx, fields)
+}
+
+func setResultError(result *Result, field string, err error) {
+	if result.Errors == nil {
+		result.Errors = map[string]error{}
+	}
+	result.Errors[field] = err
+}
+
+// ProcessMessage computes the outputs the message create pipeline stores and
+// renders from one load of the canonical body: Display's presentation and
+// plain text, PlainText's plain text (the same value), and MentionIDs'
+// recipients. For any body the three outputs equal the separate Display,
+// PlainText and MentionIDs calls on the same input, including their empty
+// outputs on failure, so the create path can derive everything from one
+// parse instead of three.
+func ProcessMessage(body string, ctx Context) (Result, error) {
+	a := acquireArena()
+	defer releaseArena(a)
+	return processMessage(a, body, ctx)
+}
+
+// processMessage is ProcessMessage's arena-injected form.
+func processMessage(a *xhtml.Arena, body string, ctx Context) (Result, error) {
+	result := Result{Mentioned: []int64{}}
+	root, err := load(a, body)
+	if err != nil {
+		for _, field := range []string{"plain", "filtered", "mentioned"} {
+			setResultError(&result, field, err)
+		}
+		return result, nil
+	}
+	return processRoot(a, result, root, ctx, displayOutput|mentionsOutput)
+}
+
+// processRoot runs process's output derivation on an already-loaded tree,
+// filling the tree-based fields into result (which may already carry the
+// string-based editable output). process never reads the original body
+// string after load — every later step works on the tree or on serialized
+// forms of it — so for any body, processRoot with load(body) is exactly the
+// rest of process(body, ctx, fields).
+func processRoot(a *xhtml.Arena, result Result, root *xhtml.Node, ctx Context, fields outputFields) (Result, error) {
 	if fields&displayOutput != 0 {
-		plainRoot := clone(root)
-		if err = replaceAttachments(plainRoot, ctx, true, 0); err != nil {
-			result.Errors["plain"] = err
+		plainRoot := clone(a, root)
+		if err := replaceAttachments(a, plainRoot, ctx, true, 0); err != nil {
+			setResultError(&result, "plain", err)
 		} else {
-			result.Plain = chomp(plain(plainRoot))
+			result.Plain = strings.Clone(chomp(plain(a, plainRoot)))
 		}
 	}
 
 	if fields&bodyOutput != 0 {
-		rendered := clone(root)
-		if err = replaceAttachments(rendered, ctx, false, 0); err != nil {
-			result.Errors["body_html"] = err
+		rendered := clone(a, root)
+		if err := replaceAttachments(a, rendered, ctx, false, 0); err != nil {
+			setResultError(&result, "body_html", err)
 		} else {
-			galleries(rendered, true)
-			rendered, err = parse(serialize(rendered))
+			galleries(a, rendered, true)
+			var err error
+			rendered, err = parse(a, serialize(a, rendered))
 			if err != nil {
 				return result, err
 			}
 			sanitizeDOM(rendered, "action")
-			result.BodyHTML = "<div class=\"lexxy-content\">\n  " + serialize(rendered) + "\n</div>\n"
+			result.BodyHTML = "<div class=\"lexxy-content\">\n  " + serialize(a, rendered) + "\n</div>\n"
 		}
 	}
 
 	if fields&displayOutput != 0 {
+		filtered := root
+		if fields&mentionsOutput != 0 {
+			filtered = clone(a, root)
+		}
 		if result.Errors["plain"] != nil {
-			result.Errors["filtered"] = result.Errors["plain"]
+			setResultError(&result, "filtered", result.Errors["plain"])
 		} else {
-			// Plain/body rendering already owns its copies. Only recipient
-			// extraction still needs the original attachment tree afterward.
-			filtered := root
-			if fields&mentionsOutput != 0 {
-				filtered = clone(root)
-			}
-			removeSoloEmbed(filtered, ctx, result.Plain)
+			removeSoloEmbed(a, filtered, ctx, result.Plain)
 			filterTags(filtered)
 			sanitizeDOM(filtered, "filter")
-			filtered, err = parse(strings.Trim(serialize(filtered), "\x00\t\n\v\f\r "))
+			var err error
+			filtered, err = parse(a, strings.Trim(serialize(a, filtered), "\x00\t\n\v\f\r "))
 			if err != nil {
 				return result, err
 			}
-			result.Filtered = serialize(filtered)
-			if err = replaceAttachments(filtered, ctx, false, 0); err == nil {
-				galleries(filtered, true)
-				filtered, err = parse(serialize(filtered))
+			result.Filtered = strings.Clone(serialize(a, filtered))
+			if err = replaceAttachments(a, filtered, ctx, false, 0); err == nil {
+				galleries(a, filtered, true)
+				filtered, err = parse(a, serialize(a, filtered))
 				if err != nil {
 					return result, err
 				}
 				sanitizeDOM(filtered, "action")
 				var presentation *xhtml.Node
-				presentation, err = parse("<div class=\"lexxy-content\">\n  " + serialize(filtered) + "\n</div>\n")
+				presentation, err = parse(a, a.Concat3("<div class=\"lexxy-content\">\n  ", serialize(a, filtered), "\n</div>\n"))
 				if err == nil {
 					sanitizeDOM(presentation, "auto")
-					result.Presentation, _ = autoLink(serializePresentation(presentation))
+					// The reference discards autoLink's error here; keep the
+					// same outputs on every input.
+					linked, _ := autoLink(a, serializePresentation(a, presentation))
+					result.Presentation = strings.Clone(linked)
 				}
 			}
 		}
@@ -233,15 +349,15 @@ func process(body string, ctx Context, fields outputFields) (Result, error) {
 
 	return result, nil
 }
-func editable(body string, ctx Context) (string, error) {
-	root, err := parse(strings.Trim(body, "\x00\t\n\v\f\r "))
+func editable(a *xhtml.Arena, body string, ctx Context) (string, error) {
+	root, err := parse(a, strings.Trim(body, "\x00\t\n\v\f\r "))
 	if err != nil {
 		return "", err
 	}
 	var failure error
 	for pass := 0; pass < 2; pass++ {
 		if pass == 1 {
-			root, err = parse(serialize(root))
+			root, err = parse(a, serialize(a, root))
 			if err != nil {
 				return "", err
 			}
@@ -253,7 +369,7 @@ func editable(body string, ctx Context) (string, error) {
 			if pass == 1 && strings.TrimSpace(attr(n, "url")) != "" {
 				return
 			}
-			markup, ct, err := attachment(n, ctx, false, 0)
+			markup, ct, err := attachment(a, n, ctx, false, 0)
 			if err != nil {
 				failure = err
 				return
@@ -266,7 +382,7 @@ func editable(body string, ctx Context) (string, error) {
 				failure = errors.New("missing attachable_content_type")
 				return
 			}
-			setAttr(n, "content-type", ct)
+			setAttr(a, n, "content-type", ct)
 			if pass == 1 {
 				raw, err := json.Marshal(markup)
 				if err != nil {
@@ -275,18 +391,18 @@ func editable(body string, ctx Context) (string, error) {
 				}
 				markup = string(raw)
 			}
-			setAttr(n, "content", markup)
+			setAttr(a, n, "content", markup)
 		})
 		if failure != nil {
 			return "", failure
 		}
 	}
-	if strings.TrimSpace(serialize(root)) == "" {
+	if strings.TrimSpace(serialize(a, root)) == "" {
 		return "", nil
 	}
-	return serialize(root), nil
+	return strings.Clone(serialize(a, root)), nil
 }
-func removeSoloEmbed(root *xhtml.Node, ctx Context, text string) {
+func removeSoloEmbed(a *xhtml.Arena, root *xhtml.Node, ctx Context, text string) {
 	var embeds []*xhtml.Node
 	walk(root, func(n *xhtml.Node) {
 		if n.Data == "action-text-attachment" && opengraphType.MatchString(attr(n, "content-type")) {
@@ -296,8 +412,8 @@ func removeSoloEmbed(root *xhtml.Node, ctx Context, text string) {
 	if len(embeds) != 1 {
 		return
 	}
-	markup, _ := embedHTML(embeds[0], ctx)
-	parsed, err := parse(markup)
+	markup, _ := embedHTML(a, embeds[0], ctx)
+	parsed, err := parse(a, markup)
 	if err != nil {
 		return
 	}
@@ -334,9 +450,9 @@ func removeSoloEmbed(root *xhtml.Node, ctx Context, text string) {
 		}
 	})
 	if len(divs) > 0 {
-		attachment := serialize(embeds[0])
+		attachment := serialize(a, embeds[0])
 		for _, div := range divs {
-			inner(div, attachment)
+			inner(a, div, attachment)
 		}
 		return
 	}
@@ -356,39 +472,39 @@ func removeSoloEmbed(root *xhtml.Node, ctx Context, text string) {
 	})
 }
 
-func replaceAttachments(root *xhtml.Node, ctx Context, asPlain bool, depth int) error {
+func replaceAttachments(a *xhtml.Arena, root *xhtml.Node, ctx Context, asPlain bool, depth int) error {
 	var failure error
 	walk(root, func(n *xhtml.Node) {
 		if failure != nil || n.Data != "action-text-attachment" || n.Parent == nil {
 			return
 		}
 		if value := attr(n, "content"); value != "" {
-			content, err := parse(value)
+			content, err := parse(a, value)
 			if err != nil {
 				failure = err
 				return
 			}
 			sanitizeDOM(content, "action")
-			sanitized := serialize(content)
+			sanitized := serialize(a, content)
 			removeAttr(n, "content")
 			if strings.TrimSpace(sanitized) != "" {
-				setAttr(n, "content", sanitized)
+				setAttr(a, n, "content", sanitized)
 			}
 		}
-		markup, _, err := attachment(n, ctx, asPlain, depth)
+		markup, _, err := attachment(a, n, ctx, asPlain, depth)
 		if err != nil {
 			failure = err
 			return
 		}
 		if asPlain {
-			failure = replace(n, markup)
+			failure = replace(a, n, markup)
 			return
 		}
 		attrs := []xhtml.Attribute{}
 		for _, key := range attributeOrder {
-			for _, a := range n.Attr {
-				if a.Key == key {
-					attrs = append(attrs, a)
+			for _, at := range n.Attr {
+				if at.Key == key {
+					attrs = a.AttrAppend(attrs, at)
 					break
 				}
 			}
@@ -397,19 +513,19 @@ func replaceAttachments(root *xhtml.Node, ctx Context, asPlain bool, depth int) 
 			failure = errors.New("missing attachment attributes")
 			return
 		}
-		full := &xhtml.Node{Type: xhtml.ElementNode, Data: "action-text-attachment", Attr: attrs}
-		failure = inner(full, markup)
+		full := a.AllocNode(xhtml.ElementNode, 0, "action-text-attachment", "", attrs)
+		failure = inner(a, full, markup)
 		if failure == nil {
-			failure = replace(n, serialize(full))
+			failure = replace(a, n, serialize(a, full))
 		}
 	})
 	return failure
 }
-func attachment(n *xhtml.Node, ctx Context, asPlain bool, depth int) (string, string, error) {
+func attachment(a *xhtml.Arena, n *xhtml.Node, ctx Context, asPlain bool, depth int) (string, string, error) {
 	ct := attr(n, "content-type")
 	caption := attr(n, "caption")
 	if opengraphType.MatchString(ct) {
-		markup, err := embedHTML(n, ctx)
+		markup, err := embedHTML(a, n, ctx)
 		if asPlain {
 			markup = ""
 		}
@@ -422,11 +538,11 @@ func attachment(n *xhtml.Node, ctx Context, asPlain bool, depth int) (string, st
 		}
 		if user != nil {
 			ct = "application/vnd.campfire.mention"
-			setAttr(n, "content-type", ct)
+			setAttr(a, n, "content-type", ct)
 			if asPlain {
 				return "@" + user.Name, ct, nil
 			}
-			return strings.TrimSuffix(MentionHTML(*user), "\n"), ct, nil
+			return strings.TrimSuffix(mentionHTML(a, *user), "\n"), ct, nil
 		}
 	}
 	content := attr(n, "content")
@@ -434,21 +550,21 @@ func attachment(n *xhtml.Node, ctx Context, asPlain bool, depth int) (string, st
 		if depth >= 8 {
 			return "", ct, nil
 		}
-		nested, err := load(content)
+		nested, err := load(a, content)
 		if err != nil {
 			return "", "", err
 		}
 		if !asPlain {
-			err = replaceAttachments(nested, ctx, false, depth+1)
+			err = replaceAttachments(a, nested, ctx, false, depth+1)
 		}
 		if err != nil {
 			return "", "", err
 		}
 		if asPlain {
-			return serialize(nested), ct, nil
+			return serialize(a, nested), ct, nil
 		}
 		sanitizeDOM(nested, "action")
-		return "<figure class=\"attachment attachment--content\">\n  " + serialize(nested) + "\n\n</figure>", ct, nil
+		return a.Concat3("<figure class=\"attachment attachment--content\">\n  ", serialize(a, nested), "\n\n</figure>"), ct, nil
 	}
 	if src := attr(n, "url"); src != "" && (strings.HasPrefix(ct, "image/") || ct == "image" || strings.HasPrefix(ct, "video/") || ct == "video") {
 		video := strings.HasPrefix(ct, "video")
@@ -466,33 +582,73 @@ func attachment(n *xhtml.Node, ctx Context, asPlain bool, depth int) (string, st
 			}
 			return "[" + label + "]", ct, nil
 		}
-		size := ""
+		b := a.NewBuilder()
+		sizeB := a.NewBuilder()
 		for _, key := range []string{"width", "height"} {
 			if value := attr(n, key); value != "" {
-				size += " " + key + `="` + erbEscape(value) + `"`
+				sizeB.WriteString(" ")
+				sizeB.WriteString(key)
+				sizeB.WriteString(`="`)
+				sizeB.WriteString(erbEscape(a, value))
+				sizeB.WriteString(`"`)
 			}
 		}
+		size := sizeB.String()
 		if !strings.HasPrefix(src, "/") && !strings.Contains(src, "://") && !strings.HasPrefix(src, "cid:") && !strings.HasPrefix(src, "data:") {
 			return "", "", errors.New("missing remote image asset")
 		}
-		var result string
 		if video {
-			result = `<figure class="attachment attachment--preview attachment--video">` + "\n  <video controls=\"controls\"" + size + ">\n    <source src=\"" + erbEscape(src) + "\" type=\"" + erbEscape(ct) + "\">\n</video>"
+			b.WriteString(`<figure class="attachment attachment--preview attachment--video">` + "\n  <video controls=\"controls\"")
+			b.WriteString(size)
+			b.WriteString(">\n    <source src=\"")
+			b.WriteString(erbEscape(a, src))
+			b.WriteString(`" type="`)
+			b.WriteString(erbEscape(a, ct))
+			b.WriteString("\">\n</video>")
 		} else {
-			result = `<figure class="attachment attachment--preview">` + "\n  <img" + size + ` src="` + erbEscape(src) + `" />` + "\n"
+			b.WriteString(`<figure class="attachment attachment--preview">` + "\n  <img")
+			b.WriteString(size)
+			b.WriteString(` src="`)
+			b.WriteString(erbEscape(a, src))
+			b.WriteString(`" />` + "\n")
 		}
 		if caption != "" {
-			result += "    <figcaption class=\"attachment__caption\">\n      " + erbEscape(caption) + "\n    </figcaption>\n"
+			b.WriteString("    <figcaption class=\"attachment__caption\">\n      ")
+			b.WriteString(erbEscape(a, caption))
+			b.WriteString("\n    </figcaption>\n")
 		}
-		return result + "</figure>", ct, nil
+		b.WriteString("</figure>")
+		return b.String(), ct, nil
 	}
 	if asPlain {
 		return caption, ct, nil
 	}
 	return "☒", ct, nil
 }
+
+// MentionHTML renders a user mention span.
 func MentionHTML(user Mention) string {
-	return fmt.Sprintf("<span class=\"mention\" sgid=\"%s\"><a title=\"%s\" class=\"btn avatar\" data-turbo-frame=\"_top\" href=\"%s\"><img aria-hidden=\"true\" src=\"%s\" width=\"48\" height=\"48\" /></a> %s</span>\n", erbEscape(user.SGID), erbEscape(user.Title), erbEscape(user.Path), erbEscape(user.Avatar), erbEscape(user.Name))
+	a := acquireArena()
+	defer releaseArena(a)
+	return mentionHTML(a, user)
+}
+
+// mentionHTML is the arena-injected form; the exported wrapper clones the
+// view into a real string at the boundary.
+func mentionHTML(a *xhtml.Arena, user Mention) string {
+	b := a.NewBuilder()
+	b.WriteString(`<span class="mention" sgid="`)
+	b.WriteString(erbEscape(a, user.SGID))
+	b.WriteString(`"><a title="`)
+	b.WriteString(erbEscape(a, user.Title))
+	b.WriteString(`" class="btn avatar" data-turbo-frame="_top" href="`)
+	b.WriteString(erbEscape(a, user.Path))
+	b.WriteString(`"><img aria-hidden="true" src="`)
+	b.WriteString(erbEscape(a, user.Avatar))
+	b.WriteString(`" width="48" height="48" /></a> `)
+	b.WriteString(erbEscape(a, user.Name))
+	b.WriteString("</span>\n")
+	return strings.Clone(b.String())
 }
 
 var hostLabelLetter = regexp.MustCompile(`[a-zA-Z]`)
@@ -531,24 +687,24 @@ func externalURL(value, host string) (string, error) {
 
 var opengraphType = regexp.MustCompile(`application/vnd.actiontext.opengraph-embed`)
 
-func embedHTML(n *xhtml.Node, ctx Context) (string, error) {
+func embedHTML(a *xhtml.Arena, n *xhtml.Node, ctx Context) (string, error) {
 	href, src, title, description := attr(n, "href"), attr(n, "url"), attr(n, "filename"), attr(n, "caption")
 	if strings.TrimSpace(title) == "" {
 		href, src, title, description = "", "", "", ""
-		root, err := parse(attr(n, "content"))
+		root, err := parse(a, attr(n, "content"))
 		if err == nil {
 			walk(root, func(c *xhtml.Node) {
 				classes := words(attr(c, "class"))
 				if classes["og-embed__title"] {
-					title = strings.TrimSpace(plain(c))
-					walk(c, func(a *xhtml.Node) {
-						if a.Data == "a" {
-							href = attr(a, "href")
+					title = strings.TrimSpace(plain(a, c))
+					walk(c, func(x *xhtml.Node) {
+						if x.Data == "a" {
+							href = attr(x, "href")
 						}
 					})
 				}
 				if classes["og-embed__description"] {
-					description = strings.TrimSpace(plain(c))
+					description = strings.TrimSpace(plain(a, c))
 				}
 				if classes["og-embed__image"] {
 					walk(c, func(img *xhtml.Node) {
@@ -569,44 +725,92 @@ func embedHTML(n *xhtml.Node, ctx Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	truncate := func(s string, n int) string {
-		r := []rune(s)
-		if len(r) > n {
-			return string(r[:n-1]) + "…"
-		}
-		return s
+	title = erbEscape(a, truncate(title, 280))
+	description = erbEscape(a, truncate(description, 560))
+	b := a.NewBuilder()
+	b.WriteString(`<figure class="attachment attachment--content attachment--og">` + "\n  <actiontext-opengraph-embed>\n    <div class=\"og-embed gap ")
+	if strings.HasPrefix(src, "https://pbs.twimg.com/profile_images") {
+		b.WriteString("og-embed--twitter-avatar")
 	}
-	title = erbEscape(truncate(title, 280))
-	description = erbEscape(truncate(description, 560))
+	b.WriteString("\">\n      <div class=\"og-embed__content\">\n        <div class=\"og-embed__title\">\n          ")
 	if href != "" {
 		if title == "" {
-			title = erbEscape(href)
+			title = erbEscape(a, href)
 		}
-		title = `<a rel="noreferrer" target="_blank" href="` + erbEscape(href) + `">` + title + `</a>`
+		b.WriteString(`<a rel="noreferrer" target="_blank" href="`)
+		b.WriteString(erbEscape(a, href))
+		b.WriteString(`">`)
+		b.WriteString(title)
+		b.WriteString(`</a>`)
+	} else {
+		b.WriteString(title)
 	}
-	avatarClass := ""
-	if strings.HasPrefix(src, "https://pbs.twimg.com/profile_images") {
-		avatarClass = "og-embed--twitter-avatar"
-	}
-	result := "<figure class=\"attachment attachment--content attachment--og\">\n  <actiontext-opengraph-embed>\n    <div class=\"og-embed gap " + avatarClass + "\">\n      <div class=\"og-embed__content\">\n        <div class=\"og-embed__title\">\n          " + title + "\n        </div>\n        <div class=\"og-embed__description\">" + description + "</div>\n      </div>\n"
+	b.WriteString("\n        </div>\n        <div class=\"og-embed__description\">")
+	b.WriteString(description)
+	b.WriteString("</div>\n      </div>\n")
 	if src != "" {
-		result += "        <div class=\"og-embed__image\">\n          <img src=\"" + erbEscape(src) + "\" class=\"image center\" alt=\"\">\n        </div>\n"
+		b.WriteString("        <div class=\"og-embed__image\">\n          <img src=\"")
+		b.WriteString(erbEscape(a, src))
+		b.WriteString(`" class="image center" alt="">` + "\n        </div>\n")
 	}
-	return result + "    </div>\n  </actiontext-opengraph-embed>\n</figure>", nil
+	b.WriteString("    </div>\n  </actiontext-opengraph-embed>\n</figure>")
+	return b.String(), nil
 }
 
-var erbEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\"", "&quot;", "'", "&#39;")
-
-func erbEscape(s string) string {
-	return erbEscaper.Replace(s)
+// truncate cuts s to n runes with an ellipsis, exactly as the reference's
+// rune-slice version does; the short path avoids the conversion allocation.
+func truncate(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:n-1]) + "…"
 }
-func galleries(root *xhtml.Node, render bool) {
+
+// erbEscape mirrors Rails' ERB::Util.html_escape. The replacer is immutable
+// and shared; the ContainsAny guard returns strings without special bytes
+// unchanged, which is what the replacer would produce. Escaped output lives
+// in the arena.
+func erbEscape(a *xhtml.Arena, s string) string {
+	if !strings.ContainsAny(s, "&<>\"'") {
+		return s
+	}
+	b := a.NewBuilder()
+	escapeErbTo(&b, s)
+	return b.String()
+}
+
+func escapeErbTo(b *xhtml.Builder, s string) {
+	last := 0
+	for i := 0; i < len(s); i++ {
+		var esc string
+		switch s[i] {
+		case '&':
+			esc = "&amp;"
+		case '<':
+			esc = "&lt;"
+		case '>':
+			esc = "&gt;"
+		case '"':
+			esc = "&quot;"
+		case '\'':
+			esc = "&#39;"
+		default:
+			continue
+		}
+		b.WriteString(s[last:i])
+		b.WriteString(esc)
+		last = i + 1
+	}
+	b.WriteString(s[last:])
+}
+func galleries(a *xhtml.Arena, root *xhtml.Node, render bool) {
 	walk(root, func(n *xhtml.Node) {
 		if n.Data != "div" {
 			return
 		}
 		var members []*xhtml.Node
-		for _, c := range children(n) {
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			if c.Type == xhtml.TextNode && strings.Trim(c.Data, "\n ") == "" {
 				continue
 			}
@@ -620,27 +824,30 @@ func galleries(root *xhtml.Node, render bool) {
 		}
 		n.Attr = nil
 		if render {
-			setAttr(n, "class", fmt.Sprintf("attachment-gallery attachment-gallery--%d", len(members)))
-			var html strings.Builder
+			b := a.NewBuilder()
+			b.WriteString("attachment-gallery attachment-gallery--")
+			b.WriteString(strconv.Itoa(len(members)))
+			setAttr(a, n, "class", b.String())
+			html := a.NewBuilder()
 			html.WriteString("\n  ")
 			for _, c := range members {
-				html.WriteString(serialize(c))
+				html.WriteString(serialize(a, c))
 			}
 			html.WriteString("\n")
-			inner(n, html.String())
+			inner(a, n, html.String())
 		}
 	})
 }
-func rubyJSON(s string, value any) error {
-	var out strings.Builder
+func rubyJSON(a *xhtml.Arena, s string, value any) error {
+	b := a.NewBuilder()
 	quoted := false
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if quoted {
-			out.WriteByte(c)
+			b.PutByte(c)
 			if c == '\\' && i+1 < len(s) {
 				i++
-				out.WriteByte(s[i])
+				b.PutByte(s[i])
 			} else if c == '"' {
 				quoted = false
 			}
@@ -656,20 +863,20 @@ func rubyJSON(s string, value any) error {
 					return errors.New("unterminated JSON comment")
 				}
 				i += end + 3
-				out.WriteByte(' ')
+				b.PutByte(' ')
 				continue
 			}
 			if s[i+1] == '/' {
 				for i+1 < len(s) && s[i+1] != '\n' {
 					i++
 				}
-				out.WriteByte(' ')
+				b.PutByte(' ')
 				continue
 			}
 		}
-		out.WriteByte(c)
+		b.PutByte(c)
 	}
-	return json.Unmarshal([]byte(out.String()), value)
+	return json.Unmarshal(b.Bytes(), value)
 }
 
 func removeAttr(n *xhtml.Node, key string) {

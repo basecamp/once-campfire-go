@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/engine"
 	"github.com/basecamp/once-campfire-go/internal/front"
 	"github.com/basecamp/once-campfire-go/internal/rails"
 	"github.com/basecamp/once-campfire-go/internal/web"
@@ -30,6 +31,16 @@ func main() {
 	}
 }
 func run() error {
+	// GC policy from the environment (gc.go) must be in effect before any
+	// serving work starts: apply now, and the effective settings land in the
+	// startup log either way.
+	applyGCPolicy(os.LookupEnv)
+	// Access log goodness (accesslog.go): the async pipeline drainer must
+	// run for the whole serving lifetime; stopLogDrain flushes the rest on
+	// the way out.
+	stopLogDrain := startAccessLogDrainer()
+	defer stopLogDrain()
+
 	if path := os.Getenv("GO_CPU_PROFILE"); path != "" {
 		file, err := os.Create(path)
 		if err != nil {
@@ -66,12 +77,28 @@ func run() error {
 	if command == "db:prepare" {
 		return nil
 	}
-	app, err := web.New(db, secrets, os.Getenv("DISABLE_SSL") == "", storage)
+	app, err := web.New(db, secrets, os.Getenv("DISABLE_SSL") == "", path, storage)
 	if err != nil {
 		return err
 	}
 	defer app.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return front.Serve(ctx, front.FromEnv(), app)
+
+	// Encoding composition (engine design §3.2) lives in compose.go: the
+	// engine wraps the legacy front.Deflate chain, and rootConfig marks the
+	// front configuration precomposed so front.Serve does not add a second
+	// encoding layer.
+	setting := os.Getenv("CAMPFIRE_ENGINE")
+	mode, ok := engine.ParseMode(setting)
+	if !ok {
+		slog.Warn("engine: unrecognized CAMPFIRE_ENGINE value, defaulting to on", "value", setting)
+	}
+	slog.Info("engine", "mode", mode)
+	config := rootConfig(front.FromEnv())
+	// Access-log records (LOG_REQUESTS) flow through the async pipeline: a
+	// brief queue append on the request path, formatting and writing on the
+	// drainer goroutine; see accesslog.go.
+	config.AccessLog = accessLogQueueInst.push
+	return front.Serve(ctx, config, buildRoot(app, mode))
 }

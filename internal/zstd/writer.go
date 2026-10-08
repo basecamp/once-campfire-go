@@ -30,11 +30,19 @@ type Writer struct {
 }
 
 func NewWriter(output io.Writer) (*Writer, error) {
+	return NewWriterLevel(output, 1)
+}
+
+// NewWriterLevel builds a writer that emits complete zstd frames at the given
+// compression level. Levels follow libzstd's range; the default NewWriter
+// maps to level 1. Callers that fill a one-time cache (the web recorded-piece
+// path) pass the best level, whose cost is paid once per stored piece.
+func NewWriterLevel(output io.Writer, level int) (*Writer, error) {
 	ctx := C.ZSTD_createCCtx()
 	if ctx == nil {
 		return nil, errors.New("zstd context allocation failed")
 	}
-	code := C.ZSTD_CCtx_setParameter(ctx, C.ZSTD_c_compressionLevel, 1)
+	code := C.ZSTD_CCtx_setParameter(ctx, C.ZSTD_c_compressionLevel, C.int(level))
 	if C.ZSTD_isError(code) != 0 {
 		C.ZSTD_freeCCtx(ctx)
 		return nil, errors.New(C.GoString(C.ZSTD_getErrorName(code)))
@@ -58,6 +66,23 @@ func (w *Writer) step(p []byte, mode C.int) (int, bool, error) {
 	}
 	return int(consumed), code == 0, nil
 }
+
+// Reset reuses the context and buffer for a new frame written to output. The
+// session state is reset and the error slot cleared; the compression level set
+// at construction is retained. The writer must not be in use when Reset is
+// called, and must not be used after Close.
+func (w *Writer) Reset(output io.Writer) error {
+	if w.ctx == nil {
+		return io.ErrClosedPipe
+	}
+	code := C.ZSTD_CCtx_reset(w.ctx, C.ZSTD_reset_session_only)
+	if C.ZSTD_isError(code) != 0 {
+		return errors.New(C.GoString(C.ZSTD_getErrorName(code)))
+	}
+	w.output = output
+	w.err = nil
+	return nil
+}
 func (w *Writer) Write(p []byte) (int, error) {
 	if w.ctx == nil {
 		return 0, io.ErrClosedPipe
@@ -76,11 +101,14 @@ func (w *Writer) Write(p []byte) (int, error) {
 	}
 	return consumed, nil
 }
-func (w *Writer) Close() error {
+
+// End finishes the current frame without releasing the context, so a pooled
+// writer can be Reset for another frame afterwards. Close also finishes and
+// then frees the context; the writer is unusable after Close.
+func (w *Writer) End() error {
 	if w.ctx == nil {
 		return w.err
 	}
-	defer func() { C.ZSTD_freeCCtx(w.ctx); w.ctx = nil }()
 	if w.err != nil {
 		return w.err
 	}
@@ -94,6 +122,13 @@ func (w *Writer) Close() error {
 			return nil
 		}
 	}
+}
+func (w *Writer) Close() error {
+	if w.ctx == nil {
+		return w.err
+	}
+	defer func() { C.ZSTD_freeCCtx(w.ctx); w.ctx = nil }()
+	return w.End()
 }
 
 func (w *Writer) Flush() error {

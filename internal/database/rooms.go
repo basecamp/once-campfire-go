@@ -109,8 +109,16 @@ func (d *DB) CreateRoom(ctx context.Context, creator int64, kind, name string, u
 	if err != nil {
 		return room, err
 	}
+	// Both registries move immediately after the commit: the hydration read
+	// below is fallible (a canceled context after commit), and a room that is
+	// already visible must not leave sidebar caches stale if it fails.
+	d.membershipVersion.Add(1)
+	d.bumpSidebarVersion()
 	err = d.Read.QueryRowContext(ctx, "SELECT id,creator_id,coalesce(name,''),type,updated_at FROM rooms WHERE id=?", room.ID).Scan(&room.ID, &room.CreatorID, &room.Name, &room.Type, timestamp{&room.UpdatedAt})
-	return room, err
+	if err != nil {
+		return room, err
+	}
+	return room, nil
 }
 func (d *DB) UpdateRoom(ctx context.Context, id int64, kind, name string, users []int64) error {
 	var revoked []int64
@@ -177,6 +185,12 @@ func (d *DB) UpdateRoom(ctx context.Context, id int64, kind, name string, users 
 			d.ResetConnections(user)
 		}
 	}
+	if err == nil {
+		// Room rows and memberships both changed, and the search query joins
+		// memberships: bump the sidebar and membership versions.
+		d.bumpSidebarVersion()
+		d.membershipVersion.Add(1)
+	}
 	return err
 }
 func (d *DB) DeleteRoom(ctx context.Context, id int64) error {
@@ -203,6 +217,12 @@ func (d *DB) DeleteRoom(ctx context.Context, id int64) error {
 	})
 	if err == nil {
 		d.PurgeDetached(blobs)
+		d.bumpSidebarVersion()
+		// The room's index rows and memberships commit together, so one bump
+		// per version is enough; both facts separately invalidate cached
+		// search pages.
+		d.corpusVersion.Add(1)
+		d.membershipVersion.Add(1)
 	}
 	return err
 }
@@ -226,10 +246,15 @@ func (d *DB) SetInvolvement(ctx context.Context, user, room int64, value string)
 	if count == 0 {
 		return sql.ErrNoRows
 	}
+	// The involvement row is sidebar-visible (room list filtering) and feed
+	// the search membership scope: both versions bump.
+	d.bumpSidebarVersion()
+	d.membershipVersion.Add(1)
 	return nil
 }
 func (d *DB) Presence(ctx context.Context, user, room int64, action string) error {
-	return d.Transaction(ctx, func(tx *sql.Tx) error {
+	clearUnread := action == "present"
+	err := d.Transaction(ctx, func(tx *sql.Tx) error {
 		now := d.Now()
 		stamp, cutoff := Stamp(now), Stamp(now.Add(-60*time.Second))
 		var query string
@@ -251,6 +276,10 @@ func (d *DB) Presence(ctx context.Context, user, room int64, action string) erro
 		_, err := tx.ExecContext(ctx, query, cutoff, stamp, user, room)
 		return err
 	})
+	if err == nil && clearUnread {
+		d.bumpSidebarVersion()
+	}
+	return err
 }
 
 // OriginalRoom follows Room.original (creation order, not the fixture ID order).

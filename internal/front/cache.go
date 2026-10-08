@@ -20,16 +20,30 @@ type cacheEntry struct {
 	variant map[string]string
 	expires time.Time
 	size    int64
+	// recorded is the precomposed replay lane's state (ENGINE-62); nil when
+	// the entry must be served through the header-map path.
+	recorded *recordedResponse
 }
 type Cache struct {
 	mu                      sync.Mutex
 	entries                 map[string]*list.Element
 	order                   *list.List
 	size, capacity, maxItem int64
+	// FixedRoutes enables the fixed-route table (fixed.go); see
+	// Config.FixedRoutes. The zero value disables it, so NewCache's default
+	// is on (matching the production FromEnv default).
+	FixedRoutes bool
+	// fixed holds the precomputed responses of the fixed routes: the first
+	// unconditional GET captures the route's application response once per
+	// content encoding and every later request replays the captured bytes
+	// without invoking the app. Bounded by construction: one pair for each
+	// path in fixedRoutes.
+	fixed       map[string]*fixedPair
+	fixedFailed bool
 }
 
 func NewCache(capacity, maxItem int64) *Cache {
-	return &Cache{entries: map[string]*list.Element{}, order: list.New(), capacity: capacity, maxItem: maxItem}
+	return &Cache{entries: map[string]*list.Element{}, order: list.New(), capacity: capacity, maxItem: maxItem, FixedRoutes: true, fixed: map[string]*fixedPair{}}
 }
 
 var publicDirective = regexp.MustCompile(`\bpublic\b`)
@@ -58,8 +72,22 @@ func lifetime(status int, h http.Header) time.Duration {
 	}
 	return time.Duration(seconds) * time.Second
 }
+
+// baseKey builds the cache key in one allocation: a Builder with an exact
+// size hint, instead of the chained concatenation that allocated once per
+// part. The key shape (method \n path \n query \n host) is unchanged.
 func baseKey(r *http.Request) string {
-	return r.Method + "\n" + r.URL.EscapedPath() + "\n" + r.URL.RawQuery + "\n" + r.Host
+	path := r.URL.EscapedPath()
+	var b strings.Builder
+	b.Grow(len(r.Method) + len(path) + len(r.URL.RawQuery) + len(r.Host) + 3)
+	b.WriteString(r.Method)
+	b.WriteByte('\n')
+	b.WriteString(path)
+	b.WriteByte('\n')
+	b.WriteString(r.URL.RawQuery)
+	b.WriteByte('\n')
+	b.WriteString(r.Host)
+	return b.String()
 }
 func (c *Cache) get(key string, r *http.Request) *cacheEntry {
 	c.mu.Lock()
@@ -103,29 +131,126 @@ func (c *Cache) put(entry *cacheEntry) {
 	c.size += entry.size
 }
 
-// recordResponse streams through and keeps only a bounded copy of cacheable bodies.
-type recordResponse struct {
-	http.ResponseWriter
-	status   int
-	header   http.Header
-	body     bytes.Buffer
-	max      int64
-	ttl      time.Duration
-	overflow bool
+// replay writes one stored entry through the response writer: the recorded
+// lane first (precomposed head + body, one writev, no map work; see
+// recorded.go), then the single-alloc header copy, validator check and body
+// write shared by ordinary hits and fixed-route replays. hit reports whether
+// the ordinary X-Cache: hit marker applies; fixed replays keep the captured
+// X-Cache value, which is the miss marker the application path produced when
+// the fixed table was filled.
+func replay(w http.ResponseWriter, r *http.Request, entry *cacheEntry, hit bool) {
+	if recorded := entry.recorded; recorded != nil && recordedRequestEligible(r) {
+		if receiver := findRecordedReceiver(w); receiver != nil {
+			status, head, body := entry.status, recorded.head, entry.body
+			if recorded.etag != "" && ifNoneMatch(r.Header.Get("If-None-Match"), recorded.etag) {
+				status, head, body = http.StatusNotModified, recorded.head304, nil
+			}
+			_ = receiver.WriteRecorded(status, head, body)
+			return
+		}
+	}
+	if marker, ok := w.(finalMarker); ok {
+		// The recorded bytes are final; skip the compression wrapper's
+		// buffering pass. Its header policy still runs in WriteHeader.
+		marker.markFinal()
+	}
+	h := w.Header()
+	// One backing array for every header value slice: the per-header
+	// append([]string(nil), values...) copies allocated one slice each.
+	count := 0
+	for _, values := range entry.header {
+		count += len(values)
+	}
+	joined := make([]string, 0, count)
+	for name, values := range entry.header {
+		base := len(joined)
+		joined = append(joined, values...)
+		h[name] = joined[base:]
+	}
+	if hit {
+		// The hit marker must overwrite the captured miss marker written at
+		// fill time, so it lands after the header copy.
+		h.Set("X-Cache", "hit")
+	}
+	if etag := entry.header.Get("ETag"); etag != "" && r.Header.Get("If-None-Match") != "" {
+		for _, candidate := range strings.Split(r.Header.Get("If-None-Match"), ",") {
+			if strings.TrimSpace(candidate) == etag {
+				h.Del("Content-Length")
+				w.WriteHeader(304)
+				return
+			}
+		}
+	}
+	w.WriteHeader(entry.status)
+	if r.Method != "HEAD" {
+		w.Write(entry.body)
+	}
 }
 
-func (w *recordResponse) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+// recordResponse streams through and keeps only a bounded copy of cacheable
+// bodies. captureAlways forces the copy for the fixed-route fill pass, whose
+// response is recorded even though its Cache-Control makes it uncacheable by
+// the ordinary cache.
+type recordResponse struct {
+	http.ResponseWriter
+	status        int
+	header        http.Header
+	body          bytes.Buffer
+	max           int64
+	ttl           time.Duration
+	overflow      bool
+	captureAlways bool
+	// wireHeader is the second snapshot, taken after the wrapped response
+	// policy (PublicCompression) has run its WriteHeader: the map as the wire
+	// sees it, including the policy's Vary/Content-Encoding additions. The
+	// recorded-replay lane renders its head block from it (recorded.go). It
+	// stays nil when the policy encoded a body this capture holds in identity
+	// form (the recorded bytes would not be the wire bytes) and for captures
+	// that do not participate in the lane.
+	wireHeader http.Header
+}
+
+// Unwrap deliberately does NOT exist on this wrapper. The web layer's
+// precomposed-receiver lookup walks Unwrap chains, and this wrapper sits
+// between the public response policy and the application on every public
+// miss: were it transparent, a fastserve public listener would let an
+// application precomposed write bypass the front cache entirely (its X-Cache
+// marker and the capture above). Keeping it opaque pins the public chain's
+// semantics; the internal listener has no wrapper here and is unaffected.
+
 func (w *recordResponse) WriteHeader(status int) {
 	if w.status != 0 {
 		return
 	}
 	w.status = status
 	w.ttl = lifetime(status, w.Header())
-	if w.ttl > 0 {
+	if w.captureAlways {
+		w.ttl = time.Hour
+	} else if w.ttl > 0 {
 		w.Header().Del("Set-Cookie")
-		w.header = w.Header().Clone()
 	}
+	w.header = w.Header().Clone()
 	w.ResponseWriter.WriteHeader(status)
+	if w.ttl <= 0 && !w.captureAlways {
+		return
+	}
+	// Post-policy snapshot for the recorded-replay lane (see wireHeader).
+	// The policy may have compressed a body the capture holds in identity
+	// form; the Content-Encoding delta is the tell, and such a capture must
+	// stay on the map path where the wrapper re-encodes it.
+	if live := w.Header(); live.Get("Content-Encoding") == w.header.Get("Content-Encoding") {
+		w.wireHeader = live.Clone()
+	}
+}
+
+// wire is the post-policy header snapshot used by the recorded-replay lane,
+// with the pre-policy clone as a defensive fallback (a capture whose policy
+// mutated nothing is the same map either way).
+func (w *recordResponse) wire() http.Header {
+	if w.wireHeader != nil {
+		return w.wireHeader
+	}
+	return w.header
 }
 func (w *recordResponse) Write(b []byte) (int, error) {
 	if w.status == 0 {
@@ -159,32 +284,34 @@ func (c *Cache) Handler(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Fixed routes replay a captured response instead of the application;
+		// see fixed.go. The lookup is a map miss for every other path.
+		if pair := c.pairFor(r); pair != nil {
+			if entry := pair.forRequest(r); entry != nil {
+				replay(w, r, entry, false)
+				return
+			}
+			// Encoding the pair cannot serve: the application path below
+			// answers (its 406 or pass-through policy).
+		}
 		key := baseKey(r)
 		if entry := c.get(key, r); entry != nil {
-			for name, values := range entry.header {
-				w.Header()[name] = append([]string(nil), values...)
-			}
-			w.Header().Set("X-Cache", "hit")
-			if etag := entry.header.Get("ETag"); etag != "" {
-				for _, candidate := range strings.Split(r.Header.Get("If-None-Match"), ",") {
-					if strings.TrimSpace(candidate) == etag {
-						w.Header().Del("Content-Length")
-						w.WriteHeader(304)
-						return
-					}
-				}
-			}
-			w.WriteHeader(entry.status)
-			if r.Method != "HEAD" {
-				w.Write(entry.body)
-			}
+			replay(w, r, entry, true)
 			return
 		}
 		w.Header().Set("X-Cache", "miss")
-		capture := &recordResponse{ResponseWriter: w, max: c.maxItem}
+		fixed := c.FixedRoutes && fixedCandidate(r) && !c.fixedFailed
+		capture := &recordResponse{ResponseWriter: w, max: c.maxItem, captureAlways: fixed}
 		next.ServeHTTP(capture, r)
 		if capture.status == 0 {
 			capture.WriteHeader(200)
+		}
+		// The first clean unconditional GET of a fixed route completes the
+		// table: the application just produced one encoding of the response,
+		// the chain runs once more for the other, and later requests replay.
+		if fixed {
+			c.fillFixed(r, next, capture)
+			return
 		}
 		if capture.ttl <= 0 || capture.overflow {
 			return
@@ -205,6 +332,9 @@ func (c *Cache) Handler(next http.Handler) http.Handler {
 				size += int64(len(name) + len(value))
 			}
 		}
-		c.put(&cacheEntry{key: key, header: capture.header, body: bytes.Clone(capture.body.Bytes()), status: capture.status, variant: variant, expires: time.Now().Add(capture.ttl), size: size})
+		body := bytes.Clone(capture.body.Bytes())
+		entry := &cacheEntry{key: key, header: capture.header, body: body, status: capture.status, variant: variant, expires: time.Now().Add(capture.ttl), size: size}
+		entry.recorded = newRecordedResponse(capture.wire(), capture.status, body, "hit")
+		c.put(entry)
 	})
 }
