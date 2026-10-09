@@ -90,14 +90,17 @@ RUN apt-get source -qq ffmpeg=${FFMPEG_VERSION} && \
     strip --strip-unneeded /opt/ffmpeg/lib/*.so.* /opt/ffmpeg/bin/*
 
 
-# Build and test with the same media libraries as the runtime.
+# Build and test with the same media libraries as the runtime. SQLite is built without memory
+# statistics, which take one process-wide mutex on every allocation and which nothing reads
+# (internal/database/build_flags_test.go).
 FROM media-base AS toolchain
 COPY --from=vips /opt/vips /opt/vips
 COPY --from=ffmpeg /opt/ffmpeg /opt/ffmpeg
 ENV PKG_CONFIG_PATH=/opt/vips/lib/pkgconfig \
     LD_LIBRARY_PATH=/opt/vips/lib:/opt/ffmpeg/lib \
     PATH=/opt/ffmpeg/bin:$PATH \
-    CGO_ENABLED=1
+    CGO_ENABLED=1 \
+    CGO_CFLAGS="-O2 -g -DSQLITE_DEFAULT_MEMSTATUS=0"
 
 FROM toolchain AS build
 WORKDIR /src
