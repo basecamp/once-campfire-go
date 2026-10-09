@@ -92,6 +92,31 @@ func (d *DB) SessionUser(ctx context.Context, token string) (User, error) {
 	)
 }
 
+// SessionUserActivity is SessionUser plus the session's last_active_at, read in the same
+// statement so authentication can decide whether to refresh the session (RefreshSession)
+// without reading the session a second time on every authenticated request.
+func (d *DB) SessionUserActivity(ctx context.Context, token string) (User, time.Time, error) {
+	var u User
+	var active time.Time
+	err := d.Read.QueryRowContext(
+		ctx,
+		"SELECT "+userColumns+",s.last_active_at FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND u.status=0",
+		token,
+	).Scan(
+		&u.ID,
+		&u.Name,
+		&u.Email,
+		&u.Password,
+		&u.Role,
+		&u.Status,
+		&u.Bio,
+		timestamp{&u.UpdatedAt},
+		&u.BotToken,
+		timestamp{&active},
+	)
+	return u, active, err
+}
+
 func (d *DB) StartSession(ctx context.Context, user int64, agent, ip string) (string, error) {
 	token, now := Token(), Stamp(d.Now())
 	_, err := d.Write.ExecContext(

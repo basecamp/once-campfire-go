@@ -1,0 +1,113 @@
+change	block	image	profile	round	route	clients	rps	validated_ok	invalid	errors	mac_load1_before_block	vm_load1_round_start	peak_rss_mib	cgroup_peak_mib	writer_ok	writer_rps
+A	01-normal-main	main	normal	1	room_show	16	22012.6	176157	0	0	12.02	8.32	129.3	127.1		
+A	01-normal-main	main	normal	1	messages_page	16	22591.1	180779	0	0	12.02	8.32	129.3	127.1		
+A	01-normal-main	main	normal	1	sidebar	16	22311.7	178526	0	0	12.02	8.32	129.3	127.1		
+A	01-normal-main	main	normal	1	search	16	6898.9	55276	0	0	12.02	8.32	129.3	127.1		
+A	01-normal-main	main	normal	1	post_message	16	1102.6	8851	0	0	12.02	8.32	129.3	127.1		
+A	01-normal-main	main	normal	2	room_show	16	20168.3	161407	0	0	12.02	8.81	133.2	133.4		
+A	01-normal-main	main	normal	2	messages_page	16	22402.1	179274	0	0	12.02	8.81	133.2	133.4		
+A	01-normal-main	main	normal	2	sidebar	16	22968.0	183775	0	0	12.02	8.81	133.2	133.4		
+A	01-normal-main	main	normal	2	search	16	23873.8	191029	0	0	12.02	8.81	133.2	133.4		
+A	01-normal-main	main	normal	2	post_message	16	3525.3	28218	0	0	12.02	8.81	133.2	133.4		
+A	02-normal-a	candidate	normal	1	room_show	16	22549.5	180462	0	0	16.03	8.29	132.9	145.7		
+A	02-normal-a	candidate	normal	1	messages_page	16	24344.5	194806	0	0	16.03	8.29	132.9	145.7		
+A	02-normal-a	candidate	normal	1	sidebar	16	24187.3	193538	0	0	16.03	8.29	132.9	145.7		
+A	02-normal-a	candidate	normal	1	search	16	25107.0	200916	0	0	16.03	8.29	132.9	145.7		
+A	02-normal-a	candidate	normal	1	post_message	16	3031.2	24268	0	0	16.03	8.29	132.9	145.7		
+A	02-normal-a	candidate	normal	2	room_show	16	19295.6	154414	0	0	16.03	9.18	131.6	128.5		
+A	02-normal-a	candidate	normal	2	messages_page	16	8731.9	69882	0	0	16.03	9.18	131.6	128.5		
+A	02-normal-a	candidate	normal	2	sidebar	16	14142.0	113181	0	0	16.03	9.18	131.6	128.5		
+A	02-normal-a	candidate	normal	2	search	16	14319.3	114608	0	0	16.03	9.18	131.6	128.5		
+A	02-normal-a	candidate	normal	2	post_message	16	1935.4	15500	0	0	16.03	9.18	131.6	128.5		
+A	03-normal-a	candidate	normal	1	room_show	16	5491.5	43960	0	0	21.20	7.93	134.7	132.9		
+A	03-normal-a	candidate	normal	1	messages_page	16	3481.3	27915	0	0	21.20	7.93	134.7	132.9		
+A	03-normal-a	candidate	normal	1	sidebar	16	17221.5	137806	0	0	21.20	7.93	134.7	132.9		
+A	03-normal-a	candidate	normal	1	search	16	8923.2	71492	0	0	21.20	7.93	134.7	132.9		
+A	03-normal-a	candidate	normal	1	post_message	16	2854.7	22854	0	0	21.20	7.93	134.7	132.9		
+A	03-normal-a	candidate	normal	2	room_show	16	20695.4	165682	0	0	21.20	10.50	138.0	138.0		
+A	03-normal-a	candidate	normal	2	messages_page	16	21613.5	172963	0	0	21.20	10.50	138.0	138.0		
+A	03-normal-a	candidate	normal	2	sidebar	16	22377.8	179061	0	0	21.20	10.50	138.0	138.0		
+A	03-normal-a	candidate	normal	2	search	16	22946.0	183619	0	0	21.20	10.50	138.0	138.0		
+A	03-normal-a	candidate	normal	2	post_message	16	2707.4	21673	0	0	21.20	10.50	138.0	138.0		
+A	04-normal-main	main	normal	1	room_show	16	21455.4	171690	0	0	21.91	10.75	135.0	135.1		
+A	04-normal-main	main	normal	1	messages_page	16	24035.3	192340	0	0	21.91	10.75	135.0	135.1		
+A	04-normal-main	main	normal	1	sidebar	16	27708.0	221710	0	0	21.91	10.75	135.0	135.1		
+A	04-normal-main	main	normal	1	search	16	26657.2	213339	0	0	21.91	10.75	135.0	135.1		
+A	04-normal-main	main	normal	1	post_message	16	3243.4	25966	0	0	21.91	10.75	135.0	135.1		
+A	04-normal-main	main	normal	2	room_show	16	20792.7	166402	0	0	21.91	9.95	134.4	136.5		
+A	04-normal-main	main	normal	2	messages_page	16	21886.7	175207	0	0	21.91	9.95	134.4	136.5		
+A	04-normal-main	main	normal	2	sidebar	16	23711.2	189727	0	0	21.91	9.95	134.4	136.5		
+A	04-normal-main	main	normal	2	search	16	24199.8	193649	0	0	21.91	9.95	134.4	136.5		
+A	04-normal-main	main	normal	2	post_message	16	3497.2	27991	0	0	21.91	9.95	134.4	136.5		
+A	09-mixed-main	main	mixed	1	room_show	16	11193.3	89569	0	0	23.70	9.42	136.0	141.8	78	9.70
+A	09-mixed-main	main	mixed	1	messages_page	16	17990.4	143960	0	0	23.70	9.42	136.0	141.8	79	9.80
+A	09-mixed-main	main	mixed	1	sidebar	16	27909.7	223310	0	0	23.70	9.42	136.0	141.8	79	9.80
+A	09-mixed-main	main	mixed	1	search	16	28410.4	227335	0	0	23.70	9.42	136.0	141.8	79	9.80
+A	09-mixed-main	main	mixed	2	room_show	16	22348.9	178846	0	0	23.70	9.67	135.8	126.3	79	9.80
+A	09-mixed-main	main	mixed	2	messages_page	16	22073.2	176636	0	0	23.70	9.67	135.8	126.3	79	9.80
+A	09-mixed-main	main	mixed	2	sidebar	16	29518.0	236207	0	0	23.70	9.67	135.8	126.3	79	9.90
+A	09-mixed-main	main	mixed	2	search	16	22292.4	178391	0	0	23.70	9.67	135.8	126.3	79	9.80
+A	10-mixed-a	candidate	mixed	1	room_show	16	16957.1	135690	0	0	13.77	10.62	131.9	139.6	79	9.80
+A	10-mixed-a	candidate	mixed	1	messages_page	16	23580.3	188680	0	0	13.77	10.62	131.9	139.6	79	9.80
+A	10-mixed-a	candidate	mixed	1	sidebar	16	24850.4	198843	0	0	13.77	10.62	131.9	139.6	78	9.70
+A	10-mixed-a	candidate	mixed	1	search	16	26756.2	214197	0	0	13.77	10.62	131.9	139.6	79	9.80
+A	10-mixed-a	candidate	mixed	2	room_show	16	20998.6	168038	0	0	13.77	10.71	133.2	126.2	79	9.80
+A	10-mixed-a	candidate	mixed	2	messages_page	16	24298.2	194436	0	0	13.77	10.71	133.2	126.2	79	9.80
+A	10-mixed-a	candidate	mixed	2	sidebar	16	30917.7	247375	0	0	13.77	10.71	133.2	126.2	79	9.90
+A	10-mixed-a	candidate	mixed	2	search	16	28089.0	224760	0	0	13.77	10.71	133.2	126.2	79	9.80
+A	11-mixed-a	candidate	mixed	1	room_show	16	23819.8	190603	0	0	11.75	9.43	136.2	126.0	79	9.80
+A	11-mixed-a	candidate	mixed	1	messages_page	16	24491.7	195986	0	0	11.75	9.43	136.2	126.0	79	9.80
+A	11-mixed-a	candidate	mixed	1	sidebar	16	31283.6	250309	0	0	11.75	9.43	136.2	126.0	79	9.90
+A	11-mixed-a	candidate	mixed	1	search	16	29554.4	236502	0	0	11.75	9.43	136.2	126.0	79	9.80
+A	11-mixed-a	candidate	mixed	2	room_show	16	9355.0	74918	0	0	11.75	8.53	149.2	141.3	78	9.70
+A	11-mixed-a	candidate	mixed	2	messages_page	16	3942.0	31610	0	0	11.75	8.53	149.2	141.3	77	9.60
+A	11-mixed-a	candidate	mixed	2	sidebar	16	30379.8	243068	0	0	11.75	8.53	149.2	141.3	79	9.80
+A	11-mixed-a	candidate	mixed	2	search	16	30341.8	242802	0	0	11.75	8.53	149.2	141.3	79	9.90
+A	12-mixed-main	main	mixed	1	room_show	16	14897.1	119402	0	0	18.69	8.74	151.8	144.7	79	9.80
+A	12-mixed-main	main	mixed	1	messages_page	16	4179.5	33456	0	0	18.69	8.74	151.8	144.7	77	9.60
+A	12-mixed-main	main	mixed	1	sidebar	16	18279.9	146258	0	0	18.69	8.74	151.8	144.7	79	9.80
+A	12-mixed-main	main	mixed	1	search	16	10271.4	82196	0	0	18.69	8.74	151.8	144.7	78	9.70
+A	12-mixed-main	main	mixed	2	room_show	16	19871.4	159010	0	0	18.69	10.14	137.2	126.1	79	9.80
+A	12-mixed-main	main	mixed	2	messages_page	16	20252.3	162063	0	0	18.69	10.14	137.2	126.1	79	9.80
+A	12-mixed-main	main	mixed	2	sidebar	16	29163.1	233335	0	0	18.69	10.14	137.2	126.1	79	9.90
+A	12-mixed-main	main	mixed	2	search	16	24863.1	198944	0	0	18.69	10.14	137.2	126.1	79	9.80
+A	17-normal-main	main	normal	1	room_show	16	25508.5	204127	0	0	8.63	8.91	131.8	134.3		
+A	17-normal-main	main	normal	1	messages_page	16	26121.2	209017	0	0	8.63	8.91	131.8	134.3		
+A	17-normal-main	main	normal	1	sidebar	16	28472.3	227815	0	0	8.63	8.91	131.8	134.3		
+A	17-normal-main	main	normal	1	search	16	28070.4	224616	0	0	8.63	8.91	131.8	134.3		
+A	17-normal-main	main	normal	1	post_message	16	3749.2	30013	0	0	8.63	8.91	131.8	134.3		
+A	17-normal-main	main	normal	2	room_show	16	23789.1	190360	0	0	8.63	8.88	135.0	137.6		
+A	17-normal-main	main	normal	2	messages_page	16	26165.7	209383	0	0	8.63	8.88	135.0	137.6		
+A	17-normal-main	main	normal	2	sidebar	16	28026.6	224241	0	0	8.63	8.88	135.0	137.6		
+A	17-normal-main	main	normal	2	search	16	28309.2	226525	0	0	8.63	8.88	135.0	137.6		
+A	17-normal-main	main	normal	2	post_message	16	3686.7	29513	0	0	8.63	8.88	135.0	137.6		
+A	18-normal-a	candidate	normal	1	room_show	16	26170.2	209414	0	0	8.14	9.80	132.2	135.3		
+A	18-normal-a	candidate	normal	1	messages_page	16	26399.9	211277	0	0	8.14	9.80	132.2	135.3		
+A	18-normal-a	candidate	normal	1	sidebar	16	27744.5	221985	0	0	8.14	9.80	132.2	135.3		
+A	18-normal-a	candidate	normal	1	search	16	27817.6	222598	0	0	8.14	9.80	132.2	135.3		
+A	18-normal-a	candidate	normal	1	post_message	16	3702.2	29634	0	0	8.14	9.80	132.2	135.3		
+A	18-normal-a	candidate	normal	2	room_show	16	25530.3	204295	0	0	8.14	9.27	134.1	139.5		
+A	18-normal-a	candidate	normal	2	messages_page	16	27131.0	217107	0	0	8.14	9.27	134.1	139.5		
+A	18-normal-a	candidate	normal	2	sidebar	16	27345.6	218803	0	0	8.14	9.27	134.1	139.5		
+A	18-normal-a	candidate	normal	2	search	16	27805.4	222501	0	0	8.14	9.27	134.1	139.5		
+A	18-normal-a	candidate	normal	2	post_message	16	3750.4	30018	0	0	8.14	9.27	134.1	139.5		
+A	19-normal-a	candidate	normal	1	room_show	16	25833.0	206724	0	0	10.76	8.61	132.1	134.3		
+A	19-normal-a	candidate	normal	1	messages_page	16	26168.2	209399	0	0	10.76	8.61	132.1	134.3		
+A	19-normal-a	candidate	normal	1	sidebar	16	28572.8	228616	0	0	10.76	8.61	132.1	134.3		
+A	19-normal-a	candidate	normal	1	search	16	27929.4	223497	0	0	10.76	8.61	132.1	134.3		
+A	19-normal-a	candidate	normal	1	post_message	16	3753.2	30044	0	0	10.76	8.61	132.1	134.3		
+A	19-normal-a	candidate	normal	2	room_show	16	23012.7	184196	0	0	10.76	8.58	135.8	137.4		
+A	19-normal-a	candidate	normal	2	messages_page	16	25968.7	207801	0	0	10.76	8.58	135.8	137.4		
+A	19-normal-a	candidate	normal	2	sidebar	16	28622.0	229010	0	0	10.76	8.58	135.8	137.4		
+A	19-normal-a	candidate	normal	2	search	16	24410.5	195332	0	0	10.76	8.58	135.8	137.4		
+A	19-normal-a	candidate	normal	2	post_message	16	3218.5	25773	0	0	10.76	8.58	135.8	137.4		
+A	20-normal-main	main	normal	1	room_show	16	25277.1	202274	0	0	8.85	7.67	134.5	137.4		
+A	20-normal-main	main	normal	1	messages_page	16	24098.6	192836	0	0	8.85	7.67	134.5	137.4		
+A	20-normal-main	main	normal	1	sidebar	16	28996.4	232002	0	0	8.85	7.67	134.5	137.4		
+A	20-normal-main	main	normal	1	search	16	27893.0	223204	0	0	8.85	7.67	134.5	137.4		
+A	20-normal-main	main	normal	1	post_message	16	3736.6	29910	0	0	8.85	7.67	134.5	137.4		
+A	20-normal-main	main	normal	2	room_show	16	22250.4	178054	0	0	8.85	9.89	134.2	135.5		
+A	20-normal-main	main	normal	2	messages_page	16	22608.4	180914	0	0	8.85	9.89	134.2	135.5		
+A	20-normal-main	main	normal	2	sidebar	16	24432.4	195500	0	0	8.85	9.89	134.2	135.5		
+A	20-normal-main	main	normal	2	search	16	24147.3	193235	0	0	8.85	9.89	134.2	135.5		
+A	20-normal-main	main	normal	2	post_message	16	3467.6	27758	0	0	8.85	9.89	134.2	135.5		
