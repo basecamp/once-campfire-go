@@ -342,12 +342,12 @@ func (d *DB) BannedIP(ctx context.Context, ip string) (bool, error) {
 	return n > 0, err
 }
 
-func (d *DB) RefreshSession(ctx context.Context, token, agent, ip string) (bool, error) {
+// RefreshSession moves a session's last_active_at forward at most once an hour. active is the
+// last_active_at the caller already read with the session (SessionUserActivity). The UPDATE
+// re-checks last_active_at, so a stale active value can at most cause a no-op write, never a
+// second refresh within the hour.
+func (d *DB) RefreshSession(ctx context.Context, token string, active time.Time, agent, ip string) (bool, error) {
 	now := d.Now()
-	var active time.Time
-	if err := d.Read.QueryRowContext(ctx, "SELECT last_active_at FROM sessions WHERE token=?", token).Scan(timestamp{&active}); err != nil {
-		return false, err
-	}
 	if !active.Before(now.Add(-time.Hour)) {
 		return false, nil
 	}

@@ -544,7 +544,7 @@ func (s *Server) auth(
 			s.requestAuthentication(w, r)
 			return
 		}
-		u, err := s.DB.SessionUser(r.Context(), token)
+		u, active, err := s.DB.SessionUserActivity(r.Context(), token)
 		if errors.Is(err, sql.ErrNoRows) {
 			s.requestAuthentication(w, r)
 			return
@@ -553,7 +553,7 @@ func (s *Server) auth(
 			s.fail(w, err)
 			return
 		}
-		refreshed, err := s.DB.RefreshSession(r.Context(), token, r.UserAgent(), remoteIP(r))
+		refreshed, err := s.DB.RefreshSession(r.Context(), token, active, r.UserAgent(), remoteIP(r))
 		if err != nil {
 			s.fail(w, err)
 			return
