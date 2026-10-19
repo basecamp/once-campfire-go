@@ -65,7 +65,7 @@ func (p *PushSender) Send(ctx context.Context, endpoint, key, auth string, messa
 		return nil
 	}
 	if _, err = ResolvePublic(ctx, p.Resolver, u.Hostname()); err != nil {
-		return nil
+		return err
 	}
 	payload, err := EncryptPush(message, key, auth)
 	if err != nil {

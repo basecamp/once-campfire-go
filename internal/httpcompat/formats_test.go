@@ -10,6 +10,8 @@ func TestReferenceAcceptOrdering(t *testing.T) {
 		accept string
 		want   []string
 	}{
+		{"text/html;q=", []string{"html"}},
+		{"text/html ;q=0.5", []string{"html"}},
 		{"text/html;q=, application/json", []string{"html", "json"}},
 		{"text/html; q=, application/json;q=0.5", []string{"html", "json"}},
 		{"text/html;q=;q=, application/json;q=0.5", []string{"html", "json"}},

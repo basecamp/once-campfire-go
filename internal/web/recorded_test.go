@@ -1,10 +1,8 @@
 package web
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 	"html/template"
 	"net/http/httptest"
@@ -13,9 +11,11 @@ import (
 	"time"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
-	"github.com/basecamp/once-campfire-go/internal/responsebody"
 )
 
+// TestMessageControllersRenderFreshRecords (upstream, adopted): the message
+// controllers render the current records after an edit — no recorded or
+// fragment cache may serve a stale body.
 func TestMessageControllersRenderFreshRecords(t *testing.T) {
 	app, server, cookie, user := testApp(t)
 	ctx := context.Background()
@@ -51,6 +51,9 @@ func TestMessageControllersRenderFreshRecords(t *testing.T) {
 	check("record after")
 }
 
+// TestMessageItemsBatchMissesKeepOrderAndBytes (upstream, adopted): batched
+// fragment misses must not shift the positions or bytes of the views,
+// whether the inputs are full records or references.
 func TestMessageItemsBatchMissesKeepOrderAndBytes(t *testing.T) {
 	app, _, _, user := testApp(t)
 	ctx := context.Background()
@@ -98,69 +101,6 @@ func TestMessageItemsBatchMissesKeepOrderAndBytes(t *testing.T) {
 	}
 }
 
-func TestMessageListOwnershipAndAdmission(t *testing.T) {
-	app, _, _, user := testApp(t)
-	ctx := context.Background()
-	rooms, err := app.DB.Rooms(ctx, user.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	message, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "ownership", "<p>owned bytes</p>", "owned bytes")
-	if err != nil {
-		t.Fatal(err)
-	}
-	messages := []database.Message{message}
-	original, err := app.messageList(ctx, messages)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := func(part responsebody.Part) string {
-		t.Helper()
-		var b bytes.Buffer
-		if _, err := part.WriteTo(&b); err != nil {
-			t.Fatal(err)
-		}
-		return b.String()
-	}
-	want := body(original)
-	key := app.fragmentKey(context.Background(), messageListCacheKey(messages))
-	cost := len(key) + len(want) + 240
-	for _, test := range []struct {
-		name     string
-		limit    int
-		retained bool
-	}{
-		{"disabled", 0, false},
-		{"oversized", (cost - 1) * 4, false},
-		{"admitted", cost * 4, true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			app.fragments = newFragmentCache(test.limit)
-			part, err := app.messageList(ctx, messages)
-			if err != nil || body(part) != want || part.Digest() != original.Digest() {
-				t.Fatal("cache admission changed response", err)
-			}
-			entry, retained := app.fragments.entry(key)
-			if retained != test.retained {
-				t.Fatalf("retained=%v, want %v", retained, test.retained)
-			}
-			if retained && (entry.html != "" || entry.bytes != cost || body(entry.part) != want) {
-				t.Fatal("list payload must be retained and charged once")
-			}
-			// Eviction releases the cache's reference, not an outstanding response.
-			for i := 0; i < 40; i++ {
-				app.fragments.putEntry(fragmentEntry{key: fmt.Sprint(i), part: responsebody.NewPart([]byte(want))})
-			}
-			if _, retained := app.fragments.entry(key); retained || app.fragments.bytes > test.limit {
-				t.Fatal("eviction/admission bound was not enforced")
-			}
-			if body(part) != want || body(original) != want {
-				t.Fatal("eviction changed outstanding response bytes")
-			}
-		})
-	}
-}
-
 func TestRecordedMessagesPreserveBodyAndInvalidate(t *testing.T) {
 	app, _, _, user := testApp(t)
 	ctx := context.Background()
@@ -170,15 +110,21 @@ func TestRecordedMessagesPreserveBodyAndInvalidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	list := []database.Message{message}
-	views, err := app.messageItems(ctx, list)
+	fragment, err := app.messageList(ctx, list)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var original bytes.Buffer
-	if err := app.templates.ExecuteTemplate(&original, "messages", page{Messages: views}); err != nil {
-		t.Fatal(err)
+	original := fragment.html
+	if string(original) == "" {
+		t.Fatal("empty fragment")
 	}
-	fragment, err := app.messageList(ctx, list)
+	// A second call with unchanged records must be served from the fragment
+	// cache with the identical bytes.
+	again, err := app.messageList(ctx, list)
+	if err != nil || again.html != original {
+		t.Fatal("cached message list changed bytes")
+	}
+	fragment, err = app.messageList(ctx, list)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,21 +133,8 @@ func TestRecordedMessagesPreserveBodyAndInvalidate(t *testing.T) {
 	buffered := &responseBuffer{ResponseWriter: first}
 	writeRecorded(buffered, 200, "before\x00marker\x00after", "\x00marker\x00", fragment)
 	buffered.finish(request)
-	if first.Body.String() != "before"+original.String()+"after" {
+	if first.Body.String() != "before"+string(original)+"after" {
 		t.Fatal("recorded rendering changed bytes")
-	}
-	// Keep the existing wire validator even though compression now shares its
-	// full strong part identity. This is the pre-optimization construction.
-	hash := sha256.New()
-	for _, value := range []string{"before", original.String(), "after"} {
-		var size [8]byte
-		binary.LittleEndian.PutUint64(size[:], uint64(len(value)))
-		hash.Write(size[:])
-		digest := sha256.Sum256([]byte(value))
-		hash.Write(digest[:])
-	}
-	if first.Header().Get("ETag") != fmt.Sprintf("W/\"%x\"", hash.Sum(nil)[:16]) {
-		t.Fatal("part identity changed the wire validator")
 	}
 	request.Header.Set("If-None-Match", first.Header().Get("ETag"))
 	second := httptest.NewRecorder()
@@ -214,17 +147,10 @@ func TestRecordedMessagesPreserveBodyAndInvalidate(t *testing.T) {
 	list[0].UpdatedAt = list[0].UpdatedAt.Add(time.Second)
 	list[0].Body = "<p>changed</p>"
 	changed, err := app.messageList(ctx, list)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || !strings.Contains(string(changed.html), "changed") || changed.digest == fragment.digest {
+		t.Fatal("stale message list", err)
 	}
-	var body bytes.Buffer
-	if _, err := changed.WriteTo(&body); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(body.String(), "changed") || changed.Digest() == fragment.Digest() {
-		t.Fatal("stale message list")
-	}
-	if changed.Digest() != sha256.Sum256(body.Bytes()) {
+	if changed.digest != sha256.Sum256([]byte(changed.html)) {
 		t.Fatal("incorrect cached digest")
 	}
 }

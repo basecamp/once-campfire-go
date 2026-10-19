@@ -10,6 +10,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"golang.org/x/net/html/atom"
 )
@@ -125,6 +126,11 @@ type span struct {
 
 // A Tokenizer returns a stream of HTML Tokens.
 type Tokenizer struct {
+	// a is non-nil when the tokenizer runs in arena mode: the input is fully
+	// resident in the arena's byte slab, readByte never refills from r, and
+	// every string the tokenizer hands out is a slab view instead of a fresh
+	// allocation (see resetArena).
+	a *Arena
 	// r is the source of the HTML text.
 	r io.Reader
 	// tt is the TokenType of the current token.
@@ -234,6 +240,12 @@ func (z *Tokenizer) Err() error {
 // Pre-condition: z.err == nil.
 func (z *Tokenizer) readByte() byte {
 	if z.raw.end >= len(z.buf) {
+		// Arena mode: the whole input is resident; the only way to run past
+		// the end is EOF.
+		if z.a != nil {
+			z.err = io.EOF
+			return 0
+		}
 		// Our buffer is exhausted and we have to read from z.r. Check if the
 		// previous read resulted in an error.
 		if z.readErr != nil {
@@ -856,7 +868,7 @@ func (z *Tokenizer) readStartTag() TokenType {
 		raw = z.startTagIn("xmp")
 	}
 	if raw {
-		z.rawTag = strings.ToLower(string(z.buf[z.data.start:z.data.end]))
+		z.rawTag = z.arenaLowerDup(z.buf[z.data.start:z.data.end])
 	}
 	// Look for a self-closing token (e.g. <br/>).
 	//
@@ -909,7 +921,7 @@ func (z *Tokenizer) readTag(saveAttr bool) {
 		}
 		z.readTagAttrVal()
 		// Save pendingAttr if saveAttr and that attribute has a non-empty key, and the key hasn't been seen before.
-		key := string(lower(bytes.Clone(z.buf[z.pendingAttr[0].start:z.pendingAttr[0].end])))
+		key := z.attrKey(z.buf[z.pendingAttr[0].start:z.pendingAttr[0].end])
 		if saveAttr && z.pendingAttr[0].start != z.pendingAttr[0].end && !z.attrNames[key] {
 			z.attr = append(z.attr, z.pendingAttr)
 			z.attrNames[key] = true
@@ -918,6 +930,29 @@ func (z *Tokenizer) readTag(saveAttr bool) {
 			break
 		}
 	}
+}
+
+// attrKey returns the dedup map key for one attribute key span: the
+// lower-cased bytes in a stable region (a slab copy in arena mode — the
+// tagged value must outlive the token's buffer), else a fresh string as
+// before. The map is keyed per tag and cleared by readTag.
+func (z *Tokenizer) attrKey(span []byte) string {
+	if z.a != nil {
+		b := z.a.Dup(span)
+		return z.arenaView(lower(b))
+	}
+	return string(lower(bytes.Clone(span)))
+}
+
+// arenaLowerDup lower-cases the span bytes in a slab copy and views them —
+// the arena form of strings.ToLower(string(b)), for tokenizer state that must
+// outlive the token's span (rawTag).
+func (z *Tokenizer) arenaLowerDup(span []byte) string {
+	if z.a == nil {
+		return strings.ToLower(string(span))
+	}
+	b := z.a.Dup(span)
+	return z.arenaView(lower(b))
 }
 
 // readTagName sets z.data to the "div" in "<div k=v>". The reader (z.raw.end)
@@ -1215,14 +1250,40 @@ func (z *Tokenizer) Text() []byte {
 		z.data.end = z.raw.end
 		s = convertNewlines(s)
 		if (z.convertNUL || z.tt == CommentToken) && bytes.Contains(s, nul) {
-			s = bytes.Replace(s, nul, replacement, -1)
+			s = z.replaceNUL(s)
 		}
 		if !z.textIsRaw {
-			s = unescape(s, false)
+			s = z.unescape(s, false)
 		}
 		return s
 	}
 	return nil
+}
+
+// replaceNUL replaces \x00 bytes with the U+FFFD replacement character.
+// In arena mode the result lives in the slab (the input region is mutating
+// in place at this point, so the replacement must go elsewhere); otherwise
+// bytes.Replace's fresh slice serves.
+func (z *Tokenizer) replaceNUL(s []byte) []byte {
+	if z.a == nil {
+		return bytes.Replace(s, nul, replacement, -1)
+	}
+	count := bytes.Count(s, nul)
+	if count == 0 {
+		return s
+	}
+	out := z.a.Bytes(len(s) + 2*count)
+	dst := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0 {
+			out[dst], out[dst+1], out[dst+2] = 0xef, 0xbf, 0xbd
+			dst += 3
+		} else {
+			out[dst] = s[i]
+			dst++
+		}
+	}
+	return out[:dst]
 }
 
 // TagName returns the lower-cased name of a tag token (the `img` out of
@@ -1232,7 +1293,7 @@ func (z *Tokenizer) TagName() (name []byte, hasAttr bool) {
 	if z.data.start < z.data.end {
 		switch z.tt {
 		case StartTagToken, EndTagToken, SelfClosingTagToken:
-			s := bytes.ReplaceAll(z.buf[z.data.start:z.data.end], nul, replacement)
+			s := z.replaceNUL(z.buf[z.data.start:z.data.end])
 			z.data.start = z.raw.end
 			z.data.end = z.raw.end
 			return lower(s), z.nAttrReturned < len(z.attr)
@@ -1250,9 +1311,9 @@ func (z *Tokenizer) TagAttr() (key, val []byte, moreAttr bool) {
 		case StartTagToken, SelfClosingTagToken:
 			x := z.attr[z.nAttrReturned]
 			z.nAttrReturned++
-			key = bytes.ReplaceAll(z.buf[x[0].start:x[0].end], nul, replacement)
-			val = bytes.ReplaceAll(z.buf[x[1].start:x[1].end], nul, replacement)
-			return lower(key), unescape(convertNewlines(val), true), z.nAttrReturned < len(z.attr)
+			key = lower(z.replaceNUL(z.buf[x[0].start:x[0].end]))
+			val = z.unescape(convertNewlines(z.replaceNUL(z.buf[x[1].start:x[1].end])), true)
+			return key, val, z.nAttrReturned < len(z.attr)
 		}
 	}
 	return nil, nil, false
@@ -1264,21 +1325,47 @@ func (z *Tokenizer) Token() Token {
 	t := Token{Type: z.tt}
 	switch z.tt {
 	case TextToken, CommentToken, DoctypeToken:
-		t.Data = string(z.Text())
+		t.Data = z.arenaView(z.Text())
 	case StartTagToken, SelfClosingTagToken, EndTagToken:
 		name, moreAttr := z.TagName()
-		for moreAttr {
-			var key, val []byte
-			key, val, moreAttr = z.TagAttr()
-			t.Attr = append(t.Attr, Attribute{"", atom.String(key), string(val)})
+		if moreAttr {
+			if z.a != nil {
+				attrs := z.a.AllocAttrs(len(z.attr))
+				for i := range attrs {
+					var key, val []byte
+					key, val, moreAttr = z.TagAttr()
+					attrs[i] = Attribute{"", z.arenaView(key), z.arenaView(val)}
+				}
+				t.Attr = attrs
+			} else {
+				for moreAttr {
+					var key, val []byte
+					key, val, moreAttr = z.TagAttr()
+					t.Attr = append(t.Attr, Attribute{"", atom.String(key), string(val)})
+				}
+			}
 		}
 		if a := atom.Lookup(name); a != 0 {
 			t.DataAtom, t.Data = a, a.String()
 		} else {
-			t.DataAtom, t.Data = 0, string(name)
+			t.DataAtom, t.Data = 0, z.arenaView(name)
 		}
 	}
 	return t
+}
+
+// arenaView returns a slab view of b in arena mode (b must be stable — see
+// the tokenizer's arena contract), else a fresh string copy.
+func (z *Tokenizer) arenaView(b []byte) string {
+	if z.a == nil || len(b) == 0 {
+		return string(b)
+	}
+	return unsafe.String(&b[0], len(b))
+}
+
+// unescape decodes entities in b, allocating from the arena in arena mode.
+func (z *Tokenizer) unescape(b []byte, attribute bool) []byte {
+	return unescapeA(z.a, b, attribute)
 }
 
 // SetMaxBuf sets a limit on the amount of data buffered during tokenization.
@@ -1327,4 +1414,43 @@ func NewTokenizerFragment(r io.Reader, contextTag string) *Tokenizer {
 		}
 	}
 	return z
+}
+
+// resetArena readies the tokenizer for one arena-backed parse of body. The
+// body is copied into the arena slab once; the tokenizer works on that copy
+// in place exactly as it works on its internal buffer on the reader path, and
+// every string it hands out is a slab view valid until the arena's next
+// Reset. foreign mirrors NewTokenizer/NewTokenizerFragment: foreign content
+// context does not put the tokenizer in a raw-text state.
+func (z *Tokenizer) resetArena(a *Arena, body, contextTag string, foreign bool) {
+	z.a = a
+	z.r = nil
+	z.buf = a.Bytes(len(body))
+	copy(z.buf, body)
+	z.tt = 0
+	z.err, z.readErr = nil, nil
+	z.raw = span{}
+	z.maxBuf = 0
+	z.data = span{}
+	z.pendingAttr = [2]span{}
+	z.attr = z.attr[:0]
+	if z.attrNames == nil {
+		z.attrNames = make(map[string]bool)
+	} else {
+		clear(z.attrNames)
+	}
+	z.nAttrReturned = 0
+	z.rawTag = ""
+	z.textIsRaw = false
+	z.convertNUL = false
+	z.allowCDATA = false
+	if foreign {
+		return
+	}
+	switch contextTag {
+	case "title", "textarea":
+		z.rawTag = contextTag
+	case "style", "xmp", "iframe", "noembed", "noframes", "script", "noscript", "plaintext":
+		z.rawTag = "plaintext"
+	}
 }

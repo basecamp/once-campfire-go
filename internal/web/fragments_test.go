@@ -49,11 +49,11 @@ func TestMessageListKeyPreservesOrderAndBoundaries(t *testing.T) {
 		{{a}, {a, a}},
 		{nil, {database.Message{}}},
 	} {
-		if messageListCacheKey(pair[0]) == messageListCacheKey(pair[1]) {
+		if messageListKey(pair[0]) == messageListKey(pair[1]) {
 			t.Fatal("different ordered lists collided")
 		}
 	}
-	if messageListCacheKey(nil) == messageCacheKey(database.Message{}) {
+	if messageListKey(nil) == messageCacheKey(database.Message{}) {
 		t.Fatal("list and item namespaces collided")
 	}
 }

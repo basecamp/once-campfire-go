@@ -1,0 +1,383 @@
+#!/usr/bin/env python3
+"""Collect the build's PGO profile (cmd/campfire/default.pgo) from the production workload.
+
+`go build` reads `default.pgo` from the main package directory when `-pgo=auto` is in effect
+(the default), so the committed profile in `cmd/campfire/` is the build's PGO input and the
+build silently falls back to no PGO when the file is absent.
+
+What this script does, so the profile can be reproduced from a revision:
+
+  1. Starts the built binary natively (`./campfire server`) on a disposable SQLite backup of a
+     reference seed, with the production composition: the public front listener on HTTP_PORT
+     (compression, response cache, the front chain), DISABLE_SSL, GOMAXPROCS=4 and the server
+     pinned to four CPUs, exactly as the shared harness runs the Go app.
+  2. Sets GO_CPU_PROFILE to the output path, so `cmd/campfire/main.go` records a pprof CPU
+     profile for the whole serving lifetime.
+  3. Drives the five harness routes — room_show, messages_page, sidebar, search and
+     post_message — with the shared load generator, a two-second warmup at concurrency 4 and a
+     timed sample at concurrency 16, all against the front listener, gzip requested.
+  4. Sends SIGINT; `front.Serve` returns, the deferred `pprof.StopCPUProfile` flushes the
+     profile, and the process exits.
+
+The provenance of a collected profile is written next to it as `<out>.provenance.json`; commit
+both. It identifies the *binary that was profiled* from that binary's own `go version -m` build
+info (module, build settings, VCS stamp) rather than from the checkout, records the effective
+runtime settings from the server's startup log (not just the requested environment), and pins the
+checkout's build inputs by content (`source_identity.go_sources_sha256`) with an explicit
+statement of whether they can stand for the profiled binary — a VCS stamp names a revision and a
+modified flag, not content, so only a clean build of the same revision is a match.
+
+It deliberately does **not** claim the profile the binary was built with: `go version -m` records
+the `-pgo` path and never the profile's content, so the file at that path is reported as
+`pgo_input.candidate_before_run` / `candidate_after_run` with `identity: "path only"`, captured
+before the run writes anything (`candidate_overwritten_by_this_run` says whether this run replaced
+it). To make a profile input provable you would have to record its hash at build time; the binary
+does not carry one.
+"""
+import argparse, hashlib, importlib.machinery, importlib.util, json, os, re, shutil, sqlite3, subprocess, sys, tempfile, time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+loader = importlib.machinery.SourceFileLoader('pgo_health', str(ROOT / 'bench/health'))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+helper = importlib.util.module_from_spec(spec)
+loader.exec_module(helper)
+
+FIVE_ROUTES = ('room_show', 'messages_page', 'sidebar', 'search', 'post_message')
+
+
+def default_seed():
+    for candidate in (ROOT.parent / 'once-campfire-verification' / 'fixtures' / 'default',
+                      ROOT.parent / 'once-campfire-rust' / 'parity' / '.seed' / 'default'):
+        if (candidate / 'db' / 'production.sqlite3').is_file():
+            return candidate
+    raise SystemExit('no reference seed found; pass --seed')
+
+
+def default_loadgen():
+    for candidate in (ROOT.parent / 'once-campfire-verification' / 'loadgen' / 'target' / 'release' / 'loadgen',
+                      ROOT.parent / 'once-campfire-rust' / 'target' / 'bench' / 'release' / 'loadgen'):
+        if candidate.is_file():
+            return candidate
+    raise SystemExit('no load generator found; pass --loadgen')
+
+
+def seed_env(seed):
+    """The seed's fixed reference environment, as the harness applies it."""
+    for candidate in (seed / 'reference.env', seed.parent / 'reference.env'):
+        if not candidate.is_file():
+            continue
+        env = {}
+        for line in candidate.read_text().splitlines():
+            if line and not line.startswith('#') and '=' in line:
+                key, value = line.split('=', 1)
+                env[key] = value
+        return env
+    raise SystemExit(f'no reference.env under {seed}')
+
+
+def digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def text(*args):
+    return subprocess.check_output(args, text=True).strip()
+
+
+MAIN_PACKAGE = ROOT / 'cmd/campfire'
+# This tool's own outputs. They are excluded from the source identity (the profile's identity is
+# profile.sha256) and from the checkout's dirty test, so a collection that is about to rewrite
+# them does not look like a modified source tree.
+OUTPUT_PATHS = {'cmd/campfire/default.pgo', 'cmd/campfire/default.pgo.provenance.json'}
+
+
+def dirty_paths(status_text, excluded=OUTPUT_PATHS):
+    """Tracked-change paths from `git status --porcelain`, without this tool's own outputs.
+
+    The status field is two characters followed by a space, but `text()` strips the whole output,
+    which eats the leading space of the first line; split once on whitespace so both forms parse.
+    """
+    paths = []
+    for line in status_text.splitlines():
+        fields = line.split(maxsplit=1)
+        if len(fields) == 2 and fields[1].strip() not in excluded:
+            paths.append(fields[1].strip())
+    return paths
+
+
+def checkout_status():
+    """The checkout's tracked changes that are not this tool's own outputs, as paths."""
+    paths = dirty_paths(text('git', '-C', str(ROOT), 'status', '--porcelain', '--untracked-files=no'))
+    return {'dirty': bool(paths), 'dirty_paths': paths}
+
+
+def parse_build_info(raw):
+    """Parse `go version -m` output. Records are tab-separated with a leading tab; the first
+    field is the record type, so a record is split consistently after stripping the indentation
+    (`mod` carries the module path, `build` carries one `key=value` build setting)."""
+    settings, module, version = {}, None, None
+    for line in raw.splitlines():
+        fields = line.strip().split('\t')
+        if len(fields) < 2:
+            continue
+        kind, value = fields[0], fields[1]
+        if kind == 'mod':
+            module, version = value, (fields[2] if len(fields) > 2 else None)
+        elif kind == 'build':
+            key, _, setting = value.partition('=')
+            settings[key] = setting
+    return {'go_version_m': raw, 'module': module, 'module_version': version,
+            'build_settings': settings,
+            'vcs_revision': settings.get('vcs.revision'),
+            'vcs_modified': settings.get('vcs.modified') == 'true',
+            'vcs_time': settings.get('vcs.time')}
+
+
+def build_info(binary):
+    """What the binary itself says it is: `go version -m` records the module, build settings
+    (including `-pgo`) and the VCS stamp of the revision it was built from. Nothing here is read
+    from the checkout, so a binary built elsewhere is identified by its own content."""
+    return parse_build_info(text('go', 'version', '-m', str(binary)))
+
+
+def pgo_input_candidate(info, main_package=MAIN_PACKAGE):
+    """The file the binary's own `-pgo` setting names, as it stands right now.
+
+    This is a *candidate*, never an identity: `go version -m` records the `-pgo` path and never
+    the profile's content, so nothing in the binary ties this file to its build. Capture it
+    before the profiling run writes anything, or the run's own output would be recorded as if it
+    were the input."""
+    setting = info['build_settings'].get('-pgo')
+    if not setting or setting in ('off', ''):
+        return {'setting': setting or None, 'present': False,
+                'identity': 'none: the binary was built with no PGO input'}
+    path = Path(setting)
+    resolved = path if path.is_absolute() else (main_package / path).resolve()
+    if not resolved.is_file():
+        return {'setting': setting, 'resolved': str(resolved), 'present': False,
+                'identity': 'path only: the named profile is not present'}
+    return {'setting': setting, 'resolved': str(resolved), 'present': True,
+            'bytes': resolved.stat().st_size, 'mtime': resolved.stat().st_mtime,
+            'sha256': digest(resolved),
+            'identity': 'path only: the binary records the -pgo path, not the profile content, '
+                        'so this file is not proven to be the one it was built with'}
+
+
+def sources_sha256():
+    """A content-addressed identity for the checkout's build inputs, independent of git state.
+
+    The profile and its provenance are excluded: they are this tool's outputs, and the profile's
+    own identity is recorded as `profile.sha256`. `bin/pgo-profile` is excluded too — it does not
+    go into the build, and pinning it would invalidate the manifest on every edit to this script.
+    It describes *this checkout*, which is the profiled binary's source only when the binary's own
+    VCS stamp matches (see source_identity)."""
+    paths = {str(path.relative_to(ROOT)): digest(path)
+             for folder in ('cmd', 'internal', 'assets', 'third_party', 'reference/crates/assets')
+             for path in sorted((ROOT / folder).rglob('*'))
+             if path.is_file() and str(path.relative_to(ROOT)) not in OUTPUT_PATHS}
+    paths.update({name: digest(ROOT / name) for name in ('go.mod', 'go.sum', 'bin/build', 'bin/build-assets')})
+    return paths
+
+
+def source_identity(info, revision, dirty, hashes):
+    """Whether the checkout's build-input hashes can stand for the profiled binary.
+
+    A `go version -m` VCS stamp names a revision and whether the tree was modified; it does not
+    pin content. So the hashes describe the binary only for a clean build of the same revision.
+    Anything else is reported as checkout-only, with the reason."""
+    reasons = []
+    if info['vcs_revision'] != revision:
+        reasons.append(f"the binary was built from {info['vcs_revision'] or 'an unknown revision'}, "
+                       f"not this checkout ({revision})")
+    if info['vcs_modified']:
+        reasons.append('the binary was built from a modified tree')
+    if dirty:
+        reasons.append('this checkout has uncommitted changes')
+    return {'status': 'checkout-only: not proven to describe the profiled binary' if reasons
+                      else 'describes the profiled binary (clean build of this revision)',
+            'reasons': reasons, 'go_sources_sha256': hashes}
+
+
+def effective_settings(logtext):
+    """The runtime settings the process actually ran with, from its own startup log."""
+    effective = {}
+    policy = re.search(r'gc policy.*gc_percent=(-?\d+).*mem_limit=(-?\d+)', logtext)
+    if policy:
+        effective['gc_percent'] = int(policy.group(1))
+        effective['mem_limit'] = int(policy.group(2))
+    engine = re.search(r'msg="engine".*mode=(\S+)|msg=engine.*mode=(\S+)', logtext)
+    if engine:
+        effective['engine_mode'] = engine.group(1) or engine.group(2)
+    return effective
+
+
+def cpus_allowed(pid):
+    try:
+        for line in Path(f'/proc/{pid}/status').read_text().splitlines():
+            if line.startswith('Cpus_allowed_list:'):
+                return line.split(':', 1)[1].strip()
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+    return None
+
+
+def wait_ready(base, proc, log, timeout=30):
+    deadline = time.monotonic() + timeout
+    import urllib.request, urllib.error
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f'server exited before readiness:\n{log.read_text()}')
+        try:
+            with urllib.request.urlopen(base + '/up', timeout=1) as response:
+                if response.status == 200 and response.read() == helper.EXPECTED:
+                    return
+        except (OSError, urllib.error.HTTPError):
+            pass
+        time.sleep(0.05)
+    raise RuntimeError('server startup timeout')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--binary', type=Path, default=ROOT / 'campfire')
+    parser.add_argument('--seed', type=Path, default=None)
+    parser.add_argument('--loadgen', type=Path, default=None)
+    parser.add_argument('--out', type=Path, default=ROOT / 'cmd/campfire/default.pgo')
+    parser.add_argument('--seconds', type=float, default=4.0, help='timed seconds per route (default 4)')
+    parser.add_argument('--warmup', type=float, default=2.0, help='warmup seconds per route (default 2)')
+    parser.add_argument('--concurrency', type=int, default=16)
+    parser.add_argument('--warmup-concurrency', type=int, default=4)
+    parser.add_argument('--server-cpus', default='8-11')
+    parser.add_argument('--loadgen-cpus', default='12-15')
+    parser.add_argument('--gmp', type=int, default=4, help='GOMAXPROCS for the server (default 4)')
+    parser.add_argument('--gogc', type=int, default=None, help='CAMPFIRE_GOGC for the profiled server (the shipped default)')
+    parser.add_argument('--no-taskset', action='store_true', help='run without CPU pinning')
+    args = parser.parse_args()
+
+    binary = args.binary.resolve()
+    seed = (args.seed or default_seed()).resolve()
+    loadgen = (args.loadgen or default_loadgen()).resolve()
+    out = args.out.resolve()
+    if not binary.is_file():
+        raise SystemExit(f'no binary at {binary}; run bin/build first')
+    if not loadgen.is_file():
+        raise SystemExit(f'no load generator at {loadgen}')
+    # What the binary says it is, and the file its -pgo setting names, both read BEFORE this run
+    # writes anything: with the default output path the run overwrites exactly that file.
+    info = build_info(binary)
+    pgo_before = pgo_input_candidate(info)
+
+    labels = json.loads((seed / 'labels.json').read_text())
+    room = labels['rooms.watercooler']
+    write_room = labels['rooms.hq']
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('CAMPFIRE_', 'THRUSTER_')) and k != 'TLS_DOMAIN'}
+    env.update(seed_env(seed))
+    env.update(DISABLE_SSL='true', TARGET_BIND='127.0.0.1', GOMAXPROCS=str(args.gmp),
+               TMPDIR=str(ROOT / '.cache/tmp'))
+    if args.gogc is not None:
+        env['CAMPFIRE_GOGC'] = str(args.gogc)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    pinned = (lambda cpus, *command: list(command)) if args.no_taskset else \
+             (lambda cpus, *command: ['taskset', '-c', cpus, *command])
+
+    with tempfile.TemporaryDirectory(dir=ROOT / '.cache/tmp', prefix='pgo-') as tmp:
+        work = Path(tmp)
+        db = work / 'production.sqlite3'
+        with sqlite3.connect(f'file:{seed}/db/production.sqlite3?mode=ro', uri=True) as source, \
+             sqlite3.connect(db) as dest:
+            source.backup(dest)
+        shutil.copytree(seed / 'storage', work / 'storage' / 'files')
+        env.update(CAMPFIRE_DATABASE_PATH=str(db), CAMPFIRE_STORAGE_PATH=str(work / 'storage'),
+                   CAMPFIRE_FILES_PATH=str(work / 'storage' / 'files'), GO_CPU_PROFILE=str(out))
+        target, front = helper.free_port(), helper.free_port()
+        while front == target:
+            front = helper.free_port()
+        base = f'http://127.0.0.1:{front}'
+        log = work / 'server.log'
+        env.update(TARGET_PORT=str(target), HTTP_PORT=str(front))
+        with log.open('w') as logfile:
+            proc = subprocess.Popen(pinned(args.server_cpus, str(binary), 'server'), cwd=ROOT, env=env,
+                                    stdout=logfile, stderr=subprocess.STDOUT)
+            try:
+                wait_ready(base, proc, log)
+                affinity = cpus_allowed(proc.pid)
+                load = lambda *argv: json.loads(subprocess.check_output(
+                    pinned(args.loadgen_cpus, str(loadgen), *argv), text=True, timeout=180))
+                cookie = load('login', '--base', base, '--email', labels['emails.david'],
+                              '--password', labels['passwords.all'])['cookie']
+                scrape = load('scrape', '--base', base, '--cookie', cookie, '--room', str(room))
+                csrf = scrape['csrf'] or ''
+                routes = {
+                    'room_show': ['--path', f'/rooms/{room}'],
+                    'messages_page': ['--path', f'/rooms/{room}/messages?before={labels["messages.busy_060"]}'],
+                    'sidebar': ['--path', '/users/me/sidebar'],
+                    'search': ['--path', '/searches?q=coffee'],
+                    'post_message': ['--post-room', str(write_room), '--csrf', csrf],
+                }
+                samples = {}
+                for name in FIVE_ROUTES:
+                    common = ['http', '--base', base, '--cookie', cookie, *routes[name]]
+                    load(*common, '--conc', str(args.warmup_concurrency), '--duration', str(args.warmup))
+                    sample = load(*common, '--conc', str(args.concurrency), '--duration', str(args.seconds))
+                    if sample['errors'] or set(sample['statuses']) != {'200'}:
+                        raise RuntimeError(f'{name}: unsuccessful requests {sample}')
+                    samples[name] = {'rps': sample['rps'], 'p99_ms': sample['latency'].get('p99_ms'),
+                                     'ok': sample['ok'], 'bytes': sample['avg_bytes']}
+                    print(f'{name}: {sample["rps"]} req/s, p99={sample["latency"].get("p99_ms")}ms', flush=True)
+            finally:
+                proc.send_signal(subprocess.signal.SIGINT)
+                try:
+                    proc.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+        if not out.is_file() or out.stat().st_size == 0:
+            raise SystemExit(f'no profile written to {out}; see {log}')
+        logtext = log.read_text()
+        revision = text('git', '-C', str(ROOT), 'rev-parse', 'HEAD')
+        status = checkout_status()
+        dirty = status['dirty']
+        pgo_after = pgo_input_candidate(info)
+        provenance = {
+            'profile': {'name': out.name, 'bytes': out.stat().st_size, 'sha256': digest(out),
+                        'collected_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())},
+            # The binary that was profiled, identified by its own build info (never by the checkout).
+            'binary': {'path': str(binary), 'sha256': digest(binary), 'bytes': binary.stat().st_size,
+                       **info},
+            # The binary records the -pgo path and never the profile's content, so the file at that
+            # path is a candidate, captured before this run wrote anything. A run that uses the
+            # default output path overwrites exactly this file, which is why the capture is taken
+            # first and the result compared afterwards.
+            'pgo_input': {'binary_setting': info['build_settings'].get('-pgo'),
+                          'candidate_before_run': pgo_before,
+                          'candidate_after_run': pgo_after,
+                          'candidate_overwritten_by_this_run': pgo_after != pgo_before},
+            'profiler_go_version': text('go', 'version'),
+            # The checkout's build inputs, by content, with an explicit statement of whether they
+            # can stand for the profiled binary.
+            'source_identity': source_identity(info, revision, dirty, sources_sha256()),
+            'checkout': {'revision': revision, 'dirty': dirty, 'dirty_paths': status['dirty_paths'],
+                         'diff_sha256': hashlib.sha256(text('git', '-C', str(ROOT), 'diff').encode()).hexdigest(),
+                         'branch': text('git', '-C', str(ROOT), 'rev-parse', '--abbrev-ref', 'HEAD')},
+            'seed': str(seed), 'seed_sha256': digest(seed / 'db' / 'production.sqlite3'),
+            'loadgen_sha256': digest(loadgen),
+            'routes': {name: samples[name] for name in FIVE_ROUTES},
+            'timed_seconds': args.seconds, 'warmup_seconds': args.warmup,
+            'concurrency': args.concurrency, 'warmup_concurrency': args.warmup_concurrency,
+            'gzip': True, 'listener': 'public front (HTTP_PORT)',
+            # Effective, not merely requested: the startup log line and the process affinity.
+            'effective': effective_settings(logtext) | {'cpus_allowed': affinity},
+            'requested': {'campfire_gogc': args.gogc, 'gomaxprocs': args.gmp,
+                          'server_cpus': args.server_cpus, 'loadgen_cpus': args.loadgen_cpus,
+                          'environment_gogc': os.environ.get('GOGC'), 'environment_gomemlimit': os.environ.get('GOMEMLIMIT')},
+            'load_start': Path('/proc/loadavg').read_text().strip(),
+            'host': text('uname', '-sr'), 'cpu': text('bash', '-c', "lscpu | sed -n 's/^Model name: *//p'"),
+            'command': 'bin/pgo-profile ' + ' '.join(sys.argv[1:]),
+        }
+        (out.parent / (out.name + '.provenance.json')).write_text(json.dumps(provenance, indent=2) + '\n')
+        print(f'profile {out} ({provenance["profile"]["bytes"]} bytes), provenance {out.name}.provenance.json')
+
+
+if __name__ == '__main__':
+    main()

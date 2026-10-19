@@ -5,4 +5,7 @@ mkdir -p .cache/tmp .cache/go-build
 export TMPDIR="$PWD/.cache/tmp" GOCACHE="$PWD/.cache/go-build" CGO_ENABLED=1
 if ! command -v go >/dev/null; then exec mise exec go@1.27.1 -- "$0" "$@"; fi
 python3 bin/build-assets
-go build -tags sqlite_fts5 -trimpath -o campfire ./cmd/campfire
+# Profile-guided optimization: cmd/campfire/default.pgo is the profile input (bin/pgo-profile
+# collects it from the production workload). -pgo=auto picks it up from the main package
+# directory and silently falls back to no PGO when the file is absent.
+go build -tags sqlite_fts5 -trimpath -pgo=auto -o campfire ./cmd/campfire

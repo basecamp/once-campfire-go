@@ -112,6 +112,16 @@ func TestRustOracle(t *testing.T) {
 		if !reflect.DeepEqual(ids, result.Mentioned) {
 			t.Fatalf("%s: focused mentions differ", c.Name)
 		}
+		// ENGINE-45b: the create path derives display, plain text and
+		// mentions from ProcessMessage's single parse; its outputs must be
+		// exactly the focused calls' outputs, field for field.
+		message, messageErr := ProcessMessage(c.Body, Context{Host: c.Host, Resolve: resolve})
+		if message.Presentation != display.Presentation || message.Plain != display.Plain {
+			t.Fatalf("%s: ProcessMessage display differs: %v", c.Name, messageErr)
+		}
+		if !reflect.DeepEqual(message.Mentioned, ids) {
+			t.Fatalf("%s: ProcessMessage mentions differ", c.Name)
+		}
 		edited, _ := Editable(c.Body, Context{Host: c.Host, Resolve: resolve})
 		if edited != result.Editable {
 			t.Fatalf("%s: focused editor differs", c.Name)
@@ -147,6 +157,18 @@ func TestRustOracle(t *testing.T) {
 			}
 			failures = append(failures, mismatch{c.Name, check.name, actual, want, errorText})
 		}
+	}
+	// ENGINE-56: the arena-backed pipeline must reach its steady state on
+	// typical bodies with no allocations beyond the output buffers (the
+	// Result strings and mention slice). High-water is far below the
+	// per-node allocation count of the pre-arena implementation.
+	if n := testing.AllocsPerRun(100, func() {
+		_, err := ProcessMessage("First post!", Context{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}); int(n) > 8 {
+		t.Fatalf("ProcessMessage steady-state allocations: %d/op, want <= 8", int(n))
 	}
 	report, _ := json.MarshalIndent(failures, "", "  ")
 	if len(failures) > 0 {

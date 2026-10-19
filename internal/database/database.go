@@ -7,16 +7,29 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"github.com/basecamp/once-campfire-go/internal/fastdb/csqlite"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/basecamp/once-campfire-go/internal/fastdb/write"
 )
 
 //go:embed schema.sql
 var schema string
+
+// options is the pragma set every connection to the database file applies
+// (the write DSN adds _txlock and the statement-cache cap; the read DSN adds
+// mode=ro and query_only).
+const options = "?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_cache_size=2000"
 
 var migrations = []string{"20231215043540", "20231220143106", "20240110071740", "20240115124901", "20240130003150", "20240130213001", "20240131105830", "20240209110503", "20250825100957", "20250825100958", "20250825100959", "20251126092013", "20251126115722", "20251126130131", "20251212154340"}
 
@@ -28,11 +41,113 @@ type DB struct {
 	Read                *readPool
 	Write               *sql.DB
 	Now                 func() time.Time
-	versionDB           *sql.DB
-	version             *sql.Conn
+	// versionFast is the pinned read-only handle that observes every
+	// writer's commits (upstream ef00d84): PRAGMA data_version is
+	// connection-local, so it must never run on the read pool. The observed
+	// generation namespaces the web caches, covering commits by external
+	// processes the in-process version counters cannot see. It is a direct
+	// csqlite handle rather than database/sql so the per-request and
+	// per-publish reads allocate nothing.
+	versionFast *csqlite.VersionReader
+	// sidebar is the in-process sidebar fragment version registry
+	// (internal/database/versions.go); see DB.SidebarVersion.
+	sidebar sidebarVersions
+	// corpusVersion and membershipVersion are the ENGINE-30 search cache
+	// version counters (see versions.go). Owned by the writers; readers only
+	// load.
+	corpusVersion     atomic.Int64
+	membershipVersion atomic.Int64
+	// sessionVersion and userVersion are the ENGINE-40b publication
+	// authorization generations (see versions.go): sessions-table writes and
+	// users.status writes respectively.
+	sessionVersion atomic.Int64
+	userVersion    atomic.Int64
+	writer         *messageWriter
+	checkpoints    *checkpointer
+	lane           laneConn
+	// afterMu/afterN/afterCV count callers still finishing a queued create —
+	// between submit and the delivery of the writer's result, which now
+	// includes the after-commit work (the writer owns that second phase).
+	// DB.Close waits for the count to reach zero before closing Write so a
+	// caller that already committed never has its tail run against a closed
+	// pool.
+	afterMu sync.Mutex
+	afterN  int
+	afterCV *sync.Cond
+}
+
+// parseWriteQueue maps a CAMPFIRE_WRITE_QUEUE value to its setting, accepting
+// the same shapes as the web flags. An unrecognised value reports valid=false
+// so the caller can warn while keeping the default on rather than silently
+// changing behaviour.
+func parseWriteQueue(raw string) (enabled, valid bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "on", "true", "1":
+		return true, true
+	case "off", "false", "0":
+		return false, true
+	default:
+		return true, false
+	}
+}
+
+// parseFastdbWrite maps a CAMPFIRE_FASTDB_WRITE value to its setting, with
+// the same value shapes (and warning policy) as CAMPFIRE_WRITE_QUEUE. The
+// default is on: the message create transaction runs as direct prepared
+// statements on the fastdb lane (ENGINE-55); off restores the database/sql
+// lane exactly.
+func parseFastdbWrite(raw string) (enabled, valid bool) { return parseWriteQueue(raw) }
+
+// checkpointIntervalMS reads CAMPFIRE_CHECKPOINT_MS (milliseconds, default
+// 1000): the schedule of the off-writer PASSIVE WAL checkpoint, which is the
+// fallback that keeps the database backfilled when the WAL is not growing
+// fast enough to reach the growth ceiling. A value of 0 disables the timed
+// fallback (the growth ceiling alone schedules checkpoints); a negative or
+// unparseable value warns and keeps the 1000 ms default.
+func checkpointIntervalMS() time.Duration {
+	raw := os.Getenv("CAMPFIRE_CHECKPOINT_MS")
+	if raw == "" {
+		return time.Second
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms < 0 {
+		slog.Warn("invalid CAMPFIRE_CHECKPOINT_MS; using 1000", "value", raw)
+		return time.Second
+	}
+	if ms == 0 {
+		return 0
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// checkpointLimitPages reads CAMPFIRE_CHECKPOINT_PAGES (WAL frames, default
+// 10000): the WAL-growth ceiling. When the WAL reaches this many frames the
+// write lane backfills and restarts it, so the WAL file cannot grow without
+// bound while readers starve SQLite's own automatic restart (the Rust port's
+// WAL_LIMIT_PAGES and its writer-side restart_wal). 0 disables the ceiling —
+// the pre-change fixed-interval policy, and the rollback switch; a negative
+// or unparseable value warns and keeps the 10000-frame default.
+func checkpointLimitPages() int64 {
+	const fallback = 10000
+	raw := os.Getenv("CAMPFIRE_CHECKPOINT_PAGES")
+	if raw == "" {
+		return fallback
+	}
+	pages, err := strconv.Atoi(raw)
+	if err != nil || pages < 0 {
+		slog.Warn("invalid CAMPFIRE_CHECKPOINT_PAGES; using 10000", "value", raw)
+		return fallback
+	}
+	return int64(pages)
 }
 
 func Open(path string, readers int) (*DB, error) {
+	return open("sqlite3", path, readers)
+}
+
+// open builds a DB over the given sqlite driver; tests swap in a counting
+// driver wrapper via OpenCounting.
+func open(driver, path string, readers int) (*DB, error) {
 	if readers < 1 {
 		return nil, errors.New("database readers must be positive")
 	}
@@ -44,10 +159,9 @@ func Open(path string, readers int) (*DB, error) {
 		return nil, err
 	}
 	uri := (&url.URL{Scheme: "file", Path: path}).String()
-	options := "?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_cache_size=2000"
 	// Reuse transaction statements on the single writer connection. The driver
 	// resets bindings on reuse; results and authorization are never cached.
-	w, err := sql.Open("sqlite3", uri+options+"&_txlock=immediate&_stmt_cache_size=64")
+	w, err := sql.Open(driver, uri+options+"&_txlock=immediate&_stmt_cache_size=64")
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +174,7 @@ func Open(path string, readers int) (*DB, error) {
 	if err = prepare(w); err != nil {
 		return fail(err)
 	}
-	r, err := sql.Open("sqlite3", uri+options+"&mode=ro&_query_only=on")
+	r, err := sql.Open(driver, uri+options+"&mode=ro&_query_only=on")
 	if err != nil {
 		return fail(err)
 	}
@@ -70,33 +184,137 @@ func Open(path string, readers int) (*DB, error) {
 		r.Close()
 		return fail(err)
 	}
-	v, err := sql.Open("sqlite3", uri+options+"&mode=ro&_query_only=on")
+	// The pinned generation-observation handle (upstream ef00d84): PRAGMA
+	// data_version is connection-local, so it must never run on the read
+	// pool; the direct cgo handle keeps the read allocation-free.
+	versionFast, err := csqlite.OpenVersionReader(path)
 	if err != nil {
 		r.Close()
 		return fail(err)
 	}
-	v.SetMaxOpenConns(1)
-	version, err := v.Conn(context.Background())
-	if err != nil {
-		v.Close()
-		r.Close()
-		return fail(err)
+	// The checkpointer opens a second connection to the same file below;
+	// a checkpointed WAL read is not a commit observation, so it must not
+	// share the pinned handle's data_version state.
+	db := &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, versionFast: versionFast}
+	db.afterCV = sync.NewCond(&db.afterMu)
+	queue := true
+	if raw, ok := os.LookupEnv("CAMPFIRE_WRITE_QUEUE"); ok {
+		var valid bool
+		queue, valid = parseWriteQueue(raw)
+		if !valid {
+			slog.Warn("invalid CAMPFIRE_WRITE_QUEUE; keeping the write queue on", "value", raw)
+		}
+	}
+	fastWrite := true
+	if raw, ok := os.LookupEnv("CAMPFIRE_FASTDB_WRITE"); ok {
+		var valid bool
+		fastWrite, valid = parseFastdbWrite(raw)
+		if !valid {
+			slog.Warn("invalid CAMPFIRE_FASTDB_WRITE; keeping the direct write lane on", "value", raw)
+		}
+	}
+	if queue {
+		// The writer connection never auto-checkpoints: the separate
+		// checkpointer pays the checkpoint fsyncs on its own schedule. The
+		// durability contract does not move — WAL mode, synchronous=NORMAL,
+		// journal_size_limit untouched (the default -1), so commits are not
+		// fsynced and what committed since the last checkpoint can be lost to
+		// a power failure, exactly as before. The fastdb write lane sets the
+		// same pragma on its direct connection at open (ENGINE-55).
+		if _, err := w.Exec("PRAGMA wal_autocheckpoint=0"); err != nil {
+			r.Close()
+			return fail(err)
+		}
+		var lane laneConn
+		if fastWrite {
+			// The direct lane: the create transaction runs as prepared
+			// statements on one fastdb connection instead of database/sql
+			// (its single-connection serialization is reproduced by the
+			// connection's transaction mutex).
+			conn, err := write.OpenWriter(path, 64)
+			if err != nil {
+				r.Close()
+				return fail(err)
+			}
+			conn.SetRecorder(fastWriteRecord)
+			lane = &fastLaneConn{conn: conn}
+		} else {
+			lane = &sqlLaneConn{db: w}
+		}
+		// One checkpoint at a time: the writer and the background checkpointer
+		// share this gate so a scheduled checkpoint and a WAL restart cannot
+		// refuse each other.
+		gate := &checkpointGate{}
+		writer := newMessageWriter(lane, checkpointLimitPages(), gate)
+		interval := checkpointIntervalMS()
+		if interval <= 0 && writer.limit <= 0 {
+			slog.Warn("CAMPFIRE_CHECKPOINT_MS=0 with CAMPFIRE_CHECKPOINT_PAGES=0 disables WAL checkpoints until shutdown; using 1000 ms")
+			interval = time.Second
+		}
+		checkpoints, err := startCheckpointer(driver, uri+options, path, interval, gate)
+		if err != nil {
+			writer.Close()
+			r.Close()
+			return fail(err)
+		}
+		db.writer, db.checkpoints, db.lane = writer, checkpoints, lane
+		slog.Info("write queue", "enabled", true, "group_commit", true, "fastdb_writes", fastWrite)
+	} else {
+		slog.Info("write queue", "enabled", false)
 	}
 	now := time.Now
 	if raw := os.Getenv("CAMPFIRE_FROZEN_TIME"); raw != "" {
 		frozen, err := time.Parse(time.RFC3339Nano, raw)
 		if err != nil {
-			version.Close()
-			v.Close()
+			versionFast.Close()
 			r.Close()
 			return fail(err)
 		}
 		now = func() time.Time { return frozen }
 	}
-	return &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, Now: now, versionDB: v, version: version}, nil
+	db.Now = now
+	return db, nil
 }
 func (d *DB) Close() error {
-	return errors.Join(d.Read.Close(), d.Write.Close(), d.version.Close(), d.versionDB.Close())
+	// The writer drains queued messages first, then the final checkpoint
+	// moves their frames into the database file; only then do the pools close.
+	var errs []error
+	if d.writer != nil {
+		d.writer.Close()
+		// Wait for callers still finishing a queued create (the writer's
+		// after phase runs inside writer.Close's drain, before this count
+		// drains) so a write whose commit landed shares the close rather
+		// than racing the lane teardown, which would report a committed
+		// write as failed.
+		d.afterMu.Lock()
+		for d.afterN > 0 {
+			d.afterCV.Wait()
+		}
+		d.afterMu.Unlock()
+	}
+	if d.checkpoints != nil {
+		d.checkpoints.Close()
+	}
+	// The direct lane's own connection closes after the writer drained and
+	// the after-commit count reached zero; the database/sql lane's pool is
+	// d.Write, closed below.
+	if d.lane != nil {
+		if err := d.lane.close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if d.versionFast != nil {
+		if err := d.versionFast.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := d.Read.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := d.Write.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 func Stamp(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05.000000") }
 func (d *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {
@@ -158,6 +376,25 @@ func prepare(db *sql.DB) error {
 	if _, err = tx.Exec("CREATE INDEX IF NOT EXISTS index_messages_on_room_id_and_updated_at ON messages(room_id,updated_at)"); err != nil {
 		return err
 	}
+	// Port-owned durable notification intent. The trigger covers both write
+	// lanes in the primary message transaction without another prepare/bind.
+	if _, err = tx.Exec(`CREATE TABLE IF NOT EXISTS campfire_push_outbox (
+		message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+		retry_at INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS campfire_push_outbox_due ON campfire_push_outbox(retry_at,message_id);
+	CREATE TABLE IF NOT EXISTS campfire_push_progress (
+		message_id INTEGER NOT NULL REFERENCES campfire_push_outbox(message_id) ON DELETE CASCADE,
+		subscription_id INTEGER NOT NULL REFERENCES push_subscriptions(id) ON DELETE CASCADE,
+		completed INTEGER NOT NULL DEFAULT 0,
+		attempted_at INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY(message_id,subscription_id)
+	);
+	CREATE INDEX IF NOT EXISTS campfire_push_progress_subscription ON campfire_push_progress(subscription_id);
+	CREATE TRIGGER IF NOT EXISTS campfire_message_push_outbox AFTER INSERT ON messages
+	BEGIN INSERT INTO campfire_push_outbox(message_id) VALUES (new.id); END;`); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -187,10 +424,31 @@ func (t timestamp) Scan(value any) error {
 	return fmt.Errorf("invalid timestamp %q", raw)
 }
 
+// errNoVersionReader is returned when a DB was built without its generation
+// handle (tests that construct DB values directly); it is a sentinel so the
+// error path allocates nothing.
+var errNoVersionReader = errors.New("database: no generation reader")
+
 // A pinned reader observes commits from every writer, including this process.
 // PRAGMA data_version is connection-local, so it must never use the read pool.
+//
+// The handle is deliberately a single one. A pool of N handles (the shape
+// tried: a buffered channel of GOMAXPROCS-capped-at-8 readers) does not work:
+// each connection's data_version counts only the commits that connection's own
+// pager has observed, and a handle that is read intermittently lags the
+// commits made since its previous read. A capture on one handle and the
+// freshness re-check on another then compare two independent counters, and a
+// commit between them goes unseen — the generation gate then serves a stale
+// cache entry. Measured on this build (8 handles, capture/commit/re-check
+// rounds): 20/20 commits missed; with one handle, 0/20. Reading a full cycle
+// of handles and taking the maximum does track commits, but it multiplies the
+// work by N and re-serializes on the same handles. The single handle's mutex
+// covers one step, one column read and one reset (~100 ns), which is not a
+// measurable bottleneck at request rates.
 func (d *DB) ResponseVersion(ctx context.Context) (uint64, error) {
-	var version uint64
-	err := d.version.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version)
-	return version, err
+	_ = ctx // the direct handle needs no context; kept for call-site symmetry
+	if d.versionFast == nil {
+		return 0, errNoVersionReader
+	}
+	return d.versionFast.Read()
 }

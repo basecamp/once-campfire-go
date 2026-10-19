@@ -257,8 +257,8 @@ func (s *Server) storageAuth(next func(http.ResponseWriter, *http.Request, datab
 			w.WriteHeader(401)
 			return
 		}
-		var token string
-		if err = s.Secrets.VerifyCookie("session_token", rails.UnescapeCookie(cookie.Value), s.DB.Now(), &token); err != nil {
+		token, err := s.verifiedSessionToken(rails.UnescapeCookie(cookie.Value), s.DB.Now())
+		if err != nil {
 			w.WriteHeader(401)
 			return
 		}

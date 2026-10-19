@@ -141,11 +141,8 @@ func (c *deadlineConn) Write(b []byte) (int, error) {
 	c.SetWriteDeadline(time.Now().Add(c.timeout))
 	return c.Conn.Write(b)
 }
-func HTTPClient(guarded bool, timeout time.Duration, resolver Resolver) *http.Client {
-	if resolver == nil {
-		resolver = net.DefaultResolver
-	}
-	transport := &http.Transport{TLSHandshakeTimeout: timeout, ResponseHeaderTimeout: timeout, DisableKeepAlives: true, DisableCompression: true, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+func dialTimeout(timeout time.Duration, guarded bool, resolver Resolver) func(ctx context.Context, network, address string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, err
@@ -162,8 +159,27 @@ func HTTPClient(guarded bool, timeout time.Duration, resolver Resolver) *http.Cl
 			return nil, err
 		}
 		return &deadlineConn{connection, timeout}, nil
-	}}
-	return &http.Client{Transport: rubyTransport{transport}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+}
+func HTTPClient(guarded bool, timeout time.Duration, resolver Resolver) *http.Client {
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	transport := &http.Transport{TLSHandshakeTimeout: timeout, ResponseHeaderTimeout: timeout, DisableKeepAlives: true, DisableCompression: true, DialContext: dialTimeout(timeout, guarded, resolver)}
+	return &http.Client{Transport: rubyTransport{next: transport}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
+// WebhookHTTPClient returns the webhook delivery client: the same timeouts
+// and delivery semantics as HTTPClient, with keep-alive connections so a bot
+// endpoint is dialed (and its DNS looked up) once instead of once per
+// delivery. Acquiring a connection refreshes its read deadline for the new
+// request; the deadline wrapper still bounds every body read and write.
+func WebhookHTTPClient(timeout time.Duration, resolver Resolver) *http.Client {
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	transport := &http.Transport{TLSHandshakeTimeout: timeout, ResponseHeaderTimeout: timeout, MaxIdleConnsPerHost: 2, IdleConnTimeout: 90 * time.Second, DisableCompression: true, DialContext: dialTimeout(timeout, false, resolver)}
+	return &http.Client{Transport: rubyTransport{next: transport, requestReadTimeout: timeout}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 func PublicURL(ctx context.Context, resolver Resolver, value string) bool {
 	u, err := url.Parse(value)

@@ -111,9 +111,14 @@ COPY bin/build-assets bin/build-assets
 COPY reference/crates/assets reference/crates/assets
 COPY reference/reference reference/reference
 RUN python3 bin/build-assets
+# `COPY cmd cmd` above brings cmd/campfire/default.pgo, the PGO profile bin/pgo-profile collects
+# from the production workload. -pgo=auto uses it from the main package directory and builds
+# without PGO if it is absent. The committed profile is a bootstrap input (collected from a
+# -pgo=off build of the same revision) and no PGO benefit was detected on the read workload
+# (bench/results/pgo-on-off/), so it ships as the mechanism, not as a measured speedup.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -tags sqlite_fts5 -trimpath -ldflags='-s -w' -o /out/campfire ./cmd/campfire
+    go build -tags sqlite_fts5 -trimpath -pgo=auto -ldflags='-s -w' -o /out/campfire ./cmd/campfire
 
 
 # The shared libraries and executables that go into the runtime, in one directory tree.
@@ -183,9 +188,23 @@ USER 1000:1000
 
 # Configure environment defaults
 ENV RAILS_ENV="production"
+ENV CAMPFIRE_GOGC=200
 ENV HTTP_IDLE_TIMEOUT=60
 ENV HTTP_READ_TIMEOUT=300
 ENV HTTP_WRITE_TIMEOUT=300
+
+# GC policy knobs: CAMPFIRE_GOGC (GOGC target percentage, or `off`) and
+# CAMPFIRE_GOMEMLIMIT (bytes, or a MiB/GiB suffix) are read by the binary at startup.
+# CAMPFIRE_GOGC=200 is the ENGINE-47 measurement's winner: on the harness read workload, with
+# aligned-window per-request accounting, it halves GC CPU per request (1.65 -> 0.84 us) and cuts
+# total CPU per request by 4.9% (23.84 -> 22.66 us; pooled paired ratio 0.957 over 64 pairs, the
+# identically-configured noise-floor arm at 1.001), at the cost of a higher peak RSS (74 -> 87
+# MiB). CAMPFIRE_GOMEMLIMIT is deliberately left unset: a 256 MiB limit was measured as
+# non-binding and indistinguishable from no limit at that peak, and a fixed limit would only risk
+# collector thrash in memory-heavy workloads. Set either knob to override; `CAMPFIRE_GOGC=100`
+# rolls the default back.
+# See bench/results/gc-policy-opt-runtime/README.md (and pgo-on-off/ for the PGO lever, where no
+# benefit was detectable on this workload).
 
 # Set version and revision
 ARG APP_VERSION

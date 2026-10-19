@@ -18,6 +18,9 @@ import (
 // A parser implements the HTML5 parsing algorithm:
 // https://html.spec.whatwg.org/multipage/syntax.html#tree-construction
 type parser struct {
+	// a is non-nil when the parser runs arena-backed: every node, attribute
+	// and string it creates lives in the arena.
+	a *Arena
 	// tokenizer provides the tokens for the parser.
 	tokenizer *Tokenizer
 	// tok is the most recently read token.
@@ -297,7 +300,7 @@ func (p *parser) fosterParent(n *Node) {
 		prev = parent.LastChild
 	}
 	if prev != nil && prev.Type == TextNode && n.Type == TextNode {
-		prev.Data += n.Data
+		prev.Data = p.concat(prev.Data, n.Data)
 		return
 	}
 
@@ -312,22 +315,16 @@ func (p *parser) addText(text string) {
 	}
 
 	if p.shouldFosterParent() {
-		p.fosterParent(&Node{
-			Type: TextNode,
-			Data: text,
-		})
+		p.fosterParent(p.newNode(TextNode, 0, text, "", nil))
 		return
 	}
 
 	t := p.top()
 	if n := t.LastChild; n != nil && n.Type == TextNode {
-		n.Data += text
+		n.Data = p.concat(n.Data, text)
 		return
 	}
-	p.addChild(&Node{
-		Type: TextNode,
-		Data: text,
-	})
+	p.addChild(p.newNode(TextNode, 0, text, "", nil))
 }
 
 func attrCompare(a, b Attribute) int {
@@ -340,12 +337,7 @@ func attrCompare(a, b Attribute) int {
 
 // addElement adds a child element based on the current token.
 func (p *parser) addElement() {
-	p.addChild(&Node{
-		Type:     ElementNode,
-		DataAtom: p.tok.DataAtom,
-		Data:     p.tok.Data,
-		Attr:     p.tok.Attr,
-	})
+	p.addChild(p.newNode(ElementNode, p.tok.DataAtom, p.tok.Data, "", p.tok.Attr))
 }
 
 // Section 12.2.4.3.
@@ -354,8 +346,8 @@ func (p *parser) addFormattingElement() {
 	p.addElement()
 
 	// In order to optimize the search, we need the attributes to be sorted, so we
-	// can just use slices.Equal.
-	attr = slices.Clone(attr)
+	// can just use slices.Equal. The clones live in the arena when available.
+	attr = p.cloneAttrs(attr)
 	slices.SortFunc(attr, attrCompare)
 
 	// Implement the Noah's Ark clause, but with three per family instead of two.
@@ -375,7 +367,7 @@ findIdenticalElements:
 		if n.DataAtom != tagAtom {
 			continue
 		}
-		other := slices.Clone(n.Attr)
+		other := p.cloneAttrs(n.Attr)
 		slices.SortFunc(other, attrCompare)
 		if !slices.Equal(other, attr) {
 			continue findIdenticalElements
@@ -422,7 +414,7 @@ func (p *parser) reconstructActiveFormattingElements() {
 	}
 	for {
 		i++
-		clone := p.afe[i].clone()
+		clone := p.clone(p.afe[i])
 		p.addChild(clone)
 		p.afe[i] = clone
 		if i == len(p.afe)-1 {
@@ -548,13 +540,10 @@ func initialIM(p *parser) bool {
 			return true
 		}
 	case CommentToken:
-		p.doc.AppendChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.doc.AppendChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 		return true
 	case DoctypeToken:
-		n, quirks := parseDoctype(p.tok.Data)
+		n, quirks := p.parseDoctype(p.tok.Data)
 		p.doc.AppendChild(n)
 		p.quirks = quirks
 		p.im = beforeHTMLIM
@@ -593,10 +582,7 @@ func beforeHTMLIM(p *parser) bool {
 			return true
 		}
 	case CommentToken:
-		p.doc.AppendChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.doc.AppendChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 		return true
 	}
 	p.parseImpliedToken(StartTagToken, a.Html, a.Html.String())
@@ -632,10 +618,7 @@ func beforeHeadIM(p *parser) bool {
 			return true
 		}
 	case CommentToken:
-		p.addChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.addChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 		return true
 	case DoctypeToken:
 		// Ignore the token.
@@ -747,10 +730,7 @@ func inHeadIM(p *parser) bool {
 			return true
 		}
 	case CommentToken:
-		p.addChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.addChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 		return true
 	case DoctypeToken:
 		// Ignore the token.
@@ -855,10 +835,7 @@ func afterHeadIM(p *parser) bool {
 			return true
 		}
 	case CommentToken:
-		p.addChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.addChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 		return true
 	case DoctypeToken:
 		// Ignore the token.
@@ -1215,10 +1192,7 @@ func inBodyIM(p *parser) bool {
 			p.inBodyEndTagOther(p.tok.DataAtom, p.tok.Data)
 		}
 	case CommentToken:
-		p.addChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.addChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 	case ErrorToken:
 		// TODO: remove this divergence from the HTML5 spec.
 		if len(p.templateStack) > 0 {
@@ -1342,7 +1316,7 @@ func (p *parser) inBodyEndTagFormatting(tagAtom a.Atom, tagName string) {
 				continue
 			}
 			// Step 14.7.
-			clone := node.clone()
+			clone := p.clone(node)
 			p.afe[p.afe.index(node)] = clone
 			p.oe[p.oe.index(node)] = clone
 			node = clone
@@ -1373,7 +1347,7 @@ func (p *parser) inBodyEndTagFormatting(tagAtom a.Atom, tagName string) {
 
 		// Steps 16-18. Reparent nodes from the furthest block's children
 		// to a clone of the formatting element.
-		clone := formattingElement.clone()
+		clone := p.clone(formattingElement)
 		reparentChildren(clone, furthestBlock)
 		furthestBlock.AppendChild(clone)
 
@@ -1530,10 +1504,7 @@ func inTableIM(p *parser) bool {
 			return inHeadIM(p)
 		}
 	case CommentToken:
-		p.addChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.addChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 		return true
 	case DoctypeToken:
 		// Ignore the token.
@@ -1600,10 +1571,7 @@ func inColumnGroupIM(p *parser) bool {
 			p.tok.Data = s
 		}
 	case CommentToken:
-		p.addChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.addChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 		return true
 	case DoctypeToken:
 		// Ignore the token.
@@ -1687,10 +1655,7 @@ func inTableBodyIM(p *parser) bool {
 			return true
 		}
 	case CommentToken:
-		p.addChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.addChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 		return true
 	}
 
@@ -1879,10 +1844,7 @@ func inSelectIM(p *parser) bool {
 			return inHeadIM(p)
 		}
 	case CommentToken:
-		p.addChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.addChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 	case DoctypeToken:
 		// Ignore the token.
 		return true
@@ -2014,10 +1976,7 @@ func afterBodyIM(p *parser) bool {
 		if len(p.oe) < 1 || p.oe[0].DataAtom != a.Html {
 			panic("html: bad parser state: <html> element not found, in the after-body insertion mode")
 		}
-		p.oe[0].AppendChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.oe[0].AppendChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 		return true
 	}
 	p.im = inBodyIM
@@ -2028,10 +1987,7 @@ func afterBodyIM(p *parser) bool {
 func inFramesetIM(p *parser) bool {
 	switch p.tok.Type {
 	case CommentToken:
-		p.addChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.addChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 	case TextToken:
 		// Ignore all text but whitespace.
 		s := strings.Map(func(c rune) rune {
@@ -2078,10 +2034,7 @@ func inFramesetIM(p *parser) bool {
 func afterFramesetIM(p *parser) bool {
 	switch p.tok.Type {
 	case CommentToken:
-		p.addChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.addChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 	case TextToken:
 		// Ignore all text but whitespace.
 		s := strings.Map(func(c rune) rune {
@@ -2130,10 +2083,7 @@ func afterAfterBodyIM(p *parser) bool {
 			return inBodyIM(p)
 		}
 	case CommentToken:
-		p.doc.AppendChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.doc.AppendChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 		return true
 	case DoctypeToken:
 		return inBodyIM(p)
@@ -2146,10 +2096,7 @@ func afterAfterBodyIM(p *parser) bool {
 func afterAfterFramesetIM(p *parser) bool {
 	switch p.tok.Type {
 	case CommentToken:
-		p.doc.AppendChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.doc.AppendChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 	case TextToken:
 		// Ignore all text but whitespace.
 		s := strings.Map(func(c rune) rune {
@@ -2194,10 +2141,7 @@ func parseForeignContent(p *parser) bool {
 		p.tok.Data = strings.Replace(p.tok.Data, "\x00", "\ufffd", -1)
 		p.addText(p.tok.Data)
 	case CommentToken:
-		p.addChild(&Node{
-			Type: CommentNode,
-			Data: p.tok.Data,
-		})
+		p.addChild(p.newNode(CommentNode, 0, p.tok.Data, "", nil))
 	case StartTagToken:
 		b := breakout[p.tok.Data]
 		if p.tok.DataAtom == a.Font {

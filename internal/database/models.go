@@ -53,6 +53,16 @@ func Token() string {
 	}
 	return hex.EncodeToString(b[:])
 }
+func UUID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	b[6] = (b[6] & 15) | 64
+	b[8] = (b[8] & 63) | 128
+	s := hex.EncodeToString(b[:])
+	return s[:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:]
+}
 
 const userColumns = "u.id,u.name,coalesce(u.email_address,''),coalesce(u.password_digest,''),u.role,u.status,coalesce(u.bio,''),u.updated_at,coalesce(u.bot_token,'')"
 
@@ -105,7 +115,31 @@ func (d *DB) StartSession(ctx context.Context, user int64, agent, ip string) (st
 		now,
 		now,
 	)
+	if err == nil {
+		// A sessions-table write moves the authorization generation, keeping
+		// the ENGINE-40b audit contract "every session insert/delete bumps".
+		d.bumpSessionVersion()
+	}
 	return token, err
+}
+
+// DeleteSession removes one session row (logout). It bumps the session
+// generation so no cached publication authorization for the token can
+// outlive the deletion; callers that revoke a session must go through this
+// helper rather than writing the sessions table directly.
+func (d *DB) DeleteSession(ctx context.Context, token string, user int64) error {
+	r, err := d.Write.ExecContext(ctx, "DELETE FROM sessions WHERE token=? AND user_id=?", token, user)
+	if err != nil {
+		return err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		d.bumpSessionVersion()
+	}
+	return nil
 }
 
 func (d *DB) Setup(
@@ -171,6 +205,12 @@ func (d *DB) Setup(
 		u = User{ID: id, Name: name, Email: email, Role: 1}
 		return err
 	})
+	if err == nil {
+		// Setup creates the owner, the open room and its membership: the
+		// sidebar and the search membership scope both change.
+		d.bumpSidebarVersion()
+		d.membershipVersion.Add(1)
+	}
 	return u, err
 }
 
@@ -277,9 +317,11 @@ func (d *DB) CreateWebhookReply(
 }
 
 // BlobStager keeps file copying outside the SQLite writer while committing the blob
-// and its owning record together.
+// and its owning record together. Insert runs inside the record's transaction,
+// through UploadTx: *sql.Tx on the database/sql paths, the direct lane's
+// transaction on the fastdb path.
 type BlobStager interface {
-	Insert(context.Context, *sql.Tx) (int64, error)
+	Insert(context.Context, UploadTx) (int64, error)
 	Keep()
 	Discard()
 }
@@ -317,71 +359,123 @@ func (d *DB) createMessage(
 	if body != nil {
 		m.Body = *body
 	}
-	err := d.Transaction(ctx, func(tx *sql.Tx) error {
+	// run executes the statements that commit together with the message row:
+	// the authorized creator lookup (membership check and name together),
+	// staged blob, message, room touch, body, attachment, FTS and unread.
+	// The insert trigger records durable push intent in that same transaction.
+	// A process crash cannot leave primary data without its derived state.
+	run := func(tx jobTx) (Message, error) {
+		created := m
+		// One statement for the authorized creator: the membership check and
+		// the name lookup together (ENGINE-45 cut). The webhook path skips the
+		// membership check and reads the name alone, so a missing or inactive
+		// user stays sql.ErrNoRows there while the membership path reports
+		// ErrForbidden — the behaviour the two separate reads had.
+		var name string
+		var err error
 		if checkMembership {
-			var n int
-			if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.room_id=? AND m.user_id=? AND u.status=0", room, user).Scan(&n); err != nil {
-				return err
-			}
-			if n != 1 {
-				return ErrForbidden
-			}
+			name, err = tx.AuthorizedCreatorName(ctx, room, user)
+		} else {
+			name, err = tx.CreatorName(ctx, user)
 		}
-		if err := tx.QueryRowContext(ctx, "SELECT name FROM users WHERE id=?", user).Scan(&m.Creator); err != nil {
-			return err
+		if err != nil {
+			return created, err
 		}
+		created.Creator = name
 		if staged != nil {
-			var err error
 			blob, err = staged.Insert(ctx, tx)
 			if err != nil {
-				return err
+				return created, err
 			}
 		}
 		stamp := Stamp(now)
-		r, err := tx.ExecContext(
-			ctx,
-			"INSERT INTO messages(client_message_id,creator_id,room_id,created_at,updated_at) VALUES (?,?,?,?,?)",
-			client,
-			user,
-			room,
-			stamp,
-			stamp,
-		)
+		created.ID, err = tx.InsertMessage(ctx, client, user, room, stamp)
 		if err != nil {
-			return err
+			return created, err
 		}
-		m.ID, err = r.LastInsertId()
-		if err != nil {
-			return err
-		}
-		for _, q := range []struct {
-			sql  string
-			args []any
-		}{
-			{"UPDATE rooms SET updated_at=? WHERE id=?", []any{stamp, room}},
-			{"UPDATE memberships SET unread_at=?,updated_at=? WHERE room_id=? AND user_id!=? AND involvement!='invisible' AND (connected_at IS NULL OR connected_at < ?)", []any{stamp, stamp, room, user, Stamp(now.Add(-60 * time.Second))}},
-			{"INSERT INTO message_search_index(rowid,body) VALUES (?,?)", []any{m.ID, plain}},
-		} {
-			if _, err = tx.ExecContext(ctx, q.sql, q.args...); err != nil {
-				return err
-			}
+		if err := tx.TouchRoom(ctx, room, stamp); err != nil {
+			return created, err
 		}
 		if body != nil {
-			if _, err = tx.ExecContext(ctx, "INSERT INTO action_text_rich_texts(name,record_type,record_id,body,created_at,updated_at) VALUES ('body','Message',?,?,?,?)", m.ID, *body, stamp, stamp); err != nil {
-				return err
+			if err := tx.InsertRichText(ctx, created.ID, *body, stamp); err != nil {
+				return created, err
 			}
 		}
 		if blob != 0 {
-			if _, err = tx.ExecContext(ctx, "INSERT INTO active_storage_attachments(blob_id,record_type,record_id,name,created_at) VALUES (?,'Message',?,'attachment',?)", blob, m.ID, stamp); err != nil {
-				return err
+			if err := tx.InsertAttachment(ctx, blob, created.ID, stamp); err != nil {
+				return created, err
 			}
 		}
-		return nil
-	})
-	if err == nil && staged != nil {
+		if err := tx.InsertSearchIndex(ctx, created.ID, plain); err != nil {
+			return created, err
+		}
+		if err := tx.BumpUnread(ctx, room, user, stamp, Stamp(now.Add(-60*time.Second))); err != nil {
+			return created, err
+		}
+		return created, nil
+	}
+	if d.writer == nil {
+		err := d.Transaction(ctx, func(tx *sql.Tx) error {
+			lane := &sqlLaneTx{tx: tx}
+			var err error
+			if m, err = run(lane); err != nil {
+				return err
+			}
+			return nil
+		})
+		if err == nil {
+			// ENGINE-20/ENGINE-30 registries: bump after the commit so no
+			// reader can see the new version with old rows.
+			d.bumpSidebarVersion()
+			d.corpusVersion.Add(1)
+		}
+		if err == nil && staged != nil {
+			staged.Keep()
+		}
+		return m, err
+	}
+	// Both queued group commit and the idle in-line path commit the whole
+	// message atomically. Network publication is best effort; push is replayed
+	// independently from the durable outbox.
+	job := &messageJob{
+		ctx:  ctx,
+		run:  run,
+		done: make(chan messageResult, 1),
+	}
+	// The commit gate: this caller counts toward Close's drain until its job
+	// has been answered (the writer's after phase included), so Close never
+	// tears the lane down under a caller that is still finishing its create.
+	// The defer covers every exit, including a panic in the caller's tail.
+	d.afterMu.Lock()
+	d.afterN++
+	d.afterMu.Unlock()
+	defer func() {
+		d.afterMu.Lock()
+		d.afterN--
+		if d.afterN == 0 {
+			d.afterCV.Broadcast()
+		}
+		d.afterMu.Unlock()
+	}()
+	if err := d.writer.submit(job); err != nil {
+		return Message{}, err
+	}
+	result := <-job.done
+	if result.err != nil {
+		return Message{}, result.err
+	}
+	// The shared commit landed; the ENGINE-20/ENGINE-30 registries must move
+	// with it so no reader serves a version-keyed cache that hides the
+	// committed message. FTS, unread state and push intent commit atomically
+	// with the row on both lanes; these bumps follow that primary commit.
+	d.bumpSidebarVersion()
+	d.corpusVersion.Add(1)
+	if staged != nil {
 		staged.Keep()
 	}
-	return m, err
+	// The message row is committed; an after-commit failure is reported the
+	// way the queued path always reported it — the message stays.
+	return result.message, result.afterErr
 }
 
 // AuthorizedSessions checks a publication's distinct sessions in one snapshot.
@@ -416,4 +510,35 @@ func (d *DB) AuthorizedSessions(
 		result[token] = user
 	}
 	return result, rows.Err()
+}
+
+// RoomMembersAmong appends to dst the members of room among userIDs, in one
+// snapshot, and returns the extended slice. It is the membership recheck a
+// publication runs after its candidate read: the candidate read established
+// membership at an earlier instant, so a member removed in between must be
+// recognised here and skipped rather than notified. json_each keeps the SQL
+// shape stable and avoids SQLite's placeholder limit.
+//
+// The result is a caller-owned slice the caller sorts and binary-searches, not
+// a map built per call: the recheck runs on every unread bump, and the map was
+// its only avoidable container (the row destinations and the JSON bind string
+// are database/sql's and the encoder's).
+func (d *DB) RoomMembersAmong(ctx context.Context, dst []int64, room int64, userIDs []int64) ([]int64, error) {
+	raw, err := json.Marshal(userIDs)
+	if err != nil {
+		return dst, err
+	}
+	rows, err := d.Read.QueryContext(ctx, "SELECT user_id FROM memberships WHERE room_id=? AND user_id IN (SELECT value FROM json_each(?))", room, string(raw))
+	if err != nil {
+		return dst, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var user int64
+		if err := rows.Scan(&user); err != nil {
+			return dst, err
+		}
+		dst = append(dst, user)
+	}
+	return dst, rows.Err()
 }

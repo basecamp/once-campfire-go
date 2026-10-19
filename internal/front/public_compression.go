@@ -9,16 +9,65 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/basecamp/once-campfire-go/internal/zstd"
 )
+
+// finalMarker lets the response cache tell the compression wrapper that the
+// body it is about to serve is already final (a recorded replay: status,
+// headers and bytes were captured in full at fill time, so nothing is gained
+// by buffering 1024 bytes against a compression decision the headers already
+// settled). The wrapper still applies its header policy in WriteHeader; only
+// the buffering and content-sniffing are skipped, so the wire bytes are
+// unchanged.
+type finalMarker interface {
+	markFinal()
+}
 
 func publicEncoding(r *http.Request) string {
 	if r.Method == "HEAD" {
 		return ""
 	}
+	// The labour below (a split per token, q parsing) is pure function of the
+	// Accept-Encoding header value, and browsers/loadgens repeat one value for
+	// the lifetime of a connection: memoize the decision per header string.
+	return encodingDecision(r.Header.Get("Accept-Encoding"))
+}
+
+// encodingMemo caches the negotiation decision per Accept-Encoding header
+// value. The value is attacker-chosen, so the table is bounded: at the cap it
+// is cleared wholesale (a cold miss just re-parses that request's header). Only
+// the public policy's own decision is memoized: the application's selector is
+// read directly (compression.go), so the internal listener's Deflate path
+// never takes this lock.
+var encodingMemo = struct {
+	mu    sync.Mutex
+	table map[string]string
+}{table: map[string]string{}}
+
+const encodingMemoCap = 128
+
+func encodingDecision(header string) string {
+	encodingMemo.mu.Lock()
+	if decided, ok := encodingMemo.table[header]; ok {
+		encodingMemo.mu.Unlock()
+		return decided
+	}
+	encodingMemo.mu.Unlock()
+	decided := parsePublicEncoding(header)
+	encodingMemo.mu.Lock()
+	if len(encodingMemo.table) >= encodingMemoCap {
+		clear(encodingMemo.table)
+	}
+	encodingMemo.table[header] = decided
+	encodingMemo.mu.Unlock()
+	return decided
+}
+
+func parsePublicEncoding(header string) string {
 	quality := func(name string) float64 {
-		for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
+		for _, part := range strings.Split(header, ",") {
 			pieces := strings.Split(part, ";")
 			if !strings.EqualFold(strings.TrimSpace(pieces[0]), name) {
 				continue
@@ -98,7 +147,66 @@ type publicResponse struct {
 	writer   io.WriteCloser
 	jitter   []byte
 	err      error
+	final    bool
+	// seam and block are the precomposed surfaces the front's bypass path
+	// installs (precomposed.go): the seam when the chain has an emitter
+	// downstream, the blocking surface when it has none but this wrapper would
+	// otherwise advertise one. They live inside the wrapper — allocated per
+	// request anyway — so neither costs an allocation, and the zero values are
+	// never used.
+	seam  seamWriter
+	block sealedWriter
 }
+
+// markFinal is the cache's fast-lane signal: the response that follows is a
+// recorded replay with its encoding and headers already settled.
+func (w *publicResponse) markFinal() { w.final = true }
+
+// FramePrecomposed implements the web layer's precomposed gate (the method is
+// exported because an interface method cannot be satisfied from another package
+// otherwise): it answers, for a response whose body carries contentEncoding
+// ("" for identity), whether this policy is a pass-through and the response may
+// therefore be framed.
+//
+// The answer is about the response, not about a negotiation the front would
+// have to predict: WriteHeader passes a body through untouched whenever it
+// carries a Content-Encoding of its own, and a policy that selected nothing
+// never compresses. Only an identity body on a request the policy selected a
+// coding for would be transformed — and there the map path must serve it, so
+// the policy's own compression (and its framing, jitter and 406 policy) runs.
+// This is what keeps a zstd-preferring client's already-encoded zstd response
+// on the lane while its identity response stays on the map path.
+func (w *publicResponse) FramePrecomposed(contentEncoding string) bool {
+	return contentEncoding != "" || w.selected == ""
+}
+
+// WritePrecomposed implements the front's precomposed seam on the compression
+// policy: the application hands the loop a finished head block and body, and
+// the wrapper contributes the one header line its WriteHeader contributes to
+// every response it sees — Vary: Accept-Encoding — in the map path's sorted
+// position, then forwards to the next receiver. The application frames only
+// responses this policy is a pass-through for (framePrecomposed), so there is
+// nothing else to apply.
+//
+// Encoding needs no work here: the application pre-encodes the recorded pages
+// (its Content-Encoding is in the block), and WriteHeader's policy is a
+// pass-through for a response that already carries one. The line is inserted
+// only when the block lacks it, which is the case for the 304 block (the 200
+// block carries it), so the emitted head stays exactly the map path's.
+func (w *publicResponse) WritePrecomposed(status int, head []byte, body [][]byte) error {
+	w.status = status
+	head = insertHeadLine(head, "Vary", "Accept-Encoding")
+	receiver := findPrecomposedReceiver(w.ResponseWriter)
+	if receiver == nil {
+		return nil
+	}
+	return receiver.WritePrecomposed(status, head, body)
+}
+
+// forwardsPrecomposed marks the wrapper as a policy forwarder, not an emitter:
+// a chain that ends here (a net/http target listener behind PublicCompression)
+// cannot serve the lane, so Cache.Handler keeps the opaque capture.
+func (w *publicResponse) forwardsPrecomposed() {}
 
 func (w *publicResponse) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 func (w *publicResponse) WriteHeader(status int) {
@@ -179,16 +287,22 @@ func (w *publicResponse) Write(p []byte) (int, error) {
 	}
 	count := 0
 	if !w.started {
-		want := 1024
-		if w.config.CompressionJitter > 0 {
-			want = 64 << 10
-		}
-		n := min(len(p), want-len(w.buffer))
-		w.buffer = append(w.buffer, p[:n]...)
-		p = p[n:]
-		count = n
-		if len(w.buffer) >= want {
+		if w.final {
+			// Recorded replay: commit the header now and stream the body
+			// straight through; the fill already settled encoding and length.
 			w.start()
+		} else {
+			want := 1024
+			if w.config.CompressionJitter > 0 {
+				want = 64 << 10
+			}
+			n := min(len(p), want-len(w.buffer))
+			w.buffer = append(w.buffer, p[:n]...)
+			p = p[n:]
+			count = n
+			if len(w.buffer) >= want {
+				w.start()
+			}
 		}
 	}
 	if w.err != nil {

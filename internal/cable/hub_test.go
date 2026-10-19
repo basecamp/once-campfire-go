@@ -171,7 +171,10 @@ func TestRoomAuthorizationAndDelivery(t *testing.T) {
 		t.Fatal("unsubscribed room or wrong stream received delivery", frame, err)
 	}
 	subscribe(owner, "confirm_subscription")
-	if _, err = db.Write.ExecContext(ctx, "DELETE FROM memberships WHERE room_id=? AND user_id=?", room.ID, user.ID); err != nil {
+	// Revoke the owner's membership through the audited helper: the bump it
+	// performs must invalidate the publication authorization cache so the
+	// next publish excludes both sockets (the ENGINE-40b poisoning contract).
+	if err = db.UpdateRoom(ctx, room.ID, "Rooms::Closed", "Private", []int64{stranger}); err != nil {
 		t.Fatal(err)
 	}
 	hub.Publish(ctx, room.ID, "private after revocation")
@@ -185,7 +188,7 @@ func TestRoomAuthorizationAndDelivery(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for {
 		hub.mu.RLock()
-		remaining := len(hub.subscribers)
+		remaining := len(hub.roomStreams) + len(hub.namedStreams)
 		hub.mu.RUnlock()
 		if remaining == 0 {
 			break
@@ -202,7 +205,7 @@ func TestRoomAuthorizationAndDelivery(t *testing.T) {
 func TestSlowClientQueueIsBounded(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c := &client{out: make(chan *websocket.PreparedMessage, 2), cancel: cancel}
+	c := &client{q: newOutQueueCap(2), cancel: cancel}
 	if !c.send("one") || !c.send("two") || c.send("three") {
 		t.Fatal("queue limit not enforced")
 	}

@@ -171,7 +171,7 @@ func (s *Server) profile(w http.ResponseWriter, r *http.Request, u database.User
 				s.fail(w, err)
 				return
 			}
-			view, err := s.displayRoom(r.Context(), room, u)
+			view, err := s.displayRoom(nil, r.Context(), room, u)
 			if err != nil {
 				s.fail(w, err)
 				return
@@ -341,7 +341,7 @@ func (s *Server) bots(w http.ResponseWriter, r *http.Request, u database.User) {
 			return
 		}
 		for i, room := range rooms {
-			view, err := s.displayRoom(r.Context(), room, bot)
+			view, err := s.displayRoom(nil, r.Context(), room, bot)
 			if err != nil {
 				s.fail(w, err)
 				return

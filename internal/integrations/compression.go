@@ -5,11 +5,16 @@ import (
 	"compress/zlib"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
+	"time"
 )
 
 // Net::HTTP's default request encodings and transparent response inflation.
-type rubyTransport struct{ next http.RoundTripper }
+type rubyTransport struct {
+	next               http.RoundTripper
+	requestReadTimeout time.Duration
+}
 type inflatedBody struct {
 	io.ReadCloser
 	original io.Closer
@@ -17,7 +22,17 @@ type inflatedBody struct {
 
 func (b *inflatedBody) Close() error { b.ReadCloser.Close(); return b.original.Close() }
 func (t rubyTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	req := request.Clone(request.Context())
+	ctx := request.Context()
+	if t.requestReadTimeout > 0 {
+		// A keep-alive connection's read loop can already be blocked while
+		// idle. Refresh that socket deadline when this request acquires it,
+		// including TLS connections, before waiting for the new response.
+		// The trace is request-local: WithClientTrace composes hooks in place.
+		ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
+			info.Conn.SetReadDeadline(time.Now().Add(t.requestReadTimeout))
+		}})
+	}
+	req := request.Clone(ctx)
 	if req.Header.Get("Accept-Encoding") == "" && req.Header.Get("Range") == "" {
 		req.Header.Set("Accept-Encoding", "gzip;q=1.0,deflate;q=0.6,identity;q=0.3")
 	}

@@ -11,9 +11,50 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestWebhookConnectionReuse(t *testing.T) {
+	// Two deliveries to one endpoint through one client must reuse the same
+	// TCP connection (keep-alives), so the dial and its DNS lookup happen
+	// once per bot endpoint instead of once per delivery.
+	var mu sync.Mutex
+	addrs := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		addrs[r.RemoteAddr]++
+		mu.Unlock()
+		io.WriteString(w, "{}")
+	}))
+	defer server.Close()
+	client := NewWebhookClient()
+	for i := 0; i < 2; i++ {
+		reply, err := client.Deliver(context.Background(), server.URL+"/hook", []byte(`{"message":"hi"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reply.Status != 200 {
+			t.Fatalf("delivery %d: status %d", i, reply.Status)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(addrs) != 1 {
+		t.Fatalf("deliveries used %d connections, want 1 (keep-alive reuse): %v", len(addrs), addrs)
+	}
+	if total := addrs[firstAddr(addrs)]; total != 2 {
+		t.Fatalf("connection served %d requests, want 2", total)
+	}
+}
+
+func firstAddr(m map[string]int) string {
+	for addr := range m {
+		return addr
+	}
+	return ""
+}
 
 func TestWebhookOracle(t *testing.T) {
 	var cases []struct {

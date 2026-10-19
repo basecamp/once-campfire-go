@@ -7,3 +7,10 @@
 /assets/generated/
 
 __pycache__/
+
+/tmp/
+
+# Raw benchmark output stays local; retain Markdown reports at every depth.
+/bench/results/**
+!/bench/results/**/
+!/bench/results/**/*.md

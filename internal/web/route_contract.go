@@ -17,6 +17,17 @@ type routeContract struct {
 	bot                               bool
 }
 
+func recognizeContract(method, path string) (*routeContract, error) {
+	var route *routeContract
+	var err error
+	if compiledRoutesEnabled() {
+		route, _, err = compiledRecognizeMode(method, path, false)
+	} else {
+		route, _, err = legacyRecognizeMode(method, path, false)
+	}
+	return route, err
+}
+
 func compileContract(pattern string) (*regexp.Regexp, []string) {
 	var b strings.Builder
 	b.WriteByte('^')
@@ -54,7 +65,16 @@ func normalizedPath(path string) string {
 	parts := strings.FieldsFunc(path, func(r rune) bool { return r == '/' })
 	return escapedHex.ReplaceAllStringFunc("/"+strings.Join(parts, "/"), strings.ToUpper)
 }
-func recognize(method, path string) (*routeContract, map[string]string, error) {
+
+// legacyRecognize matches an escaped path against the contract table with the
+// per-route compiled regexes. The compiled matcher in route_compiled.go
+// replicates it exactly and runs instead unless CAMPFIRE_COMPILED_ROUTES=off
+// or a pattern class the compiler cannot prove identical appears.
+func legacyRecognize(method, path string) (*routeContract, map[string]string, error) {
+	return legacyRecognizeMode(method, path, true)
+}
+
+func legacyRecognizeMode(method, path string, capture bool) (*routeContract, map[string]string, error) {
 	path = normalizedPath(path)
 	if method == "HEAD" {
 		method = "GET"
@@ -68,8 +88,11 @@ func recognize(method, path string) (*routeContract, map[string]string, error) {
 		if captures == nil {
 			continue
 		}
-		params := map[string]string{}
-		if route.bot {
+		var params map[string]string
+		if capture {
+			params = make(map[string]string, len(route.names)+2)
+		}
+		if capture && route.bot {
 			params["format"] = "json"
 		}
 		for j, name := range route.names {
@@ -83,7 +106,12 @@ func recognize(method, path string) (*routeContract, map[string]string, error) {
 			if !utf8.ValidString(value) {
 				return nil, nil, errors.New("invalid UTF-8")
 			}
-			params[name] = value
+			if capture {
+				params[name] = value
+			}
+		}
+		if !capture {
+			return route, nil, nil
 		}
 		parts := strings.SplitN(route.Endpoint, "#", 2)
 		params["controller"] = parts[0]

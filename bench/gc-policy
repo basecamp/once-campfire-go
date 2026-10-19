@@ -1,0 +1,445 @@
+#!/usr/bin/env python3
+"""Measure one or more binaries under different CAMPFIRE_GOGC (and CAMPFIRE_GOMEMLIMIT) settings.
+
+Only the named lever differs between arms, so this is the ENGINE-47 question (does a higher GOGC
+buy throughput on reads without an unreasonable RSS cost) with the wire bytes held fixed. Reads
+are room_show, messages_page, sidebar and search, driven at concurrency 16 through the public
+front listener, gzip requested, on a disposable SQLite backup of a reference seed, with the
+server pinned to four CPUs.
+
+Accounting (ENGINE-47 review): every per-request figure is an *aligned-window* measurement. The
+process's CPU time is read from /proc immediately before and after each timed load-generator
+window, and each GC cycle is attributed to the window that contains its start timestamp, so the
+numerator and the denominator cover the same requests. Whole-process CPU or whole-log GC CPU
+divided by timed requests only — the first version of this script — puts warmup and setup work in
+the numerator and not in the denominator, which inflates every per-request figure by the
+warmup/timed ratio. Both metrics are reported so the correction is visible.
+
+GC attribution is **start-attributed and whole-cycle**, and that is all it claims. Go's gctrace
+`@Ts` field is the time the runtime records when the cycle begins (sweep termination); the runtime
+does not record completion. Windows are half-open, `[start, end)`. A cycle that begins during a
+warmup and finishes inside a measured window is therefore counted in the warmup, not the window,
+and one that begins inside a window and finishes after it is counted in the window in full. The
+clock origin is this script's post-`Popen` reading, not the runtime's init time, so the absolute
+mapping carries a sub-millisecond offset. Cycles are 0.1–1 ms, so the misattribution is bounded by
+the handful straddling each boundary; `bench/test_runtime_levers.py` pins the boundary behaviour
+with synthetic cycles crossing both edges. The /proc CPU deltas are independent of all this.
+
+Arms are given as `[BINARY/]GOGC[:LIMIT][@NAME]` (for example `200:256MiB`, `nopgo/200`,
+`100@null`); binaries come from `--binary NAME=PATH` (default `go=<repo>/campfire`). The first arm
+is the baseline, and an arm with the same settings as the baseline but a different label is the
+host's noise floor. Runs alternate between arms and the order rotates cyclically each repetition,
+because the host is shared: the report gives medians and min–max, and pairs each non-baseline arm
+against the baseline within the same repetition (a ratio, which cancels slow host drift).
+GODEBUG=gctrace=1 is set for every arm so GC CPU and cycle counts come from the runtime itself.
+
+The decoded body of every route is fetched once per run, decoded, normalized for the listener
+origin and the room page's live cursor, and compared against one baseline per route across every
+arm and run; a mismatch fails the run. This is decoded-body equality after that normalization —
+not raw-wire identity.
+
+`--report-only DIR` rebuilds `report.md` from a previous run's `metadata.json` and `raw.json`
+without measuring anything, so the report can follow a change to its own wording.
+"""
+import argparse, datetime, hashlib, json, os, platform, re, shutil, socket, sqlite3, statistics, subprocess, tempfile, threading, time, urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+READ_ROUTES = ('room_show', 'messages_page', 'sidebar', 'search')
+CURSOR = re.compile(rb'(data-refresh-room-loaded-at-value=")[0-9]+')
+GC_POLICY = re.compile(r'gc policy.*gc_percent=(-?\d+).*mem_limit=(-?\d+)')
+GCTRACE = re.compile(r'^gc (\d+) @([\d.]+)s (\d+)%: [\d.+]+ ms clock, ([\d./+]+) ms cpu,', re.M)
+
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def free_port():
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        sock.bind(('::', 0))
+        return sock.getsockname()[1]
+
+
+def output(*cmd, **kwargs):
+    return subprocess.check_output(cmd, text=True, **kwargs).strip()
+
+
+def default_seed():
+    for candidate in (ROOT.parent / 'once-campfire-verification' / 'fixtures' / 'default',
+                      ROOT.parent / 'once-campfire-rust' / 'parity' / '.seed' / 'default'):
+        if (candidate / 'db' / 'production.sqlite3').is_file():
+            return candidate
+    raise SystemExit('no reference seed found; pass --seed')
+
+
+def default_loadgen():
+    for candidate in (ROOT.parent / 'once-campfire-verification' / 'loadgen' / 'target' / 'release' / 'loadgen',
+                      ROOT.parent / 'once-campfire-rust' / 'target' / 'bench' / 'release' / 'loadgen'):
+        if candidate.is_file():
+            return candidate
+    raise SystemExit('no load generator found; pass --loadgen')
+
+
+def seed_env(seed):
+    for candidate in (seed / 'reference.env', seed.parent / 'reference.env'):
+        if candidate.is_file():
+            return {k: v for k, v in (line.split('=', 1) for line in candidate.read_text().splitlines()
+                                      if line and not line.startswith('#') and '=' in line)}
+    raise SystemExit(f'no reference.env under {seed}')
+
+
+def parse_arm(spec, names):
+    core, _, alias = spec.partition('@')
+    binary, sep, rest = core.partition('/')
+    if not sep or binary not in names:
+        binary, rest = None, core
+    gc, _, limit = rest.partition(':')
+    label = alias or (f'{binary}/' if binary else '') + gc + (f'+{limit}' if limit else '')
+    return dict(spec=spec, binary=binary, googc=int(gc), gomemlimit=limit or None, label=label)
+
+
+def rss_kib(pid):
+    try:
+        for line in Path(f'/proc/{pid}/smaps_rollup').read_text().splitlines():
+            if line.startswith('Rss:'):
+                return int(line.split()[1])
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+    return None
+
+
+def cpu_seconds(pid):
+    fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+    return (int(fields[11]) + int(fields[12])) / os.sysconf('SC_CLK_TCK')
+
+
+def parse_gctrace(log):
+    """Per cycle: the runtime's `@Ts` start timestamp, the CPU time it reports, its index and
+    the GC share reported with it. `@Ts` is the cycle's start (sweep termination), not its end."""
+    cycles = []
+    for match in GCTRACE.finditer(log):
+        cycles.append(dict(n=int(match.group(1)), at=float(match.group(2)), share=int(match.group(3)),
+                           cpu_ms=sum(float(part) for part in re.split(r'[+/]', match.group(4)))))
+    return cycles
+
+
+def attribute_cycles(cycles, window_start, window_end):
+    """The cycles whose *start* falls in the half-open window [window_start, window_end).
+
+    Start-attributed and whole-cycle: the window bounds are the script's own clock readings mapped
+    onto the runtime's start timestamps, so they carry a sub-millisecond offset; a cycle crossing
+    either edge belongs to exactly one side (see the module docstring).
+    """
+    return [cycle for cycle in cycles if window_start <= cycle['at'] < window_end]
+
+
+def render_report(meta, arms, windows, runs, settings):
+    def group(label, route, field):
+        return [window[field] for window in windows if window['label'] == label and window['route'] == route]
+
+    def runs_of(label):
+        return [run for run in runs if run['label'] == label]
+
+    baseline = arms[0]['label']
+    legend = ', '.join(f"`{arm['label']}` ({arm['binary'] + '/' if arm['binary'] else ''}GOGC={arm['googc']}"
+                       + (f", limit={arm['gomemlimit']}" if arm['gomemlimit'] else '') + ')' for arm in arms)
+    report = ['# GC arms: aligned-window per-request accounting', '',
+        f"`{meta['go_commit']}` (checkout dirty: {meta['go_dirty']}), Go 1.27.1, {platform.node()}. "
+        f"Public front listener, gzip, {settings['concurrency']} concurrent clients on {settings['loadgen_cpus']}, "
+        f"server pinned to {settings['server_cpus']}, {settings['warmup']:g}s warmup and "
+        f"{settings['seconds']:g}s timed window per route, {settings['reps']} repetitions per arm, order "
+        f"rotating cyclically each repetition so every arm occupies every slot. "
+        f"Decoded bodies are equal across every arm and run (normalized for the listener origin and the "
+        f"room page's live cursor). GODEBUG=gctrace=1 in every arm; host load at start: {meta['load_before']}.", '',
+        f'Arms: {legend}. An arm with the same settings as the baseline and a different label is the host '
+        'noise floor. Binaries, with their hashes, are in `metadata.json`.', '',
+        'Every CPU and GC per-request figure below is an aligned-window measurement: the process CPU '
+        'delta and the GC-cycle CPU of the timed load-generator window only, divided by that window\'s '
+        'requests. GC attribution is **start-attributed and whole-cycle** — the gctrace `@Ts` field is '
+        'the cycle\'s start, not its completion, and windows are half-open `[start, end)` — so a cycle '
+        'beginning in a warmup counts there even if it finishes inside a window, and one beginning in a '
+        'window counts there in full even if it finishes after. See the correction section at the end.', '',
+        '| Route | Arm | req/s, median [min–max] | CPU µs/req, median [min–max] | GC CPU µs/req, median | GC cycles, median | RSS peak MiB, median [min–max] |',
+        '|---|---:|---:|---:|---:|---:|---:|']
+    for name in READ_ROUTES:
+        for arm in arms:
+            rates = group(arm['label'], name, 'rps')
+            cpu = group(arm['label'], name, 'cpu_us_per_request')
+            gc = group(arm['label'], name, 'gc_cpu_per_request_us')
+            cycles = group(arm['label'], name, 'gc_cycles')
+            rss = [run['rss_peak_kib'] / 1024 for run in runs_of(arm['label'])]
+            report.append(f"| {name} | {arm['label']} | {statistics.median(rates):,.0f} [{min(rates):,.0f}–{max(rates):,.0f}] | "
+                          f"{statistics.median(cpu):.2f} [{min(cpu):.2f}–{max(cpu):.2f}] | "
+                          f"{statistics.median(gc):.3f} | {statistics.median(cycles):.0f} | "
+                          f"{statistics.median(rss):.1f} [{min(rss):.1f}–{max(rss):.1f}] |")
+    report += ['', '## Paired ratios against the baseline (same repetition and route)', '',
+        f'Ratios to the `{baseline}` arm measured in the same repetition and on the same route, and the number of '
+        'pairs that favour the arm. A throughput ratio above 1 (or a CPU µs/req ratio below 1) with nearly every '
+        'pair agreeing is a clear sign; mixed signs mean the host noise is larger than the effect. The route pairs '
+        'of one repetition share a server process and a host window, so they are not independent repetitions: '
+        'the per-route columns and the pooled row should be read together.', '',
+        '| Route | Arm | req/s ratio, median [min–max] | pairs >1 | CPU µs/req ratio, median [min–max] | pairs <1 | GC µs/req ratio, median | pairs <1 |',
+        '|---|---:|---:|---:|---:|---:|---:|---:|']
+    pooled = {arm['label']: ([], [], []) for arm in arms[1:]}
+    for name in READ_ROUTES:
+        for arm in arms[1:]:
+            def pairs(field):
+                base, other = [], []
+                for rep in range(1, settings['reps'] + 1):
+                    base.append(next((w[field] for w in windows if w['label'] == baseline and w['rep'] == rep and w['route'] == name), None))
+                    other.append(next((w[field] for w in windows if w['label'] == arm['label'] and w['rep'] == rep and w['route'] == name), None))
+                return [o / b for b, o in zip(base, other) if b and o]
+            rate_ratios, cpu_ratios, gc_ratios = pairs('rps'), pairs('cpu_us_per_request'), pairs('gc_cpu_per_request_us')
+            report.append(f"| {name} | {arm['label']} | {statistics.median(rate_ratios):.3f} [{min(rate_ratios):.3f}–{max(rate_ratios):.3f}] | "
+                          f"{sum(1 for ratio in rate_ratios if ratio > 1)}/{len(rate_ratios)} | "
+                          f"{statistics.median(cpu_ratios):.3f} [{min(cpu_ratios):.3f}–{max(cpu_ratios):.3f}] | "
+                          f"{sum(1 for ratio in cpu_ratios if ratio < 1)}/{len(cpu_ratios)} | "
+                          f"{statistics.median(gc_ratios):.3f} | {sum(1 for ratio in gc_ratios if ratio < 1)}/{len(gc_ratios)} |")
+            pooled[arm['label']][0].extend(rate_ratios)
+            pooled[arm['label']][1].extend(cpu_ratios)
+            pooled[arm['label']][2].extend(gc_ratios)
+    report += ['', 'Pooled over all routes and repetitions (all pairs, not independent):', '',
+        '| Arm | req/s ratio, median [min–max] | pairs >1 | CPU µs/req ratio, median [min–max] | pairs <1 | GC µs/req ratio, median [min–max] | pairs <1 |',
+        '|---|---:|---:|---:|---:|---:|---:|']
+    for arm in arms[1:]:
+        rate_ratios, cpu_ratios, gc_ratios = pooled[arm['label']]
+        report.append(f"| {arm['label']} | {statistics.median(rate_ratios):.3f} [{min(rate_ratios):.3f}–{max(rate_ratios):.3f}] | "
+                      f"{sum(1 for ratio in rate_ratios if ratio > 1)}/{len(rate_ratios)} | "
+                      f"{statistics.median(cpu_ratios):.3f} [{min(cpu_ratios):.3f}–{max(cpu_ratios):.3f}] | "
+                      f"{sum(1 for ratio in cpu_ratios if ratio < 1)}/{len(cpu_ratios)} | "
+                      f"{statistics.median(gc_ratios):.3f} [{min(gc_ratios):.3f}–{max(gc_ratios):.3f}] | "
+                      f"{sum(1 for ratio in gc_ratios if ratio < 1)}/{len(gc_ratios)} |")
+    report += ['', '## Correction: aligned window vs whole-process CPU / timed requests', '',
+        'The first version of this script divided the whole process\'s CPU time (and the whole log\'s GC CPU) '
+        'by the timed requests only, so the warmup windows and the setup requests were in the numerator and '
+        'not in the denominator. The aligned figure is the one to quote; the whole-run figure is shown to make '
+        'the size of the correction visible. RSS and the GC cycle counts are unaffected.', '',
+        '| Arm | CPU µs/req, aligned | CPU µs/req, whole-run (biased) | bias | GC µs/req, aligned | GC µs/req, whole-run (biased) | bias |',
+        '|---|---:|---:|---:|---:|---:|---:|']
+    for arm in arms:
+        rows = runs_of(arm['label'])
+        aligned = [window['cpu_us_per_request'] for window in windows if window['label'] == arm['label']]
+        aligned_gc = [window['gc_cpu_per_request_us'] for window in windows if window['label'] == arm['label']]
+        whole = statistics.median(run['cpu_us_per_request_whole_run'] for run in rows)
+        whole_gc = statistics.median(run['gc_cpu_per_request_whole_run'] for run in rows)
+        report.append(f"| {arm['label']} | {statistics.median(aligned):.2f} | {whole:.2f} | {whole / statistics.median(aligned):.2f}× | "
+                      f"{statistics.median(aligned_gc):.3f} | {whole_gc:.3f} | {whole_gc / statistics.median(aligned_gc):.2f}× |")
+    report += ['', 'Per-window samples (route, requests, aligned CPU and GC deltas, window bounds), per-run RSS, CPU, '
+               'GC totals, decoded body hashes and log volumes are in `raw.json`; binary hashes, seed hash and host '
+               'identity in `metadata.json`; the GC and startup lines of each server run in `*.log`. The per-request '
+               'access log is left on (harness fidelity) and only its line and byte counts are kept. This is a '
+               'workstation measurement on a shared host; medians, spread and paired signs are the evidence, not '
+               'single samples.', '']
+    return '\n'.join(report) + '\n'
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--binary', action='append', default=[], metavar='NAME=PATH',
+                        help='repeatable; default go=<repo>/campfire')
+    parser.add_argument('--seed', type=Path, default=None)
+    parser.add_argument('--loadgen', type=Path, default=None)
+    parser.add_argument('--values', nargs='+', default=['100', '200'], metavar='[BINARY/]GOGC[:LIMIT][@NAME]')
+    parser.add_argument('--reps', type=int, default=5)
+    parser.add_argument('--seconds', type=float, default=4)
+    parser.add_argument('--warmup', type=float, default=2)
+    parser.add_argument('--concurrency', type=int, default=16)
+    parser.add_argument('--server-cpus', default='8-11')
+    parser.add_argument('--loadgen-cpus', default='12-15')
+    parser.add_argument('--out', type=Path)
+    parser.add_argument('--report-only', type=Path, metavar='DIR',
+                        help='rebuild report.md from a previous run\'s metadata.json and raw.json')
+    args = parser.parse_args()
+    if args.report_only:
+        directory = args.report_only.resolve()
+        meta = json.loads((directory / 'metadata.json').read_text())
+        raw = json.loads((directory / 'raw.json').read_text())
+        settings = meta['settings']
+        arms = [parse_arm(spec, settings['binaries']) for spec in settings['values']]
+        (directory / 'report.md').write_text(render_report(meta, arms, raw['windows'], raw['runs'], settings))
+        print(f'wrote {directory / "report.md"} from the recorded samples')
+        return
+    if args.reps < 2 or len(args.values) < 2:
+        parser.error('need at least two repetitions and two arms')
+    binaries = {'go': (ROOT / 'campfire').resolve()}
+    for entry in args.binary:
+        name, sep, path = entry.partition('=')
+        if not sep or not name:
+            parser.error('--binary requires NAME=PATH')
+        binaries[name] = Path(path).resolve()
+    arms = [parse_arm(spec, binaries) for spec in args.values]
+    if len({arm['spec'] for arm in arms}) != len(arms):
+        parser.error('arms must be unique')
+    seed = (args.seed or default_seed()).resolve()
+    loadgen = (args.loadgen or default_loadgen()).resolve()
+    for name, path in binaries.items():
+        if not path.is_file():
+            parser.error(f'missing binary {name}: {path}')
+    if not loadgen.is_file():
+        parser.error(f'missing load generator {loadgen}')
+    for arm in arms:
+        if arm['binary'] is not None and arm['binary'] not in binaries:
+            parser.error(f'unknown binary {arm["binary"]}')
+    labels = json.loads((seed / 'labels.json').read_text())
+    room = labels['rooms.watercooler']
+    out = (args.out or ROOT / 'bench/results' / datetime.datetime.now(datetime.timezone.utc).strftime('gc-policy-%Y%m%dT%H%M%SZ')).resolve()
+    out.mkdir(parents=True, exist_ok=False)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('CAMPFIRE_', 'THRUSTER_')) and k != 'TLS_DOMAIN'}
+    env.update(seed_env(seed))
+    env.update(DISABLE_SSL='true', TARGET_BIND='127.0.0.1', GOMAXPROCS='4', TMPDIR=str(ROOT / '.cache/tmp'), GODEBUG='gctrace=1')
+    paths = {'room_show': f'/rooms/{room}',
+             'messages_page': f'/rooms/{room}/messages?before={labels["messages.busy_060"]}',
+             'sidebar': '/users/me/sidebar', 'search': '/searches?q=coffee'}
+    metadata = dict(
+        scope='same seed, CPU pinning and request windows; only CAMPFIRE_GOGC/CAMPFIRE_GOMEMLIMIT and the binary differ; '
+              'per-request figures are aligned-window measurements (CPU and GC deltas around each timed window)',
+        accounting='cpu_us_per_request and gc_cpu_per_request_us use the delta of /proc CPU time and of GC-cycle CPU '
+                   'across the timed load-generator window only; GC attribution is start-attributed and whole-cycle '
+                   '(the gctrace timestamp is the cycle start) over half-open windows; *_whole_run_us divide '
+                   'whole-process CPU and whole-log GC CPU by timed requests and are kept only to show the correction',
+        time=datetime.datetime.now(datetime.timezone.utc).isoformat(), host=platform.platform(),
+        cpu=output('lscpu'), go_commit=output('git', '-C', str(ROOT), 'rev-parse', 'HEAD'),
+        go_dirty=bool(output('git', '-C', str(ROOT), 'status', '--porcelain', '--untracked-files=no')),
+        go_version=output('go', 'version'),
+        binaries={name: dict(path=str(path), sha256=sha(path), bytes=path.stat().st_size) for name, path in binaries.items()},
+        loadgen_sha256=sha(loadgen), seed=str(seed), seed_sha256=sha(seed / 'db' / 'production.sqlite3'),
+        settings=vars(args) | {'seed': str(seed), 'loadgen': str(loadgen), 'out': str(out),
+                               'binaries': {k: str(v) for k, v in binaries.items()}},
+        load_before=Path('/proc/loadavg').read_text().strip())
+    (out / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
+    work = ROOT / 'bench/.work'; work.mkdir(exist_ok=True)
+    runs, windows, bodies = [], [], {}
+    for rep in range(1, args.reps + 1):
+        # Cyclic rotation, not a reversal: with more than two arms a reversal leaves the middle
+        # arm in the same slot every repetition, which would hide host drift from the noise floor.
+        shift = (rep - 1) % len(arms)
+        order = arms[shift:] + arms[:shift]
+        for arm in order:
+            binary = binaries[arm['binary'] or 'go']
+            with tempfile.TemporaryDirectory(prefix=f"gc{arm['label']}-{rep}-", dir=work) as tmp:
+                tmp = Path(tmp)
+                db = tmp / 'production.sqlite3'
+                with sqlite3.connect(f'file:{seed}/db/production.sqlite3?mode=ro', uri=True) as source, sqlite3.connect(db) as dest:
+                    source.backup(dest)
+                shutil.copytree(seed / 'storage', tmp / 'storage' / 'files')
+                port, front = free_port(), free_port()
+                while front == port:
+                    front = free_port()
+                base = f'http://127.0.0.1:{front}'
+                runenv = env | dict(CAMPFIRE_DATABASE_PATH=str(db), CAMPFIRE_STORAGE_PATH=str(tmp / 'storage'),
+                                    CAMPFIRE_FILES_PATH=str(tmp / 'storage' / 'files'), CAMPFIRE_GOGC=str(arm['googc']),
+                                    TARGET_PORT=str(port), HTTP_PORT=str(front))
+                if arm['gomemlimit']:
+                    runenv['CAMPFIRE_GOMEMLIMIT'] = arm['gomemlimit']
+                run = dict(label=arm['label'], googc=arm['googc'], gomemlimit=arm['gomemlimit'],
+                           binary=arm['binary'] or 'go', rep=rep, load_start=Path('/proc/loadavg').read_text().strip())
+                log_path = tmp / 'server.log'
+                with log_path.open('w') as log:
+                    proc = subprocess.Popen(['taskset', '-c', args.server_cpus, str(binary), 'server'], cwd=ROOT, env=runenv, stdout=log, stderr=subprocess.STDOUT)
+                    started = time.monotonic()  # ~process start; gctrace timestamps are relative to it
+                    peak = [0]
+                    sampling = threading.Event()
+
+                    def sample():
+                        while not sampling.is_set():
+                            current = rss_kib(proc.pid)
+                            if current:
+                                peak[0] = max(peak[0], current)
+                            sampling.wait(0.05)
+                    sampler = threading.Thread(target=sample)
+                    sampler.start()
+                    try:
+                        deadline = time.monotonic() + 30
+                        while True:
+                            if proc.poll() is not None:
+                                raise RuntimeError(f'server exited: see {log_path.name}')
+                            try:
+                                with urllib.request.urlopen(base + '/up', timeout=1) as response:
+                                    if response.status == 200:
+                                        break
+                            except OSError:
+                                if time.monotonic() > deadline:
+                                    raise RuntimeError('startup timed out')
+                                time.sleep(0.02)
+                        load = lambda *argv: json.loads(output('taskset', '-c', args.loadgen_cpus, str(loadgen), *argv, timeout=180))
+                        cookie = load('login', '--base', base, '--email', labels['emails.david'], '--password', labels['passwords.all'])['cookie']
+                        load('scrape', '--base', base, '--cookie', cookie, '--room', str(room))
+                        for name in READ_ROUTES:
+                            common = ['http', '--base', base, '--cookie', cookie, '--path', paths[name]]
+                            load(*common, '--conc', '4', '--duration', str(args.warmup))
+                            cpu_before, window_start = cpu_seconds(proc.pid), time.monotonic()
+                            sample = load(*common, '--conc', str(args.concurrency), '--duration', str(args.seconds))
+                            cpu_after, window_end = cpu_seconds(proc.pid), time.monotonic()
+                            if sample['errors'] or set(sample['statuses']) != {'200'}:
+                                raise RuntimeError(f'{name}: unsuccessful requests {sample}')
+                            windows.append(dict(label=arm['label'], binary=arm['binary'] or 'go', rep=rep, route=name,
+                                                requests=sample['ok'], cpu_seconds=cpu_after - cpu_before,
+                                                start=window_start, end=window_end, started=started,
+                                                rps=sample['rps'], p99_ms=sample['latency'].get('p99_ms'),
+                                                bytes=sample['avg_bytes']))
+                            print(f"{arm['label']} rep={rep} {name}: {sample['rps']:,.0f} req/s p99={sample['latency'].get('p99_ms')} ms", flush=True)
+                            output('taskset', '-c', args.loadgen_cpus, str(loadgen), 'fetch', '--base', base, '--cookie', cookie, '--path', paths[name], '--out', str(tmp / f'{name}.body'), timeout=180)
+                            decoded = (tmp / f'{name}.body').read_bytes().replace(base.encode(), b'http://benchmark.invalid')
+                            body_sha = hashlib.sha256(CURSOR.sub(rb'\g<1>CURSOR', decoded)).hexdigest()
+                            # One baseline per route across every arm and run: the lever must not
+                            # move the decoded response, and the check must actually compare arms.
+                            if name in bodies and bodies[name] != body_sha:
+                                raise RuntimeError(f'{name}: decoded body differs from the baseline '
+                                                   f'({bodies[name][:16]}… vs {body_sha[:16]}…, arm {arm["label"]} rep {rep})')
+                            bodies[name] = body_sha
+                            run.setdefault('body_sha256', {})[name] = body_sha
+                        run['rss_peak_kib'] = peak[0]
+                        run['rss_final_kib'] = rss_kib(proc.pid)
+                        run['cpu_seconds'] = round(cpu_seconds(proc.pid), 3)
+                        run['requests'] = sum(window['requests'] for window in windows if window['label'] == arm['label'] and window['rep'] == rep)
+                        run['load_end'] = Path('/proc/loadavg').read_text().strip()
+                    finally:
+                        sampling.set(); sampler.join()
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=15)
+                        except subprocess.TimeoutExpired:
+                            proc.kill(); proc.wait()
+                # The per-request access log (LOG_REQUESTS, on by default and left on here for
+                # harness fidelity) is hundreds of megabytes per run; keep the startup and GC
+                # lines and the warnings, and only count the rest.
+                kept, lines = [], 0
+                with log_path.open() as logfile:
+                    for line in logfile:
+                        lines += 1
+                        if line.startswith('gc ') or 'gc policy' in line or 'level=WARN' in line or 'level=ERROR' in line:
+                            kept.append(line)
+                logtext = ''.join(kept)
+                (out / f"{arm['label'].replace('/', '-')}-{rep}.log").write_text(logtext)
+                run['server_log_bytes'], run['server_log_lines'] = log_path.stat().st_size, lines
+                cycles = parse_gctrace(logtext)
+                run['gc_cpu_ms'] = round(sum(cycle['cpu_ms'] for cycle in cycles), 3)
+                run['gc_cycles'] = max((cycle['n'] for cycle in cycles), default=0)
+                run['gc_share_percent'] = cycles[-1]['share'] if cycles else None
+                effective = GC_POLICY.search(logtext)
+                run['effective_gc_percent'] = int(effective.group(1)) if effective else None
+                run['effective_mem_limit'] = int(effective.group(2)) if effective else None
+                # Aligned attribution: a cycle belongs to the timed window its own start timestamp
+                # falls in, and to no window otherwise (warmups, setup, gaps).
+                mine = [window for window in windows if window['label'] == arm['label'] and window['rep'] == rep]
+                for window in mine:
+                    inside = attribute_cycles(cycles, window['start'] - started, window['end'] - started)
+                    window['gc_cpu_ms'] = round(sum(cycle['cpu_ms'] for cycle in inside), 3)
+                    window['gc_cycles'] = len(inside)
+                    window['cpu_us_per_request'] = round(1e6 * window['cpu_seconds'] / max(1, window['requests']), 3)
+                    window['gc_cpu_per_request_us'] = round(1000.0 * window['gc_cpu_ms'] / max(1, window['requests']), 3)
+                # The pre-review accounting, kept to show the size of the correction.
+                run['cpu_us_per_request_whole_run'] = round(1e6 * run['cpu_seconds'] / max(1, run['requests']), 3)
+                run['gc_cpu_per_request_whole_run'] = round(1000.0 * run['gc_cpu_ms'] / max(1, run['requests']), 3)
+                runs.append(run)
+                (out / 'raw.json').write_text(json.dumps(dict(windows=windows, runs=runs), indent=2) + '\n')
+
+    report = render_report(metadata, arms, windows, runs, metadata['settings'])
+    (out / 'report.md').write_text(report)
+    print(report)
+
+
+if __name__ == '__main__':
+    main()

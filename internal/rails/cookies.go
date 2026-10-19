@@ -29,6 +29,9 @@ type Secrets struct {
 	signedGIDs []byte
 	streams    []byte
 	encryption cipher.AEAD
+	// fingerprint identifies the signing-key generation (SHA-256 of the key)
+	// for caches that must never serve a value verified under another secret.
+	fingerprint [8]byte
 }
 
 func DeriveKey(secret, salt string, length int) []byte {
@@ -51,8 +54,18 @@ func NewSecrets(secret string) (*Secrets, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Secrets{secret: secret, signedIDs: DeriveKey(secret, "active_record/signed_id", 64), signedGIDs: DeriveKey(secret, "signed_global_ids", 64), signing: DeriveKey(secret, "signed cookie", 64), encryption: aead, streams: DeriveKey(secret, "turbo/signed_stream_verifier_key", 64)}, nil
+	s := &Secrets{secret: secret, signedIDs: DeriveKey(secret, "active_record/signed_id", 64), signedGIDs: DeriveKey(secret, "signed_global_ids", 64), signing: DeriveKey(secret, "signed cookie", 64), encryption: aead, streams: DeriveKey(secret, "turbo/signed_stream_verifier_key", 64)}
+	sum := sha256.Sum256(s.signing)
+	s.fingerprint = [8]byte(sum[:8])
+	return s, nil
 }
+
+// SigningFingerprint returns a stable identifier of the signing-key
+// generation. It exists for caches keyed on secret changes: a value verified
+// under one Secrets must not be served from a cache that now sees a different
+// secret, and comparing fingerprints makes that rejection independent of which
+// Secrets instance populated the cache.
+func (s *Secrets) SigningFingerprint() [8]byte { return s.fingerprint }
 
 func encode(v any) ([]byte, error) {
 	data, err := json.Marshal(v)
@@ -111,7 +124,11 @@ func decode64(s string) ([]byte, error) {
 	return base64.RawStdEncoding.DecodeString(strings.TrimRight(strings.NewReplacer("-", "+", "_", "/").Replace(s), "="))
 }
 
-func unpack(data []byte, name string, now time.Time, dest any) error {
+// unpack decodes data into dest and returns the envelope's signed expiry (zero
+// when the cookie carries none). Every check is unchanged from the previous
+// behaviour; the expiry is returned so the auth fast path can cache a verified
+// value and re-check it against the current time on later requests.
+func unpack(data []byte, name string, now time.Time, dest any) (time.Time, error) {
 	var obj map[string]json.RawMessage
 	if strings.HasPrefix(string(data), `{"_rails":{"message":`) && json.Unmarshal(data, &obj) == nil && obj["_rails"] != nil {
 		var meta struct {
@@ -120,28 +137,36 @@ func unpack(data []byte, name string, now time.Time, dest any) error {
 			Pur     *string `json:"pur"`
 		}
 		if json.Unmarshal(obj["_rails"], &meta) != nil || meta.Message == nil {
-			return ErrInvalid
+			return time.Time{}, ErrInvalid
 		}
 		if meta.Pur != nil && *meta.Pur != "" && *meta.Pur != "cookie."+name {
-			return ErrInvalid
+			return time.Time{}, ErrInvalid
 		}
 		if meta.Exp != nil {
 			expiry, err := time.Parse(time.RFC3339Nano, *meta.Exp)
 			if err != nil || !now.Before(expiry) {
-				return ErrInvalid
+				return time.Time{}, ErrInvalid
 			}
+			data, err = decode64(*meta.Message)
+			if err != nil {
+				return time.Time{}, ErrInvalid
+			}
+			if err := json.Unmarshal(data, dest); err != nil {
+				return time.Time{}, ErrInvalid
+			}
+			return expiry, nil
 		}
 		var err error
 		data, err = decode64(*meta.Message)
 		if err != nil {
-			return ErrInvalid
+			return time.Time{}, ErrInvalid
 		}
 	}
 	// Pre-metadata JSON cookies are accepted; Marshal is deliberately never decoded.
 	if err := json.Unmarshal(data, dest); err != nil {
-		return ErrInvalid
+		return time.Time{}, ErrInvalid
 	}
-	return nil
+	return time.Time{}, nil
 }
 
 func (s *Secrets) SignCookie(name string, value any, expires time.Time) (string, error) {
@@ -156,19 +181,28 @@ func (s *Secrets) SignCookie(name string, value any, expires time.Time) (string,
 }
 
 func (s *Secrets) VerifyCookie(name, raw string, now time.Time, dest any) error {
+	_, err := s.VerifyCookieExpires(name, raw, now, dest)
+	return err
+}
+
+// VerifyCookieExpires verifies like VerifyCookie and additionally returns the
+// envelope's signed expiry (zero when the cookie carries none), so callers can
+// cache a verified value and re-check the expiry against a later time without
+// repeating the HMAC and decode.
+func (s *Secrets) VerifyCookieExpires(name, raw string, now time.Time, dest any) (time.Time, error) {
 	i := len(raw) - 42
 	if i <= 0 || raw[i:i+2] != "--" {
-		return ErrInvalid
+		return time.Time{}, ErrInvalid
 	}
 	payload, signature := raw[:i], raw[i+2:]
 	mac := hmac.New(sha1.New, s.signing)
 	mac.Write([]byte(payload))
 	if !hmac.Equal([]byte(signature), []byte(hex.EncodeToString(mac.Sum(nil)))) {
-		return ErrInvalid
+		return time.Time{}, ErrInvalid
 	}
 	data, err := decode64(payload)
 	if err != nil {
-		return ErrInvalid
+		return time.Time{}, ErrInvalid
 	}
 	return unpack(data, name, now, dest)
 }
@@ -203,7 +237,8 @@ func (s *Secrets) DecryptCookie(name, raw string, now time.Time, dest any) error
 	if err != nil {
 		return ErrInvalid
 	}
-	return unpack(data, name, now, dest)
+	_, err = unpack(data, name, now, dest)
+	return err
 }
 
 func EscapeCookie(s string) string {

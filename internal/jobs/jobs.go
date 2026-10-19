@@ -17,6 +17,7 @@ type (
 		changed chan struct{}
 		done    chan struct{}
 		queues  map[string]chan Work
+		durable map[string]*durableWork
 		ctx     context.Context
 		cancel  context.CancelFunc
 		workers sync.WaitGroup
@@ -29,6 +30,7 @@ func New(concurrency int, kinds ...string) *Runner {
 		changed: make(chan struct{}, 1),
 		done:    make(chan struct{}),
 		queues:  map[string]chan Work{},
+		durable: map[string]*durableWork{},
 		ctx:     ctx,
 		cancel:  cancel,
 	}

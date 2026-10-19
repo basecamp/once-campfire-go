@@ -1,6 +1,10 @@
 package richtext
 
-import "testing"
+import (
+	"testing"
+
+	xhtml "github.com/basecamp/once-campfire-go/internal/html"
+)
 
 func TestAutoLinkCandidatesAndRewrittenEmails(t *testing.T) {
 	for _, tc := range []struct{ text, want string }{
@@ -13,7 +17,8 @@ func TestAutoLinkCandidatesAndRewrittenEmails(t *testing.T) {
 		{`http://example.org/&#64;a.example`, `<a target="_blank" href="http://example.org/@a.example">http://example.org/@a.example</a>`},
 		{`<a href="https://example.org">a@example.org</a> b@example.org`, `<a href="https://example.org">a@example.org</a> <a target="_blank" href="mailto:b@example.org">b@example.org</a>`},
 	} {
-		got, err := autoLink(tc.text)
+		a := xhtml.NewArena()
+		got, err := autoLink(a, tc.text)
 		if err != nil || got != tc.want {
 			t.Errorf("%q: got %q (%v), want %q", tc.text, got, err, tc.want)
 		}

@@ -2,7 +2,69 @@
 
 The full application is implemented. Tests and browser workflows pass; the screenshot and accessibility layers match in the exercised inventory. **Strict all-layer parity is not a pass:** server/live DOM and network differences remain visible.
 
-## Automated checks
+## Final cache-coherency review (2026-10-14, opt-coherency-astra)
+
+The earlier dated sections below are historical receipts, not current cache
+limitations. HTTP cache keys now share the request's pre-read observed generation
+from pinned `PRAGMA data_version`, including reference windows and the room,
+account, invitation and original-room read caches. Failed observations bypass
+those caches; fresh membership checks remain. Admission retains the pre-read
+key, so an interleaved commit cannot publish old inputs under the new generation.
+This does not provide a transaction snapshot across an entire rendered page.
+
+Pagination no longer answers conditionals from message IDs/timestamps before
+rendering: the complete representation (recorded piece digests where available)
+defines the ETag. Author changes therefore invalidate it without a message touch.
+
+Regression receipts in `/tmp/opencode/astra-review-before.log` and
+`/tmp/opencode/astra-review-after.log`:
+
+| Finding | Unfixed `48a2fbc` | Fixed |
+|---|---|---|
+| Author rename validator | stale 304 in all 8 cache/pieces/framing combinations | changed 200, then fresh 304 |
+| Foreign reference insert/delete | cached 0 vs oracle 1; cached 1 vs oracle 0 | equal windows |
+| Commit between reference scan and admission | old empty window served in new generation | new row returned |
+| Four read caches | stale room/account/invitation/original-room result | equals uncached reader |
+| HTTP cache-off oracle | foreign room/account/insert/delete/invitation bodies differ | byte-identical bodies |
+
+The oracle server uses `CAMPFIRE_READ_CACHE=off`, reference cache budget 0 and
+response cache budget 0. The admission interleaving is deterministic: retain the
+scan's key, commit via a separate connection, then publish the retained scan.
+
+Admission `-benchmem`, 100 iterations, 32 KiB / 384 KiB bodies:
+
+| Shape | Allocations before → after (32 / 384 KiB) |
+|---|---|
+| Accepted parts | 21 → 20 / 23 → 22 |
+| Oversized parts | 1 → 0 / 1 → 0 |
+| Generation-rejected parts | 21 → 20 / 23 → 22 |
+| Accepted encoded buffer | 24 → 23 / 24 → 23 |
+
+Accepted/rejected parts no longer copy the joined body twice; oversized parts
+allocate 0 B/op. Encoded admission embeds its one-string backing array; total
+bytes/op rise by about 16 bytes from the containing object's allocation class,
+while object count falls by one. Escape analysis on the unfixed tree reports
+`response_cache.go:699:34: []string{...} escapes to heap`; that standalone
+allocation is absent after the fix. Identity/gzip replay handlers for 200,
+HEAD and 304 remain **0 B/op, 0 allocs/op**. Receipts:
+`astra-admission-before.log`, `astra-admission-after.log`,
+`astra-encoded-before.log`, `astra-encoded-after.log` in `/tmp/opencode/`.
+The host was busy; these are allocation results, not throughput claims.
+
+Keep-alive replay tests require a replay-count increment for each eligible
+shape; the session-changing room map path is excluded. Writer diagnostics name
+after-phase counts as attempted chunks (failed chunks included), and label
+checkpoint invocation errors including cleanup, logging SQLite completion
+separately. Transaction/checkpoint behavior is unchanged.
+
+Verification: full root race suite with `sqlite_fts5`, nested
+`third_party/websocket` race suite, `go vet ./...`, and empty `gofmt -l .`.
+Raw receipts are `/tmp/opencode/astra-race.log`, `astra-websocket-race.log`,
+`astra-vet.log`, and `astra-gofmt.log`. Browser/container, DOM/wire-wide parity,
+and end-to-end throughput were not rerun for these fixes; historical screen
+and accessibility parity is not full DOM/wire parity.
+
+## Historical automated checks
 
 | Check | Result |
 |---|---|
@@ -82,3 +144,1002 @@ and the existing deleted-room typing difference remain. An initial navigation Ab
 concurrent browser runs is retained in the record; a standalone rerun passed without masking it.
 The focused three-binary benchmark verified 345,913 writes and nine identical-byte thumbnails
 with zero HTTP errors. It did not repeat the full Cable workload or production-container checks.
+
+## Engine fork — M0 environment (2026-10-05)
+
+- Fork: `engine` branch of basecamp/once-campfire-go at `8d2f7f2`, plus design
+  (`plans/2026-10-05-engine-design.md`) and plan (`plans/2026-10-05-engine.md`).
+- Host: AMD Ryzen AI MAX+ 395, 32 threads, Omarchy; Go 1.27.1 via mise. The
+  official Elixir harness rebuilds its loadgen with `mise exec rust@1.98.1`;
+  that toolchain is installed for this machine. The Rust checkout itself built
+  cleanly with the on-PATH cargo 1.97.1.
+- Go build: `bin/build` produced `campfire` (39,689,520 B); `/up` answered 200
+  on both listeners; `go test -tags sqlite_fts5 ./...` PASS on the unmodified
+  tree. Published-baseline binary preserved at
+  `tmp/baseline/campfire-published` sha256
+  `6b69111097e197ce737df7efe1026efe74aa2400c1561b268d7b3d4d68b163ab`.
+- Rust checkout: once-campfire-rust at `ccece30` with reference submodule
+  `90b3300`; release binary sha256
+  `c027ef78cf9f55ff64fe94191853930d5c427a5facd3d2395267296d19dcc2ad`; shared
+  loadgen sha256
+  `e88f7d0c0b0bc5a53bc5d4d43f0ea1a23def2c0be5a685420f74d0d697af5379`; default
+  seed DB sha256
+  `64ecbb80af6ad55fb1f73a9b0cc261f0f33744bf1e447970405c15c145a5e88c`; Rails
+  reference image `campfire-reference:app` (`ed09003899ed`).
+- Elixir harness checkout: once-campfire-elixir at `f15fc9e`; its loadgen
+  built. Gate note: `bench/run` runs `bench/validate.py ledger`, which demands a
+  complete `bin/verify-parity` run of the Elixir application whose committed
+  verification digest is stale on a clean clone (upstream history was
+  densified). Baseline reproduction therefore uses the Rust repository's
+  container harness (Rails vs Rust, same seed, same CPU pinning) and the Go
+  repository's native A/B harness (Go vs Rust binaries, same loadgen). The
+  Elixir harness is reserved for the final cross-language comparison; its gate
+  will be satisfied by a full `verify-parity` run or bypassed by a local,
+  explicitly documented change that touches only the Elixir-provenance
+  assertion, never the load generator, preflight or report code.
+
+## Engine fork — M0 baseline reproduction (2026-10-05/06)
+
+Official-style container comparison (Rust repository harness, production images,
+same seed `64ecbb80…`, servers on CPUs 8-11, loadgen on 12-15, host network,
+HTTP suite, 2 rotating reps, `HTTP_SECS=4`). Medians [min–max], c=16 req/s:
+
+| Route | Rails | Rust (this machine) | Published Rust |
+|---|---:|---:|---:|
+| room_show | 209 [201–217] | 37,015 [36,796–37,235] | 36,260 |
+| messages_page | 400 [388–412] | 42,051 [41,553–42,550] | 40,872 |
+| sidebar | 517 [514–521] | 34,911 [34,582–35,240] | 34,672 |
+| search | 385 [380–391] | 34,450 [34,196–34,704] | 33,299 |
+| post_message | 259 [252–266] | 6,743 [6,736–6,750] | 6,896 |
+
+Rails and Rust reproduce the published table within a few percent on this
+machine. Raw: `../once-campfire-rust/bench/results/baseline-container-20261005/`.
+
+Native Go-vs-Rust baseline (Go repository `bench/application`, identities,
+3 alternating reps, 5 s samples, c=16):
+
+| Route | Go | Rust | Rust/Go |
+|---|---:|---:|---:|
+| room_show | 16,895 (15,729–17,113) | 30,455 (18,419–30,825) | 1.80× |
+| messages_page | 23,828 (21,658–23,842) | 34,637 (13,789–35,086) | 1.45× |
+| sidebar | 25,804 (24,407–28,912) | 39,420 (24,640–40,270) | 1.53× |
+| search | 16,001 (15,905–16,033) | 31,631 (29,378–32,537) | 1.98× |
+| post_message | 4,753 (2,044–5,100) | 6,760 (6,595–7,761) | 1.42× |
+
+Zero HTTP errors; 227,621 acknowledged writes verified in both messages and FTS;
+six identical-byte thumbnails. Response-size context: Go room_show body is
+374,036 B uncompressed — the target of the engine's compressed-piece design.
+Raw: `bench/results/baseline-native-20261005/` (report, raw JSON, metadata with
+load averages). Note: light development activity (nice'd, on non-pinned CPUs)
+overlapped part of the native run; every sample records its load average.
+
+## Engine — first post-engine measurement (ENGINE-17, 2026-10-06)
+
+Native `bench/application`, 3 rotating reps, 5 s samples, c=16, identity,
+CPUs 8-11/12-15, load ~2.5 recorded in metadata. Medians [min–max] req/s:
+
+| Route | Published Go | Engine Go | Rust | Engine gain | Gap to Rust |
+|---|---:|---:|---:|---:|---:|
+| room_show | 17,120 [17,085–17,229] | 24,519 [24,474–24,556] | 31,162 [31,030–31,212] | +43% | 1.27× |
+| search | 16,178 [16,176–16,181] | 26,865 [26,770–26,895] | 33,010 [32,646–33,023] | +66% | 1.23× |
+| messages_page | 24,010 [24,006–24,076] | 25,215 [25,203–25,363] | 35,669 [35,409–35,738] | +5% | 1.41× |
+| sidebar | 27,266 [26,524–29,199] | 26,664 [25,271–27,645] | 40,752 [40,651–40,902] | −2% | 1.53× |
+| post_message | 5,376 [5,252–5,420] | 5,399 [5,272–5,442] | 7,952 [7,824–8,059] | 0% | 1.47× |
+
+Room p99 3.59→2.59 ms; search p99 3.28→1.89 ms. Raw:
+`bench/results/engine-20261006/` (report, raw JSON, metadata).
+
+Interpretation: ENGINE-16's recorded-response pieces moved the flagship rows
+(room +43%, search +66%), halving the Rust gap on both. Sidebar and
+post_message are outside the recorded-response path by design (fragment path
+and write path respectively) and are unmoved; messages_page gains little.
+Those three plus the remaining room/search gap are the next targets.
+
+## Official harness checkpoint (2026-10-06, engine image pre-ENGINE-18)
+
+Official Elixir harness, production Docker images, HTTP suite, 2 rotating reps,
+c=16, seed `64ecbb80`, CPUs 8-11/12-15. Rust reproduces the published table
+(36,378 vs 36,260 room), validating the run.
+
+| Route c=16 | Rails | Go (engine) | Rust | Gap to Rust |
+|---|---:|---:|---:|---:|
+| room_show | 224 | 34,546 | 36,378 | 1.05× |
+| search | 380 | 26,368 | 34,620 | 1.31× |
+| messages_page | 395 | 30,705 | 41,860 | 1.36× |
+| post_message | 265 | 4,828 | 6,746 | 1.40× |
+| sidebar | 528 | 19,987 | 35,085 | 1.76× |
+
+CPU µs/success: room 110 vs 105; search 139 vs 96; messages 123 vs 90;
+post 552 vs 379; sidebar 186 vs 109. Zero HTTP errors. Raw:
+`../once-campfire-elixir/bench/results/engine-official-ckpt/`.
+
+## ENGINE-18 measurement (2026-10-06, fastdb read wiring)
+
+Native A/B (engine17 binary = go-before vs engine18 = go vs Rust), 3 rotating
+reps, c=16, medians. Note: taken while five parallel implementation streams were
+active; Rust medians are tight and the rotating order absorbs shared load.
+
+| Route | engine17 | engine18 | gain | Rust | gap |
+|---|---:|---:|---:|---:|---:|
+| room_show | 24,262 | 27,985 | +15.3% | 30,842 | 1.10× |
+| messages_page | 25,065 | 28,633 | +14.2% | 35,527 | 1.24× |
+| sidebar | 26,072 | 34,161 | +31.0% | 40,557 | 1.19× |
+| search | 26,766 | 27,496 | +2.7% | 32,711 | 1.19× |
+| post_message | 5,271 | 5,271 | 0% | 7,909 | 1.50× |
+
+Sidebar and room confirm the profile's database/sql-glue share; search/post were
+not wired (ENGINE-30/31 own them). Raw: `bench/results/engine18-20261006/`.
+
+## ENGINE-30 — fastdb FTS reads and versioned search result cache (2026-10-06)
+
+`internal/fastdb/search.go` mirrors `database.DB.Search` (same MATCH word fold, quoted tokens, membership join, LIMIT 100 reversal); `internal/web/search_cache.go` adds a byte-bounded LRU of search pages keyed by (user, normalized query, corpusVersion, membershipVersion) with `CAMPFIRE_SEARCH_CACHE` (default on; off rolls back to the database/sql reads) and `CAMPFIRE_SEARCH_CACHE_MB` (default 16). The corpus version is a global counter bumped after every committed message create/edit/delete, boost change and room destroy; the membership version after every membership grant/revocation, involvement change and account create/deactivate. POST/DELETE recent-search routes purge the user's entries.
+
+Check: `timeout 900 nice -n 19 env GOMAXPROCS=4 go test -race -count=1 -timeout 800s -p 2 -tags sqlite_fts5 ./...` — pass. `go vet -tags sqlite_fts5 ./...` — clean. `gofmt -l .` — empty.
+
+Coverage: differential fastdb-vs-database/sql search on the seed and synthetic fixture (empty results, membership filtering, quoted tokens, unicode fold) and a byte-equality test of the word fold; on/off response byte parity incl. gzip, ETag and 304; corpus poisoning (edit/delete after fill) plus a DROP TABLE message_search_index proof that a hit skips the FTS scan; membership grant/revoke invalidation; POST/DELETE recent-search purge semantics; a 60-step deterministic write+query fuzz with per-step on/off byte parity.
+
+Package bench (`nice -n 19 env GOMAXPROCS=4 go test -count=1 -timeout 250s -p 2 -tags sqlite_fts5 -bench '^BenchmarkSearch$' -benchmem -run '^$' ./internal/fastdb/`): 9.06 µs/op, 79 B/op, 5 allocs/op (parity-seed fixture; per-request query normalization and MATCH text are the allocations). Official harness rerun (search row after ENGINE-30) is ENGINE-32's measurement step.
+## ENGINE-40 record (2026-10-06, cable fan-out fast path)
+
+Shipped behind `CAMPFIRE_CABLE_FAST` (default on; `off` = legacy one-write-per-frame
+path). Three pieces:
+
+- Read: server connections no longer retain net/http's hijacked 4KiB read buffer; a
+  freshly accepted socket holds nothing, the first frame lazily allocates a 512-byte
+  scratch (`readScratchSize`), and payload reads at or above that size bypass the
+  scratch with one exact-length syscall. `Conn.Read` now allocates exactly
+  `payloadLength` and reads it directly; fragmented/compressed messages hand off to
+  the unchanged streaming reader. Wire bytes identical (byte-for-byte
+  batch-vs-sequential test + full upstream suite).
+- Write: `WritePreparedBatch` coalesces up to 64 frames into one vectored write
+  (writev on TCP conns), reuse scratch, no per-batch allocation. Hub drains the
+  256-frame queue per wake into one batch; slow-client overflow policy unchanged.
+- Frame cache: per-(scope, identifier) exact-payload reuse with bounded FIFO
+  retention (8 payloads per key, 4096 entries / 8 MiB global), on top of prepared
+  message sharing; equality requires full payload bytes (no poisonable state).
+
+Micro-benchmarks (net.Pipe, GOMAXPROCS=4, both directions included):
+
+| Benchmark | Single | Batch(8) | Δ |
+|---|---:|---:|---:|
+| WritePrepared per message | 6,946 ns | 1,199 ns | ×5.8 |
+| server Read (exact vs Reader+ReadAll) | 1,308 ns | 1,065 ns | −19% |
+
+Alloc: exact read 128 B/op vs legacy 512 B/op (exact-size payload). Application-level
+fan-out A/B (bench/application --cable-clients 100/1000/10000 vs Rust) is still owed:
+the shared harness run is outside this task. Deliberate difference from legacy: the
+30 s write deadline now bounds the whole batch (one wake) rather than each frame.
+
+Differences vs legacy path verified byte-for-byte on a broadcast corpus (small,
+unicode, empty, compressed, repeated payloads) over a real socket: identical decoded
+payloads and identifiers with the fast path on and off.
+
+## Merged engine benchmark (2026-10-07, all ten branches)
+
+Native `bench/application`, 3 rotating reps, c=16, medians. `go-before` =
+pre-merge engine18 binary; `go` = merged `bc31205` (577beb7a). Validation:
+9 runs, 401,414 writes verified in messages+FTS, 0 HTTP errors, 0 incomplete
+deliveries.
+
+| Route | engine18 | Merged | Rust | Merged vs Rust |
+|---|---:|---:|---:|---:|
+| room_show | 27,957 | 41,216 | 30,959 | **1.33×** |
+| messages_page | 28,340 | 49,632 | 35,529 | **1.40×** |
+| sidebar | 31,607 | 126,859 | 40,478 | **3.13×** |
+| search | 27,695 | 72,759 | 32,832 | **2.22×** |
+| post_message | 5,263 | 6,570 | 7,873 | 0.83× |
+| Cable 100 d=1 | 2,428 | 3,088 | 3,347 | 0.92× |
+| Cable 100 d=0 | 2,265 | 3,589 | 4,273 | 0.84× |
+| Cable 1000 d=1 | ~305 | 329 | ~365 | ~0.90× |
+| Cable 1000 d=0 | ~307 | ~515 | ~548 | ~0.94× |
+
+Room p50 0.261 ms vs Rust 0.499; sidebar p50 0.097 vs 0.383. p99 tails for
+room/messages/post remain worse than Rust (2.55/2.31/13.0 ms vs 0.93/0.76/5.5).
+Raw: `bench/results/merged-20261007/`.
+
+## Official merged acceptance run (2026-10-07, once-campfire-go:merged)
+
+Elixir harness, production Docker images, HTTP + cable, 2 rotating reps, c=16
+medians [min–max], same seed for all apps (note: seed hash at run start was
+`fea8d18a…`, mutated from the canonical `64ecbb80…`; applied identically to
+every app and responses validated, so internally fair — restore before the
+final run). Zero HTTP errors for all apps; responses gzip-validated with body
+hashes in `*-validation.json`.
+
+| Route c=16 | Rails | Go merged | Rust | Go vs Rust |
+|---|---:|---:|---:|---:|
+| room_show | 201 | 63,890 | 36,613 | **1.75×** |
+| messages_page | 407 | 68,910 | 41,986 | **1.64×** |
+| sidebar | 536 | 55,831 | 34,940 | **1.60×** |
+| search | 369 | 74,264 | 34,267 | **2.17×** |
+| post_message | 252 | 5,468 | 6,756 | 0.81× |
+| up | 4,182 | 178,323 | 245,202 | 0.73× |
+| avatar | 94,920 | 216,792 | 394,856 | 0.55× |
+| static_css | 132,466 | 311,152 | 414,252 | 0.75× |
+
+CPU µs/success: room 58.0 vs 104; messages 53.6 vs 90.1; sidebar 69.0 vs 109;
+search 49.8 vs 97.1; post 427 vs 381. Go does roughly half Rust's CPU on every
+read row. Against the published Go row (room 3,860) this is 16.6×.
+
+Cable: connect+subscribe tied (0.06 s / 0.15 s at 100/1000). 100 clients:
+paced all-clients p50 2.16 vs 2.05 ms, sustained 3,354 vs 4,061 msgs/s (0.83×).
+1000 clients: paced p50 6.90 vs 6.04 ms, p99 18.1 vs 8.38, sustained 514 vs 545
+(0.94×), saturated post→all p50 13.7 vs 15.8 ms (**Go faster**). Memory:
+151→225 MiB Go vs 119→126 MiB Rust (5–10× below Rails).
+
+Raw: `../once-campfire-elixir/bench/results/merged-official-20261007/`.
+## Historical ENGINE-40b record (2026-10-07, versioned authorization cache and lock-free fan-out)
+
+The remaining cable gap vs Rust (def late ~14%, theirs ~22%) was the publish/delivery
+path: per-publish SQL authorization and per-recipient allocation. Shipped behind the same
+`CAMPFIRE_CABLE_FAST` gate (`off` = legacy per-publish `AuthorizedSessions` query, byte-
+identical fan-out). Three pieces:
+
+- Versioned authorization cache: `(room, token) -> authorized user` on the hub, keyed
+  additionally by three in-process generations — `SessionVersion` (sessions-table
+  inserts/deletes: login, logout, ban, deactivation), `MembershipVersion` (existing
+  ENGINE-30 counter; membership grant/revocation and room-visibility writes) and
+  `UserVersion` (users.status writes: ban/unban/deactivate). An entry stores the triple it
+  was queried under and a lookup serves it only while the triple still matches, so no
+  authorization result outlives its generations; a store on the result of a newer query is
+  impossible by construction. Cache bound 2^16 entries, FIFO ring eviction. Steady-state
+  publishes run zero SQL; only misses (after a bump or on a fresh token) run one batched
+  `AuthorizedSessions` query per room. Query errors cancel but store nothing, so a
+  transient read failure cannot poison the cache. Cache entries survive revocation only
+  via generation bumps — the poisoning contract ("a revoked/banned/removed client is never
+  served from cache") is pinned in tests. Bumps are all post-commit, in the audited write
+  helpers; `DeleteSession` was added (and web logout routed through it) so the logout
+  write bumps too. Out-of-band SQL is not visible until a bump or restart (documented
+  cable counter-cache limit at that revision). Current cable publication
+  authorization and HTTP sidebar/search,
+  response, piece, reference-window and read caches additionally carry the
+  pinned-reader `PRAGMA data_version` generation and observe external commits.
+- Forward fan-out: recipients are snapshotted under the hub read lock into a slice
+  pre-sized to the client count (one allocation, no growth), then authorized and delivered
+  with no hub lock held. All authorization lookups for one publish happen under a single
+  cache lock acquisition; per-recipient cost is one map lookup plus one channel send.
+- Subscribe/connect stays bounded at 1000 clients: the subscribe path performs O(1)
+  per-connection work on the hub lock (map ops) plus one or two DB reads; no O(n) shared
+  work was introduced or found.
+
+Micro-benchmark (BenchmarkPublishFanout, N clients each with a distinct session, drained
+queues, warm cache, `taskset -c 16-31 nice -n 19 env GOMAXPROCS=4`, min of 5):
+
+| N | path | ns/op | B/op | allocs/op |
+|---|---:|---:|---:|---:|
+| 100 | before | 110,001 | 49,452 | 446 |
+| 100 | after | 11,085 | 6,896 | 7 |
+| 1000 | before | 1,156,725 | 519,061 | 4,063 |
+| 1000 | after | 110,655 | 58,116 | 7 |
+
+9.9× / 10.5× faster; the before-allocs are dominated by the per-publish
+`AuthorizedSessions` batch (JSON encode of N tokens plus a per-row scan); the cache removes
+the whole query from the steady state, leaving the recipients snapshot (one pre-sized
+slice), the frames map and the frame-cache bookkeeping.
+
+Full suite (mandated command): pass with -race, -p 2, sqlite_fts5; nested
+`third_party/websocket` module suite: pass; `go vet -tags sqlite_fts5 ./...`: clean;
+`gofmt -l .`: empty. Coverage: poisoning tests for ban/logout/membership-removal (fill,
+revoke, assert next publication excludes, stayer unaffected, unban+relogin restores),
+generation-lifetime test, write-helper audit enumeration in
+`internal/database/versions_test.go` (+ quiet cases for refresh-session, user rename/role,
+message writes, presence, push subscriptions), concurrent publish (every recipient gets
+every payload) and concurrent publish+revocation storm under -race, existing frame byte
+parity fast-vs-legacy and 100/1000 simulated delivery tests unchanged.
+
+## Impeccable-correctness matrix (2026-10-07, pre-final)
+
+Nothing is claimed or PRed until every applicable box is green with evidence.
+
+| # | Check | Status |
+|---|---|---|
+| 1 | Single-member gzip fix (`engine-fix-gzip`, browser-safe splicing) | running |
+| 2 | Playwright proof: room/messages/search render full message lists in Chromium | pending 1 |
+| 3 | Full `-race -tags sqlite_fts5 ./...` on the merged tree | pending merge |
+| 4 | `bin/check` (gofmt/assets/vet/race) + `bin/check-assets` | pending merge |
+| 5 | `bin/check-upgrade --rust-root ../once-campfire-rust` (Go↔Rust interop) | pending merge |
+| 6 | `bin/check-browser.mjs` full workflow flow | pending 1 |
+| 7 | `bin/check-screens` pixels+aria equality (DOM/network deltas are pre-existing, documented) | pending 1 |
+| 8 | Native harness write verification (messages + FTS) and delivery completeness | pending merge |
+| 9 | Official acceptance: Rails + Rust (both revisions, built here) + Go, 3 reps, HTTP c=1/16/64, cable 100/500/1000; loadgen/server CPU recorded | pending 8 |
+| 10 | Merged-version profile | pending 9 |
+| 11 | `bin/check-container` + backup/restore | release item |
+| 12 | Fresh canonical seed shared by all apps; raw artifacts retained | with 9 |
+
+Known, documented limits carried into the record: strict DOM/network parity
+differences vs Rails (pre-existing upstream); single-process cache coherence;
+write-lane crash windows; frozen-time test artifacts. The engine's behaviour
+preservation is proven separately by on/off byte-parity, poisoning and
+invalidation-audit tests.
+
+## Final native verification run (2026-10-07, merged + browser-safe gzip fix)
+
+3 rotating reps, c=16, medians [min–max]; `go-before` = engine18 baseline.
+Validation: 9 runs, 394,573 acknowledged writes verified in messages+FTS,
+0 HTTP errors, 0 incomplete deliveries, 9 identical thumbnails.
+
+| Route c=16 | engine18 | Final | Rust | Final vs Rust |
+|---|---:|---:|---:|---:|
+| room_show | 27,936 | 47,916 | 30,813 | **1.56×** |
+| messages_page | 28,640 | 54,976 | 35,424 | **1.55×** |
+| sidebar | 32,044 | 129,331 | 40,227 | **3.21×** |
+| search | 27,704 | 92,451 | 32,702 | **2.83×** |
+| post_message | 5,266 | 6,282 | 7,842 | 0.80× |
+| Cable 1000 d=1 | ~305 | ~326 | ~364 | 0.90× |
+
+Room p99 1.99 ms vs Rust 0.94; sidebar p99 0.56 vs 0.71 (faster). Raw:
+`bench/results/final-native-20261007/`.
+
+## FINAL official run (2026-10-07, fresh seed, gzip-fix tree, 3 reps)
+
+Elixir harness, production images, fresh seed `9f6241dc`, 3 rotating reps,
+c=16 medians, zero HTTP errors for all apps. Go image `once-campfire-go:final`
+(1f9fb2be, merged browser-safe gzip fix). Pre-ENGINE-45b/52/53/54.
+
+| Route c=16 | Rails | Go final | Rust | Go vs Rust | Go CPU µs | Rust CPU µs |
+|---|---:|---:|---:|---:|---:|---:|
+| room_show | 218 | 77,456 | 36,805 | **2.10×** | 48.2 | 103 |
+| messages_page | 408 | 81,412 | 41,923 | **1.94×** | 45.0 | 90.1 |
+| sidebar | 535 | 55,904 | 35,295 | **1.58×** | 69.0 | 108 |
+| search | 387 | 101,513 | 34,442 | **2.95×** | 36.3 | 97.6 |
+| post_message | 274 | 5,290 | 6,747 | 0.78× | 422 | 380 |
+| up | 4,199 | 181,792 | 242,700 | 0.75× | — | — |
+| avatar | 98,072 | 214,121 | 401,286 | 0.53× | — | — |
+| static_css | 135,488 | 307,544 | 423,514 | 0.73× | — | — |
+
+Cable sustained (delivered to all): 100 clients Go 3,523 vs Rust 4,010 (0.88×);
+500 clients 1,016 vs 1,122 (0.91×); 1000 clients 483 vs 540 (0.89×).
+Saturated post→all p50: Go faster at 500 (6.63 vs 7.97 ms) and 1000
+(14.1 vs 16.0 ms). Connect+subscribe tied/slightly behind (0.15 vs 0.13 s at
+1000). Memory: Go 158–225 MiB vs Rust 122–124 (both far below Rails 872–1399).
+
+Raw: `../once-campfire-elixir/bench/results/FINAL-official-20261007/`.
+This is the result of record for the gzip-fix tree; ENGINE-45b/52/53/54 are in
+flight and will be followed by one more official run for the complete set.
+## ENGINE-52 record (2026-10-07, auxiliary-route front fast paths)
+
+The three auxiliary rows of the official acceptance run — up, avatar,
+static_css — are tiny fixed responses whose gap to Rust was per-response
+overhead in the public front path (`merged-official-20261007`: up 0.73×,
+avatar 0.55×, static_css 0.75×). This record closes the per-request work:
+
+- **Fixed `/up` table** (`CAMPFIRE_FRONT_FIXED`, default `on`; `off` = the
+  application path, byte for byte): the first unconditional GET captures the
+  health response once per content encoding (identity and gzip — the chain
+  runs a second pass with the other Accept-Encoding and the captured gzip
+  body is verified to decode to the identity bytes), and every later request
+  replays the captured bytes without touching sessions, the arena, the
+  response buffer or the application. The table is keyed by host, path and
+  the exact Accept value (the application negotiates the health format from
+  Accept and emits `Vary: Accept`), bounded at 16 pairs, and conditional,
+  Range, Upgrade, non-negotiable-encoding and uncaptured-Accept requests
+  still reach the application. Replays carry the exact captured headers —
+  validators, `Vary`, `Content-Encoding`, `X-Cache: miss` — so the wire
+  bytes are identical to the application path, chunked framing included
+  (the application path emits no Content-Length, so neither does a replay).
+- **Replay lane of the ordinary response cache**: the compression wrapper's
+  buffering/decision pass is skipped for recorded replays (header policy
+  still runs in `WriteHeader`), and the per-header copied header slices
+  share one allocation. Wire-identical by construction.
+- **Encoding negotiation memo**: the public-layer per-request
+  Accept-Encoding parse is memoized per header value (bounded; the decision
+  is a pure function of the value). The count includes the identity path:
+  `identity` must not be starved out by an unbounded table, so the cap is 128
+  with a wholesale clear.
+- **`forward` no longer clones the request**: net/http allocates a fresh
+  `Request` and header map per request (`readRequestLimit`), so the clone —
+  the largest per-request allocation in the public chain for the
+  cookie-bearing loadgen requests — was pure overhead. The header edits are
+  made in place; `X-Forwarded-*` behavior is unchanged.
+
+Parity: `internal/front/parity_test.go` and `internal/web/aux_parity_test.go`
+compare the fast paths against the application path byte for byte (status,
+headers minus Date, raw body) across gzip/identity/absent/zstd-only
+Accept-Encoding, no-Accept/json/browser Accept, cookie-bearing requests,
+HEAD, rejected encodings and If-None-Match conditionals, and pin that the
+fixed table serves without invoking the application after the first fill.
+
+Package micro-benchmarks (`taskset -c 16-31 nice -n 19 env GOMAXPROCS=4`,
+single keep-alive connection, loadgen header shape; server chain only,
+handler over a shim writer, all three routes):
+
+| Benchmark | Before | After | Alloc before | Alloc after |
+|---|---:|---:|---:|---:|
+| FrontDirectUp (fixed replay) | 4,942 ns, 4,963 B, 42 allocs | 1,485 ns, 1,784 B, 18 allocs | ×3.3 | −57% |
+| FrontDirectAvatarHit | 2,034 ns, 3,048 B, 35 allocs | 1,603 ns, 2,072 B, 20 allocs | ×1.27 | −43% |
+| FrontDirectStaticCSSHit | 1,971 ns, 2,840 B, 35 allocs | 1,411 ns, 1,848 B, 20 allocs | ×1.40 | −43% |
+
+Full-chain end-to-end (same harness, server+client share the process):
+FrontUp 22.6 → 17.1 µs, FrontAvatarHit 22.4 → 20.9 µs, FrontStaticCSSHit
+18.7 → 18.0 µs, FrontUpLogged 22.4 → 18.1 µs (the log line still costs
+~1.8 µs; `LOG_REQUESTS` stays on by default). The residual hit-path cost
+is net/http's per-request parse/write machinery and socket syscalls; the
+measured trivial-handler floor for this harness is ~14 µs, so the front
+chain itself now sits ~1.5 µs above the floor. Adding Content-Length to
+replays (which would remove chunked framing) was deliberately not done:
+the application path emits no Content-Length, and the mandate is byte
+identity. A precomposed public-listener writer (fastserve) is the next
+step beyond this record.
+
+## Consolidation pass on the full 7-branch tree (2026-10-07)
+
+- `bin/check` (gofmt/assets/vet/full `-race` suite): EXIT=0
+- Browser workflows (full setup → live two-tab → edit → search → admin → bots →
+  transfers → pings): EXIT=0, PASS
+- Screen inventory `--only '**'`: 192 cells, 0 errors; **178/178 applicable
+  pixels and accessibility equal** (14 non-visual cells: fragments/JSON/PWA/
+  avatars); remaining strict DOM/network deltas are the documented pre-existing
+  differences.
+- Upgrade interop (Rust↔Go logins, Go-written message searched by Rust): EXIT=0
+- Regression found and fixed during this pass: precomposed framing omitted the
+  head-terminating blank line on keep-alive responses (search page reached real
+  browsers as a malformed header block; proxies returned 502). Fixed in
+  `35661c9` with a regression test pinning the keep-alive path.
+
+## FINAL3 official acceptance (2026-10-07, production images, 3 reps)
+
+Elixir harness, Rails/Rust/Go production images, fresh seed `9f6241dc`,
+3 rotating reps, c=16 medians [min–max], zero HTTP errors. Go image
+`once-campfire-go:final3` (`bcd375a47bdc`, engine `b9bca18` with the
+upgrade-handoff cable fix). Rust and Rails built and measured on this machine.
+
+| Route c=16 | Rails | Go final3 | Rust | Go vs Rust | CPU/req Go vs Rust |
+|---|---:|---:|---:|---:|---:|
+| room_show | 220 | **79,343** | 36,859 | **2.15×** | 47 vs 103 µs |
+| search | 389 | **103,753** | 34,734 | **2.99×** | 35.5 vs 95.8 |
+| messages_page | 415 | **81,918** | 41,909 | **1.95×** | 44.6 vs 89.9 |
+| sidebar | 529 | **56,204** | 35,580 | **1.58×** | 68.8 vs 107 |
+| post_message | 273 | **8,473** | 6,667 | **1.27×** | 308 vs 381 |
+| up | 4,207 | **274,711** | 245,753 | **1.12×** | — |
+| avatar | 97,534 | 221,149 | 382,877 | 0.58× | — |
+| static_css | 137,157 | 329,394 | 442,263 | 0.74× | — |
+
+Cable (delivered to all): 100 clients **5,049 vs Rust 4,033 (1.25×)**;
+500 clients 1,094 vs 1,112 (parity); 1000 clients 520 vs 552 (0.94×).
+Saturated post→all p50: Go faster at every size (0.87/6.41/13.6 ms vs
+1.03/7.96/15.7). Connect+subscribe at parity. Memory at 1000 clients:
+Go 200–233 MiB vs Rust ~101–123 (Rails 1,124–1,406).
+
+Correctness on this tree: `bin/check` green, browser workflows PASS,
+178/178 applicable screen pixels+a11y, Go↔Rust interop PASS,
+native run 463,937 writes verified in messages+FTS, 0 delivery failures.
+Raw: `../once-campfire-elixir/bench/results/FINAL3-official-20261007/`.
+
+## FINAL4 official acceptance (2026-10-07, public loop + cable wake path)
+
+Elixir harness, production images, 3 rotating reps, c=16 medians, zero HTTP
+errors. Go image `once-campfire-go:final4` (engine `cfdc2e4`; ENGINE-61 cable
+wake path + ENGINE-62 public-loop/replay lane). Rust and Rails on this machine.
+
+| Route c=16 | Rails | Go final4 | Rust | Go vs Rust | CPU/req |
+|---|---:|---:|---:|---:|---:|
+| room_show | 195 | 86,262 | 36,370 | **2.37×** | 43.2 vs 105 µs |
+| messages_page | 414 | 93,404 | 41,553 | **2.25×** | 39.5 vs 90.9 |
+| sidebar | 517 | 55,014 | 35,028 | **1.57×** | 68.1 vs 109 µs |
+| search | 371 | 117,661 | 34,575 | **3.40×** | 31.5 vs 96.6 µs |
+| post_message | 253 | 8,391 | 6,766 | **1.24×** | 299 vs 381 µs |
+| up | 4,151 | 424,345 | 245,305 | **1.73×** | 7.2 vs 15 µs |
+| static_css | 134,939 | 422,232 | 383,734 | **1.10×** | 7.35 vs 7.82 µs |
+| avatar | 97,894 | 377,043 | 382,537 | 0.99× (parity) | 8.35 vs 7.96 µs |
+
+Cable sustained: 100 clients **5,343 vs 4,085 (1.31×)**; 500 clients
+1,121 vs 1,123 (parity 0.998×); 1,000 clients **548 vs 544 (1.007×)**.
+
+Every published row ahead (1.24×–3.40×); cable ahead at 100 and 1000, parity
+at 500; assets at parity or ahead except avatar at 0.99× (one noisy rep in
+the min range; medians within spread). Correctness on `cfdc2e4`: bin/check
+EXIT 0, browser PASS, 178/178 screen pixels+a11y, interop PASS, native run
+463k writes verified, zero delivery failures. Raw:
+`../once-campfire-elixir/bench/results/FINAL4-official-20261007/`.
+## ENGINE-62 record (2026-10-07, owned loop + precomposed assets on the public listener)
+
+The `up` row crossed in FINAL3 (274,711 vs 245,753); avatar stood at 0.58×
+and static_css at 0.74× because the remaining per-request cost was
+`net/http` on the **public** listener (~18 vs ~8-10 µs CPU per success in the
+official FINAL3 accounting), while the owned loop (fastserve, ~6.3 µs per
+exchange) only served the internal listener. ENGINE-62 closes the front
+transport and write path:
+
+- **Public listener on the owned loop when TLS is not configured**
+  (DISABLE_SSL / plain HTTP — the benchmark configuration). TLS/ACME
+  listeners keep net/http + autocert unchanged. `CAMPFIRE_SERVER_LOOP=off`
+  rolls both listeners back. The loop's documented strictness deltas now
+  apply to the public listener as well; `TestServerLoopFlagDiff` runs the
+  full public composition both ways and stays byte-equal.
+- **Recorded replay lane**: every cache hit (ordinary or fixed `/up`) emits
+  status line + a precomputed header block (rendered once per entry from the
+  post-policy capture with the X-Cache marker substituted, sorted and
+  sanitized exactly like `composeHead`) + body through
+  `fastserve.response.WriteRecorded`: no header map, no sort, no middleware,
+  one writev, with the receiver making the map path's auto Content-Length /
+  chunked / close and 304 decisions. The lane engages only for HTTP/1.1
+  GET/HEAD without request bodies against entries with reproducible heads
+  (no Date/Content-Length/Transfer-Encoding/Trailer/Connection captured,
+  Content-Type present when a body exists, and the capture's
+  Content-Encoding unchanged by the public policy); everything else takes
+  the byte-identical map path. Wire parity pinned by
+  `internal/front/recorded_test.go` against the same-loop map path and the
+  net/http public path across gzip/identity/zstd-only/gzip+zstd/absent, HEAD,
+  304, Range and keep-alive streams.
+- `recordResponse` no longer implements Unwrap: on the public listener the
+  web layer's precomposed-receiver walk stops at the cache, so X-Cache and
+  the capture always participate (the internal listener is unaffected).
+- Request path: a `canonicalHeaderKey` fast path for the common header names
+  (textproto fallback for the rest) and the dead idle-deadline clear dropped
+  (one fewer syscall per keep-alive request).
+- **Async access-log pipeline** (cmd/campfire/accesslog.go): the per-request
+  access log (LOG_REQUESTS, default on) is the hottest write in the public
+  chain — every request used to queue on the shared slog formatting lock and
+  do one small write to the log pipe, so a slow sink stalled whole
+  measurement windows. Records are now appended to a bounded queue (no
+  formatting, no allocation, strings alias the request) and a dedicated
+  goroutine renders them with slog's exact spelling (a hand-rolled fast path
+  pinned byte-for-byte by `TestAccessLogFastPathPins`; the slog fallback
+  covers values needing quoting) and drains to stderr in 2 ms / 64 KiB
+  batches. Line content, ordering, the default and the destination are
+  unchanged; overflow drops records with a warning instead of blocking.
+
+Package micro-benchmarks (`taskset -c 16-31 nice -n 19 env GOMAXPROCS=4`,
+single keep-alive connection, loadgen header shape; server+client in
+process; before = FINAL3 tree, net/http public chain):
+
+| Benchmark | Before (net/http) | After (loop+recorded) |
+|---|---:|---:|
+| FrontUp | 17.3 µs | 15.2 µs (LoopUp; 97 allocs) |
+| FrontAvatarHit | 20.8 µs | 18.8 µs (LoopAvatarHit; 111 allocs) |
+| FrontStaticCSSHit | 18.2 µs | 15.8 µs (LoopStaticCSSHit; 101 allocs) |
+| LoopAvatarHit map path (lane hidden) | — | 22.3 µs |
+| LoopStaticCSSHit map path (lane hidden) | — | 17.1 µs |
+
+The map-path rows show the loop and lane contributions separately: the loop
+is worth ~1.7-2 µs end to end and the recorded lane another ~3 µs on the
+chunked avatar.
+
+Same-conditions A/B against the pinned Rust loadgen (native binaries, seed
+9f6241dc, server and loadgen each pinned to 4 CPUs, c=16, gzip, keep-alive,
+rotating reps; `tmp/local_ab.py`), clean windows (medians):
+
+| Route c=16 | go-before | go-after | Rust | go-after vs Rust |
+|---|---:|---:|---:|---:|
+| avatar rps | ~234k | ~400k | ~484k | 0.83× |
+| avatar CPU µs/success | 14.7 | 6.8 | 7.3 | Go lower |
+| static_css rps | ~361k | ~480k | ~500k | 0.96× |
+| static_css CPU µs/success | 9.4 | 5.9 | 6.9 | Go lower |
+| up rps | ~296k | ~470k | ~268k | **1.76×** |
+| up CPU µs/success | 11.6 | 6.5 | 13.5 | Go lower |
+
+Go's per-request CPU is at or below Rust's on every row and its p50 is at or
+below Rust's; the remaining rps gap on the two asset rows is a wall-latency
+tail (Go p99 ~0.14 ms vs Rust ~0.06 ms at c=16), not CPU. Disabling the
+access log (LOG_REQUESTS=false, same conditions) lifts Go to ~428k avatar /
+~480k css — i.e. the access-log formatting+write still costs ~7% of the
+avatar row; the async pipeline (above) keeps the line while capping that
+cost.
+
+Official harness run (Elixir bench/run, production images, cpus 8-11/12-15,
+seed 9f6241dc, HTTP_SECS=4, c=16, SUITES=http, 4 rotating reps; image
+`once-campfire-go:engine62` @ cf2bb5b+dfe8310 — the run predates the async
+log):
+
+| Route c=16 medians | Go | Rust | vs Rust |
+|---|---:|---:|---:|
+| room_show | 82,903 | 36,350 | **2.28×** |
+| messages_page | 90,234 | 41,583 | **2.17×** |
+| sidebar | 54,332 | 35,585 | **1.53×** |
+| search | 107,301 | 34,302 | **3.13×** |
+| post_message | 8,213 | 6,634 | **1.24×** |
+| avatar | 362,768 | 387,913 | 0.94× |
+| static_css | 292,898 | 421,961 | 0.69× |
+| up | 404,469 | 247,698 | **1.63×** |
+
+Raw: `../once-campfire-elixir/bench/results/engine62-official-20261007/`.
+Cell spreads in this run were wide for both apps (e.g. Go avatar
+115,660-374,498; Rust avatar 322,407-431,308): the machine carried a
+parallel benchmark stream on the same CPU sets and load average 5-8
+throughout, crushing individual 4 s windows (the crushed cells hit both apps;
+Go's 2-3× p99 tail makes it more sensitive). Manual docker A/B in clean
+windows with the access log off: avatar 401-404k, css 459-481k, up 455-462k
+— all three above Rust's official median for the same harness conditions
+(387,913 / 421,961 / 247,698); with the log on, avatar measured ~352-362k in
+clean windows.
+
+Correctness on this tree: mandated full suite `go test -race -count=1
+-timeout 800s -p 2 -tags sqlite_fts5 ./...` green (22 packages), the nested
+websocket module (`third_party/websocket`) green, vet and gofmt clean. A
+pre-existing front-package port flake (`TestServerLoopFlagDiff` freePort
+race under `-p 2` with sibling packages binding the same ephemeral pool) is
+documented in plans/engine-41.md; it reproduces without this change's route.
+
+## PR review fixes (2026-10-07, PR #10 findings)
+
+Four findings from the pull-request review, each verified against the code and
+fixed on `engine`:
+
+1. **`registerRoutes` owns no routes (High).** `internal/engine/router.go`'s
+   compiled table is empty, so `CAMPFIRE_ENGINE=on/off/force` are all
+   pass-throughs. The runtime behavior is the intended strangler scaffold, but
+   the PR description and README overstated it as active route ownership; both
+   now describe the scaffold accurately (the measured wins come from the
+   handler fast paths). No runtime change.
+2. **CreateRoom sidebar bump (Medium).** `internal/database/rooms.go` bumped
+   the sidebar version only after a fallible post-commit hydration read; a
+   canceled context after commit left a committed room with stale sidebar
+   caches. Both registries now move immediately after the commit, before the
+   read.
+3. **Empty q parameter (Medium).** The single-item `ParseAccept` fast path in
+   `internal/httpcompat/formats.go` stripped `q=` only when a value survived
+   trailing-empty-field trimming, so `text/html;q=` failed lookup while the
+   multi-item path parsed it. The fast path now strips on the presence of a q
+   parameter and trims; single-item regression cases added.
+4. **Case-insensitive ETag (Medium).** The framed conditional path in
+   `internal/web/conditional.go` compared validators with `bytesEqualFold`
+   while the map path compared exactly. Both are byte-exact now; a regression
+   test pins case sensitivity.
+
+## FINAL5 official acceptance (2026-10-07, async access log; complete HTTP sweep)
+
+Elixir harness, production images, 3 rotating reps, c=16 medians, zero HTTP
+errors. Go image `once-campfire-go:final5` (tree 3305f44; the later
+review-fix commit `ce6428e` is correctness-only). Every HTTP row is ahead of
+Rust, including the auxiliary routes: room 2.63×, search 3.90×, messages
+2.45×, sidebar 1.70×, post 1.26×, /up 1.88×, static CSS 1.05×, avatar 1.01×;
+CPU per request is below Rust on all eight rows. Cable sustained: 100 clients
+1.29×, 500 and 1,000 parity (0.98× / 0.99×); saturated post→all p50 at 1,000
+clients 13.5 vs 16.1 ms. Container, ACME and native write/FTS checks pass on
+the same image.
+
+## Shared verification harness measurement (2026-10-08, engine-v2 tip e5c5f96)
+
+`basecamp/once-campfire-verification` (revision 7b2dbc7, route-contract-v1
+response validation), production image `once-campfire-go:engine-v2`, pinned
+Rails seed f5759058, server CPUs 8-11, client 12-15, c=16, 3 rounds of 8 s,
+zero contract failures. Medians:
+
+| Route | This fork | Rust (published) | Go upstream (published) | C (published) |
+|---|---:|---:|---:|---:|
+| room_show | 77,913 | 35,484 | 31,673 | 141,834 |
+| messages_page | 91,533 | 40,674 | 30,746 | 151,564 |
+| sidebar | 24,430 | 34,479 | 18,586 | 159,850 |
+| search | 113,169 | 34,432 | 29,765 | 155,456 |
+| post_message | 7,628 | 8,998 | 9,073 | 7,460 |
+
+Against the published shared-harness table: room 2.20× Rust, messages 2.25×,
+search 3.29×, post_message 0.85×, sidebar 0.71×. Raw:
+`/tmp/opencode/verification-go/summary.json`. The sidebar and post_message
+gaps under this referee (both were ahead on the Elixir harness) are the next
+targets; profile before changing anything.
+
+## Sidebar and post_message closing (2026-10-08, engine-v2)
+
+Same referee, same image after the two fixes below, 3 rounds of 8 s:
+
+| Route | Before | After | Rust (published) | Go upstream (published) | C (published) |
+|---|---:|---:|---:|---:|---:|
+| sidebar | 24,430 | 134,692 | 34,479 | 18,586 | 159,850 |
+| post_message | 7,628 | 8,239 | 8,998 | 9,073 | 7,460 |
+
+### Sidebar: whole-page precompressed cache
+
+Profile (page under this referee, gzip, gate-hit steady state): gzip level-6
+of the 29.7 KB page 38%, layout template walk/eval 15%, weak-ETag sha256 8%,
+syscalls 6% — the frame was cached but the layout was re-rendered and the
+whole page re-compressed per request. Fix (`internal/web/sidebar_page_cache.go`):
+the gate version (which every sidebar-visible write — user/account rows,
+custom styles, room/membership state — bumps) keys the complete assembled
+document, stored gzip-compressed with the front compressor's own parameters
+(level 6, OS=3, no MTIME, byte-identical to a fresh stream) plus the plain
+body and the weak validator. A warm request (gate hit, frame hit, no session
+flash) serves the bytes with no template execution and no compression; the
+user-row markers the layout renders are part of the key, so direct SQL on
+users still changes the page (the account side carries the same version-only
+limit the read cache documents). Turbo-Frame requests key separately (frame
+shell) and flash-carrying requests render fresh and are never stored. Served
+bytes are byte-identical across identity/gzip/conditional requests, pinned by
+tests and by the referee's cross-request equality check (0 failures).
+
+### Post message: reference-shaped push delivery
+
+Profile (this referee, btrfs seed): the request path ran the whole web-push
+chain synchronously in `messageCreated` — `PushRecipients` (~5%),
+`UnreadCount` per subscriber (~2%) and the job enqueues — while the reference
+runs `Room::PushMessageJob` (`reference/app/jobs/room/push_message_job.rb`)
+off the request. Fix: the recipient/badge/delivery chain moved into one
+"push" job per message; the request keeps the unread cable pings, exactly the
+reference's split. The remaining post gap is the shared filesystem ceiling:
+the referee's harness data lives on btrfs (zstd, COW). Measured on the same
+seed and machine, post_message on tmpfs does 12,157 rps (this app) and 9,529
+(Rust reference); on btrfs 6.9–8.6K (this app, run-to-run) and 6,650 (Rust).
+Every implementation lands in a ~20% band (C 7,460, Rust 8,998, upstream Go
+9,073) that is the btrfs writeback of schema-mandated WAL frames (~11.7
+4 KB frames per post — room/membership/sqlite_sequence/FTS leaf pages), not
+an app cost; no further change forced. Raw: `/tmp/opencode/vg-postfix/` and
+`/tmp/opencode/vg-full/`.
+
+## DHH review fixes (2026-10-14, PR #10; merged main c4ab53d)
+
+All four reproduced findings fixed on `engine-v2`:
+
+1. **Warm search after a foreign membership delete.** The search result cache
+   key now carries the immutable generation observed BEFORE the request's
+   reads; admission stores under that pre-read generation only after
+   re-checking it and the local corpus/membership counters. Regression:
+   `TestSearchCacheObservesForeignMembershipRevocation` (a separate SQLite
+   connection deletes the membership) and `TestSearchCacheGenerationAdmission`
+   (the mid-read admission contract).
+2. **Cable authorization memo after the same foreign revocation.** Entries
+   carry the generation captured before the authorizing query; a lookup serves
+   only while it matches and admission is skipped when the generation cannot
+   be observed. Regression: `TestAuthzMemoObservesForeignRevocation`.
+3. **Sidebar gate and whole-page cache** carry the same generation, so a
+   foreign commit invalidates the warm sidebar. The DROP-table tests now
+   assert that invalidation and re-admit at the new generation to isolate the
+   hit path (a DDL is a commit from another connection).
+4. **Accept-Encoding with more than 16 fields** (`*, br*15, gzip;q=0`): the
+   parser is one streaming pass with no field cap and the wildcard expanded
+   after all explicit tokens, so gzip;q=0 is honoured; regression cases added.
+
+`PRAGMA data_version` now runs on a direct `csqlite` handle (prepared
+statement, one short mutex) instead of database/sql: zero allocations per
+read, which the publish allocation pins require (the database/sql read cost
+12 allocs/publish). The statement-count pins return to 12/5 because the read
+no longer goes through database/sql.
+
+Verification: full suite and race suite green on the fixed tree. The shared
+harness re-measurement was taken while unrelated services (Elasticsearch and
+minio) held the host at load 23-54, so those numbers are discarded; a quiet
+host re-run is pending.
+
+## Matched measurement (2026-10-14, train 34782d0 vs Rust f9dca47, tmpfs)
+
+Shared verification harness at `ec02deb`, `bin/benchmark --apps rust,go
+--rounds 3 --duration 8 --concurrencies 16 --cpus 8-11 --client-cpus 12-15`,
+both runtime databases on tmpfs, zero errors, contract-validated.
+
+**Important correction:** the first run of this measurement used Rust
+`743aa84`, which is the pre-response-cache baseline (its numbers match the old
+published table within 2-3%). The latest published Rust revision is `f9dca47`
+(image `a368be61…`, whole-response cache included); the table below is the
+matched comparison against it, and our local Rust image reproduces the
+published Rust figures within ~2-4% (published 106,494 / 102,697 / 120,294 /
+121,378 / 8,037).
+
+| Route | Rust `f9dca47` | Go train `34782d0` | Go/Rust |
+|---|---:|---:|---:|
+| room_show | 109,586 | 149,403 | 1.36× |
+| messages_page | 106,497 | 192,759 | 1.81× |
+| sidebar | 124,369 | 166,116 | 1.34× |
+| search | 125,870 | 197,400 | 1.57× |
+| post_message | 8,235 | 15,817 | 1.92× |
+
+Three rounds per app are limited replication. Go ranges `(max-min)/median`
+are room 0.16%, messages 1.38%, sidebar 12.78%, search 12.85%, post 3.15%.
+Sidebar and search both dip in round two; the medians and ratios above remain
+unchanged. These are historical train measurements, not measurements of the
+final coherency fixes. Raw:
+`/tmp/opencode/matched-rust-go/summary.json`.
+
+The train `34782d0` = engine-v2 (DHH review fixes) + opt-loop + opt-cache +
+opt-front + opt-replay (with the keep-alive fix) + opt-cgo + opt-p2-cgo +
+opt-p1-write + opt-p3-checkpoint + opt-p4-notify + opt-runtime; full gate
+green (race suite, browser, 178/178 screen pixels+a11y, interop).
+
+## Native C vs Go (2026-10-14, tmpfs, same pinning)
+
+Native driver (no containers), CPUs 8-11 vs 12-15, conc 16, 8 s samples,
+3 alternating rounds, both databases on tmpfs, contract-validated, zero
+errors:
+
+| Route | C | Go train `34782d0` | Go/C |
+|---|---:|---:|---:|
+| room_show | 156,170 | 146,722 | 0.94× |
+| messages_page | 161,041 | 188,938 | 1.17× |
+| sidebar | 172,087 | 165,135 | 0.96× |
+| search | 171,762 | 198,252 | 1.15× |
+| post_message | 7,449 | 17,994 | 2.42× |
+
+Go is ahead of C on messages, search and post; C keeps a small lead on room
+and sidebar at native tmpfs conditions. Raw:
+`/tmp/opencode/native-bench-20261014-210031/summary.json`.
+
+## Final fix round and verification (2026-10-15, train `1b143bf`)
+
+Fix sets merged after the matched measurement: composition (`c9fd945`),
+wire/transport (`bf83649`), durability/cable (`dbc32d8`), early-error
+(`fcf046f`), push progress (`69e12ee`), conditional validators (`2971015`),
+push retry rounds (`0c268f3`). Each carries fail-before/pass-after
+regressions and a green full race suite on its branch.
+
+Six independent reviews ran on the frozen trees (`8c471f3`, `76d9395`,
+`6dd2ea2`): correctness/coherency, wire/transport, performance/memory,
+fail-before integrity, raw-wire parity extension, and a runtime conformance
+differential with byte-level probes. Every reported defect was fixed and
+re-verified; the conformance re-run on `1b143bf` reports SHIP-READY with no
+new findings (304 weak matching and validator preservation verified
+byte-for-byte; authorization, encodings, revocation, host/origin and
+transport deltas unchanged).
+
+Gates on `1b143bf`: `bin/check` (race + websocket) EXIT 0; Rust-Go interop
+PASS; production container (image `once-campfire-go:final2`) PASS; browser
+workflows PASS (one flake on the first run, clean re-run); the full screen
+inventory reproduced the reference state exactly — 178/178 applicable pixels
+and accessibility, 0 capture errors, server DOM 19/192, live DOM 8/178,
+network 0/178, cable 177/178.
+
+**Fail-before coverage.** Sixteen regressions were executed against their
+pre-fix parent revisions and failed there — including the composition
+capture-barrier matrix (16/16), host/origin recorded identity, write-failure
+cancellation, failed-body-close reuse, presence revocation, authz FIFO
+clearing, message crash durability (both boundaries), durable wake, rollback
+quarantine, write-failure pipeline termination, empty-flush headers and the
+2048-byte buffer boundary. Twenty-six further regressions cannot compile
+against pre-fix revisions because they reference APIs the fixes introduced
+(outbox, quarantine, disconnect observer, recognition, pooling clears); for
+those the fail-before basis is feature absence plus code inspection, not
+execution against the old tree. An independent auditor flagged this as a
+coverage limitation; it is not a product defect.
+
+## Final measurement (2026-10-15, train `1b143bf`, image `once-campfire-go:final2`)
+
+Shared harness `ec02deb`, tmpfs runtime, c=16, 3 alternating rounds, 8 s
+samples, zero errors, zero invalid responses, 660,976 acknowledged writes
+verified:
+
+| Route | Rust `f9dca47` | Go `1b143bf` | Go/Rust |
+|---|---:|---:|---:|
+| room_show | 109,468 | 148,605 | 1.36x |
+| messages_page | 104,716 | 194,387 | 1.86x |
+| sidebar | 124,164 | 162,273 | 1.31x |
+| search | 126,215 | 201,560 | 1.60x |
+| post_message | 8,177 | 15,392 | 1.88x |
+
+Local-only raw receipt: `/tmp/opencode/matched-final/summary.json`.
+
+Native C comparison (same driver, CPUs 8-11 vs 12-15, 3 alternating rounds,
+zero errors):
+
+| Route | C | Go `1b143bf` | Go/C |
+|---|---:|---:|---:|
+| room_show | 156,727 | 147,748 | 0.94x |
+| messages_page | 173,380 | 197,124 | 1.14x |
+| sidebar | 168,853 | 163,809 | 0.97x |
+| search | 170,000 | 206,442 | 1.21x |
+| post_message | 7,456 | 17,073 | 2.29x |
+
+Local-only raw receipt: `/tmp/opencode/native-bench-20261014-232931/summary.json`.
+
+SIMD attribution arm: the same matched run with `GOSIMD=scalar` (the `simd`
+module's runtime scalar tier — same binary, SIMD kernels disabled) measured
+0.989-0.994 of the SIMD run on every route (room 147,029; messages 192,352;
+sidebar 160,902; search 200,363; post 15,252). The SIMD request parser
+contributes roughly one percent end-to-end; the rest is the engine
+architecture. Local-only raw receipt: `/tmp/opencode/matched-scalar/summary.json`.
+
+See [benchmark evidence notes](../bench/RESULTS.md#local-evidence-and-historical-reports)
+for receipt provenance limitations and the local-only raw artifact policy.
+
+## Copilot follow-up (2026-10-16)
+
+- `queueListener.Close` now closes its notification channel through a
+  listener-owned `sync.Once`. The concurrent-close regression failed on the
+  previous implementation and passes after the fix, including closed-listener
+  accept, handoff and repeated-close checks.
+- Webhook requests refresh the acquired connection's read deadline through a
+  request-local `GotConn` trace. Reused HTTP and TLS connections failed the
+  idle-then-delayed-response regression before the fix and pass afterwards.
+  Caller trace hooks remain composed, and stalled response bodies still time out
+  on the socket deadline rather than the longer request context.
+- The URL-bearing autolink benchmark resets its arena before each iteration.
+  The pre-fix bounded diagnostic retained 952,000 slab bytes after 1,000 calls,
+  versus 952 bytes with per-call resets. This was a storage-lifetime diagnostic,
+  not a throughput measurement.
+- `TestPushDeliveryRunsAsJob` blocks endpoint resolution and requires the real
+  posting response to finish while delivery is blocked. Waits and cleanup are
+  bounded; merely observing an eventual lookup is no longer the assertion.
+- Routing behavior is unchanged. `CAMPFIRE_ENGINE` remains the documented empty
+  ownership scaffold; `CAMPFIRE_COMPILED_ROUTES` controls the production matcher
+  inside `web.Server`. Comments and README now distinguish the two explicitly.
+
+Go 1.27.1 checks: formatting, `go vet -tags sqlite_fts5 ./...`, the full root
+`-race` suite with `sqlite_fts5`, and the nested WebSocket `-race` suite pass.
+All 20 runtime-lever unit tests pass. Each test/build invocation had an explicit
+timeout. Local receipts are under `tmp/copilot-review-20261016/`, including
+`regression-before.log`, `race-root-final.log`, `race-websocket.log`,
+`vet-final.log` and `runtime-levers.log`. An initial gate attempt included the
+throwaway overlay probes as a mixed-package directory; their local module now
+isolates them from root package discovery.
+
+No benchmarks were rerun for these changes. Earlier throughput tables remain
+historical measurements and are not measurements of the follow-up fixes.
+
+### Subsequent Upgrade-handoff review
+
+Copilot review `5551241668` reported a new issue after the original five
+conversations were resolved. A preceding handler's disconnect observer could
+hold the first frame byte while the pipelined Upgrade headers were already
+buffered. Handoff transferred the head/read-ahead and buffered-reader bytes,
+then the raw socket, omitting the observer's saved byte.
+
+Handoff now joins the observer, appends its saved byte after the other consumed
+bytes, and clears the saved state before transferring ownership. The replay
+wrapper releases its prefix reader as soon as replay is complete and preserves
+the prefix across zero-length reads.
+
+Three regressions failed before these changes and pass afterwards:
+
+- A deterministic GET-to-Upgrade pipeline whose first masked-frame byte is
+  captured by the observer. Previously the receiver lost its leading `0x81`.
+- A consumed 64 KiB replay buffer must no longer be referenced by the wrapper.
+- A zero-length read must not consume the prefix or read from the socket.
+
+Existing observer replay, WebSocket round-trip, h2c and unwrap tests also pass.
+Formatting, vet, full root race tests with SQLite FTS5 and the nested WebSocket
+race suite pass under Go 1.27.1, all with explicit timeouts. Local evidence:
+`tmp/copilot-review-20261016/handoff-before.log`, `handoff-after.log`,
+`handoff-race-root.log`, `handoff-race-websocket.log` and `handoff-vet.log`.
+No benchmarks were rerun; no new throughput claim is made.
+
+## Concurrent WebSocket batch writes (2026-10-19)
+
+The batch extension violated `Conn`'s concurrent-method contract. Payload/Rsv1
+scratch was prepared before acquiring `writeFrameMu`; deferred cleanup also ran
+after unlocking. The hub's current single-writer usage avoids concurrent batch
+calls but is not a correctness guarantee for the methods themselves.
+
+`writePreparedBatchCore` now acquires the existing frame lock before any shared
+scratch access. Cleanup is deferred after unlock is deferred, so cleanup runs
+while the lock is still held. A contender that fails to acquire the lock leaves
+the active writer's state untouched. No second lock, scratch copy, or extra
+payload scan was introduced. First-use compression now occurs inside the frame
+critical section; its contention cost was not benchmarked.
+
+Fail-before/pass-after regressions:
+
+- With each of the three batch APIs held in a blocked transport write, a
+  cancelled competing batch previously cleared the active payload. Only the
+  `81 06` header reached the output instead of the complete `active` frame.
+- Concurrent context, deadline, retained-deadline and ordinary prepared writers
+  previously produced race reports and a slice-index panic. The new test audits
+  the exact message type/payload set with mixed batch sizes, both plain and
+  compressed. All cases pass after the fix under `-race`.
+
+Go 1.27.1 formatting, root and nested WebSocket vet, the full root race suite
+with SQLite FTS5, and the full nested WebSocket race suite pass. Commands had
+explicit timeouts. Local receipts: `tmp/copilot-review-20261019/batch-before.log`,
+`batch-after.log`, `race-root.log`, `race-websocket.log`, `vet-root.log`, and
+`vet-websocket.log`.
+
+No benchmarks were run and no throughput figures were changed. The earlier
+measurements do not measure this synchronization correction.
+
+## Pooled zstd native-memory reclamation (2026-10-19)
+
+Recorded compressors finish reusable frames with `End`, not `Close`. Their
+`sync.Pool` entries may be dropped by GC, and oversized entries are not returned
+to the pool. Previously, neither case reclaimed the retained `ZSTD_CCtx` after
+the Go writer became unreachable; explicit `Close` was the sole release path.
+
+Each encoder now has a separate, idempotent native-context owner and one
+`runtime.AddCleanup` registration. The cleanup argument and callback do not
+reference the writer or output, allowing a discarded compressor/writer/output
+cycle to be collected. Explicit `Close` stops the cleanup and frees through the
+same owner. `runtime.KeepAlive` protects native calls. Cleanup only frees memory:
+it never finishes an abandoned frame or calls the output writer.
+
+Before cleanup registration, both abandoned-writer and discarded-cyclic-pool
+regressions failed with their native contexts still allocated. They pass after
+registration. Additional tests cover no output writes during reclamation,
+reachable End/Reset reuse across GC with independently decoded frames, and
+explicit, repeated, and error-path Close. Native release is observed under the
+owner's mutex after the actual C free call, not inferred from RSS.
+
+Go 1.27.1 formatting, root vet, full root race tests with SQLite FTS5 and the
+nested WebSocket race suite pass, all with explicit timeouts. Local evidence:
+`tmp/copilot-review-20261019/zstd-before.log`, `zstd-after.log`,
+`zstd-race-root.log`, `zstd-race-websocket.log`, and `zstd-vet.log`.
+
+Ownership allocation and cleanup registration happen per encoder construction,
+including per-response streaming constructors; pooled Reset/Write reuse adds
+neither registration nor owner locking. GC cleanup is eventual, not a hard
+native-memory bound or a substitute for deterministic Close. No benchmarks were
+run or throughput figures changed. These lifetime checks do not constitute
+human maintainer validation of the PR's transport and persistence changes.

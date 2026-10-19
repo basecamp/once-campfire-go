@@ -55,8 +55,10 @@ var replacementTable = [...]rune{
 // returning the rune, potential second rune, and number of bytes consumed
 // (which indicates the length of the character reference). It is assumed that
 // the first byte of s is '&'. attribute should be true if parsing an attribute
-// value.
-func unescapeEntity(s []byte, attribute bool) (rune, rune, int) {
+// value. a, when non-nil, supplies the map key storage: the entity name span
+// is part of the arena's resident input copy, so the map can be probed with a
+// zero-copy view key; the non-arena path copies as before.
+func unescapeEntity(a *Arena, s []byte, attribute bool) (rune, rune, int) {
 	// https://html.spec.whatwg.org/multipage/syntax.html#consume-a-character-reference
 
 	// i starts at 1 because we already know that s[0] == '&'.
@@ -144,7 +146,12 @@ func unescapeEntity(s []byte, attribute bool) (rune, rune, int) {
 		break
 	}
 
-	entityName := string(s[1:i])
+	var entityName string
+	if a != nil {
+		entityName = a.View(s[1:i])
+	} else {
+		entityName = string(s[1:i])
+	}
 	if entityName == "" {
 		// No-op.
 	} else if attribute && entityName[len(entityName)-1] != ';' && len(s) > i && s[i] == '=' {
@@ -170,6 +177,12 @@ func unescapeEntity(s []byte, attribute bool) (rune, rune, int) {
 // allocates a new slice. attribute should be true if parsing an attribute
 // value.
 func unescape(b []byte, attribute bool) []byte {
+	return unescapeA(nil, b, attribute)
+}
+
+// unescapeA is unescape with arena storage: in-place work stays on the input
+// region (which arena mode owns); expansions and clones land in a's slab.
+func unescapeA(a *Arena, b []byte, attribute bool) []byte {
 	firstAmp := slices.Index(b, '&')
 	if firstAmp == -1 {
 		return b
@@ -185,7 +198,7 @@ func unescape(b []byte, attribute bool) []byte {
 			continue
 		}
 
-		r1, r2, entityNameLen := unescapeEntity(b[src:], attribute)
+		r1, r2, entityNameLen := unescapeEntity(a, b[src:], attribute)
 		if entityNameLen == 1 && r1 == '&' {
 			// Not an entity
 			out = append(out, '&')
@@ -204,10 +217,10 @@ func unescape(b []byte, attribute bool) []byte {
 		// fit the replacement.
 		if replLen > entityNameLen {
 			if reusingB {
-				out = slices.Clone(out)
+				out = unescapeClone(a, out)
 				reusingB = false
 			}
-			out = slices.Grow(out, replLen)
+			out = unescapeGrow(a, out, replLen)
 		}
 		out = utf8.AppendRune(out, r1)
 		if r2 != 0 {
@@ -218,6 +231,20 @@ func unescape(b []byte, attribute bool) []byte {
 	}
 
 	return out
+}
+
+func unescapeClone(a *Arena, b []byte) []byte {
+	if a != nil {
+		return a.Dup(b)
+	}
+	return slices.Clone(b)
+}
+
+func unescapeGrow(a *Arena, b []byte, need int) []byte {
+	if a != nil {
+		return a.Grow(b, need)
+	}
+	return slices.Grow(b, need)
 }
 
 // lower lower-cases the A-Z bytes in b in-place, so that "aBc" becomes "abc".
