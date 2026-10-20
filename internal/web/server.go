@@ -18,10 +18,11 @@ import (
 	"time"
 
 	"github.com/basecamp/once-campfire-go/assets"
+	"github.com/basecamp/once-campfire-go/internal/application"
 	"github.com/basecamp/once-campfire-go/internal/cable"
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/integrations"
-	"github.com/basecamp/once-campfire-go/internal/jobs"
+	"github.com/basecamp/once-campfire-go/internal/presentation"
 	"github.com/basecamp/once-campfire-go/internal/rails"
 	"github.com/basecamp/once-campfire-go/internal/responsebody"
 	"github.com/basecamp/once-campfire-go/internal/storage"
@@ -34,74 +35,90 @@ const (
 	MaxBody    = 16 << 20
 )
 
+// Dependencies are prepared by the process owner. HTTP does not open resources,
+// construct application services, or start background workers.
+type Dependencies struct {
+	Fragments           *presentation.Fragments
+	MessageEffects      *application.MessageEffects
+	MessagePublications *application.MessagePublications
+	Push                *integrations.PushSender
+	Unfurler            *integrations.Unfurler
+	Storage             *storage.Store
+	MessageCommands     *application.Messages
+	BoostCommands       *application.Boosts
+	MessageQueries      *application.MessageQueries
+	PageQueries         *application.PageQueries
+	BotQueries          *application.BotQueries
+	AccountQueries      *application.AccountQueries
+	NotificationQueries *application.NotificationQueries
+	Searches            *application.Searches
+	RoomCommands        *application.Rooms
+	RoomQueries         *application.RoomQueries
+	RoomPublications    *application.RoomPublications
+	AccountCommands     *application.Accounts
+	SessionCommands     *application.Sessions
+	Cable               *cable.Hub
+	DB                  *database.DB
+	Secrets             *rails.Secrets
+	Presentation        *presentation.Renderer
+}
+
+type Config struct {
+	Secure             bool
+	ResponseCacheBytes int
+}
 type Server struct {
-	fragments      *fragmentCache
-	responses      *responseCache
-	Webhooks       *integrations.WebhookClient
-	Jobs           *jobs.Runner
-	Push           *integrations.PushSender
-	Unfurler       *integrations.Unfurler
-	Storage        *storage.Store
-	Cable          *cable.Hub
-	DB             *database.DB
-	Secrets        *rails.Secrets
-	Secure         bool
-	mux            *router
-	templates      *template.Template
-	messageLayouts messageLayouts
-	attemptsMu     sync.Mutex
-	attempts       map[string]attempt
-	dummyHash      []byte
+	Dependencies
+	Secure     bool
+	responses  *responseCache
+	dispatch   []http.HandlerFunc
+	intakeMu   sync.Mutex
+	closing    bool
+	handlers   sync.WaitGroup
+	attemptsMu sync.Mutex
+	attempts   map[string]attempt
+	dummyHash  []byte
 }
 type attempt struct {
 	Count int
 	Start time.Time
 }
-type profileMembership struct {
-	Room        database.Room
-	Involvement string
-}
-type botView struct {
-	User  database.User
-	Rooms []database.Room
-}
 type page struct {
-	// Controller input: records or an already prepared immutable message list.
-	messageRecords []database.Message
-	messageBody    *responsebody.Part
+	// An already prepared immutable message list; rendering never loads records.
+	messageBody *responsebody.Part
 
 	MessagesHTML                 template.HTML
-	SidebarHTML                  template.HTML
 	Version                      string
 	UserDivider                  int
 	BackPath                     string
 	Invitation                   bool
-	Placeholders                 []database.User
+	Placeholders                 []database.RoomParticipant
 	NextPage                     int64
-	Administrators               []database.User
-	Bots                         []botView
+	Administrators               []database.AccountMember
+	AccountUsers                 []database.AccountMember
+	Bots                         []presentation.BotView
+	Bot                          database.BotIdentity
 	Platform                     useragent.Platform
 	Frame                        bool
-	SidebarRooms                 []sidebarRoom
+	SidebarRooms                 []presentation.RoomView
 	RoomsStream, UserRoomsStream string
 	AvatarAttached               bool
 	AvatarURL                    string
-	Memberships                  []profileMembership
-	DirectMemberships            []profileMembership
+	Memberships                  []presentation.RoomView
+	DirectMemberships            []presentation.RoomView
 	Screen                       string
 	ReturnRoom                   int64
 	Email                        string
-	HelpContact                  database.User
+	HelpContact                  database.UserContact
 	Reload                       bool
 	Chat                         bool
 	Notice                       string
 	VAPIDPublicKey               string
 	Subscriptions                []database.PushSubscription
 	RecentSearches               []string
-	Subject                      database.User
+	Subject                      database.UserProfile
 	JoinCode, Webhook, Transfer  string
-	Users                        []database.User
-	Selected                     map[int64]bool
+	RoomUsers                    []database.RoomChoice
 	CanAdminister                bool
 	Involvement                  string
 	Account                      database.Account
@@ -114,112 +131,37 @@ type page struct {
 	User                         database.User
 	Room                         database.Room
 	Rooms                        []database.Room
-	Messages                     []messageView
+	Messages                     []presentation.MessageView
 	Setup                        bool
 	Query                        string
 	SearchResultCount            int
 }
-type messageView struct {
-	AllEmoji                         bool
-	Fragment                         template.HTML
-	Attachment                       *storage.Blob
-	BlobURL, DownloadURL, PreviewURL string
-	Image                            bool
-	database.Message
-	Editable         string
-	HTML             template.HTML
-	Permalink        string
-	CreatorTitle     string
-	CreatorUpdatedAt time.Time
-	RoomName         string
-	Boosts           []database.Boost
-}
 
-func New(
-	db *database.DB,
-	secrets *rails.Secrets,
-	secure bool,
-	storagePaths ...string,
-) (*Server, error) {
-	// Same cost-12 dummy digest as reference/crates/db/src/models/user.rs.
-	// Unknown-user login still pays bcrypt; startup need not create a new hash.
-	hash := []byte("$2a$12$FiKmSp4UhLvSB4Sd/ZUjQunyKP6.NjDRHdr5LnKUVk.BUn4Mq12WS")
-	t, layouts, err := parseTemplates(secrets)
-	if err != nil {
-		return nil, err
-	}
-	cacheMB := 32
-	if raw, ok := os.LookupEnv("CAMPFIRE_FRAGMENT_CACHE_MB"); ok {
-		cacheMB, err = strconv.Atoi(raw)
-		if err != nil || cacheMB < 0 || cacheMB > 1<<20 {
-			return nil, fmt.Errorf("invalid CAMPFIRE_FRAGMENT_CACHE_MB %q", raw)
-		}
-	}
-	responseBytes, err := responseCacheBudget()
-	if err != nil {
-		return nil, fmt.Errorf("invalid CAMPFIRE_RESPONSE_CACHE_MB: %w", err)
-	}
+func New(deps Dependencies, config Config) *Server {
+	// Same cost-12 dummy digest as the reference. Unknown-user login still
+	// pays bcrypt; startup need not create a new hash.
 	s := &Server{
-		fragments:      newFragmentCache(cacheMB << 20),
-		responses:      newResponseCache(responseBytes),
-		Cable:          cable.New(db, secrets),
-		DB:             db,
-		Secrets:        secrets,
-		Secure:         secure,
-		mux:            &router{},
-		templates:      t,
-		messageLayouts: layouts,
-		attempts:       map[string]attempt{},
-		dummyHash:      hash,
+		Dependencies: deps,
+		Secure:       config.Secure,
+		responses:    newResponseCache(config.ResponseCacheBytes),
+		attempts:     map[string]attempt{},
+		dummyHash:    []byte("$2a$12$FiKmSp4UhLvSB4Sd/ZUjQunyKP6.NjDRHdr5LnKUVk.BUn4Mq12WS"),
 	}
-	storageRoot := "storage"
-	if len(storagePaths) > 0 {
-		storageRoot = storagePaths[0]
-	}
-	s.Storage = storage.New(db, secrets, storageRoot)
-	s.DB.ResetConnections = s.Cable.Reconnect
-	s.registerStorageRoutes()
-	s.Unfurler = integrations.NewUnfurler()
-	s.Webhooks = integrations.NewWebhookClient()
-	s.initJobs()
-	s.mux.HandleFunc("POST /unfurl_link", s.auth(s.unfurl))
-	s.registerPWARoutes()
-	s.mux.HandleFunc("GET /qr_code/{code}", s.browserCheck(s.qrCode))
-	s.mux.HandleFunc("GET /autocompletable/users", s.auth(s.autocomplete))
-	s.mux.HandleFunc("GET /autocompletable/users.json", s.auth(s.autocomplete))
-	s.mux.HandleFunc("GET /cable", s.auth(s.serveCable))
-	s.mux.HandleFunc("GET /up", s.health)
-	s.mux.HandleFunc("GET /up.json", s.health)
-	s.mux.HandleFunc("GET /session/new", s.browserCheck(s.loginForm))
-	s.mux.HandleFunc("POST /session", s.browserCheck(s.login))
-	s.mux.HandleFunc("DELETE /session", s.auth(s.logout))
-	s.mux.HandleFunc("GET /first_run", s.browserCheck(s.setupForm))
-	s.mux.HandleFunc("POST /first_run", s.browserCheck(s.setup))
-	s.mux.HandleFunc("GET /{$}", s.auth(s.home))
-	s.mux.HandleFunc("GET /rooms", s.auth(s.home))
-	s.mux.HandleFunc("GET /rooms/{id}", s.auth(s.room))
-	s.mux.HandleFunc("GET /rooms/{id}/messages", s.auth(s.messages))
-	s.mux.HandleFunc("POST /rooms/{id}/messages", s.auth(s.createMessage))
-	s.mux.HandleFunc("GET /users/{user}/sidebar", s.auth(s.sidebar))
-	s.mux.HandleFunc("GET /users/sidebar", s.auth(s.sidebar))
-	s.registerMessageRoutes()
-	s.registerRoomRoutes()
-	s.registerMediaRoutes()
-	s.registerAccountRoutes()
-	s.mux.HandleFunc("GET /searches", s.auth(s.search))
-	s.mux.HandleFunc("POST /searches", s.auth(s.search))
-	s.mux.HandleFunc("DELETE /searches/clear", s.auth(s.search))
-	return s, nil
+	s.dispatch = s.bindRoutes()
+	return s
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r = r.WithContext(
-		context.WithValue(
-			r.Context(),
-			requestInfoKey{},
-			&requestInfo{host: r.Host, origin: s.origin(r)},
-		),
-	)
+	s.intakeMu.Lock()
+	if s.closing {
+		s.intakeMu.Unlock()
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	s.handlers.Add(1)
+	s.intakeMu.Unlock()
+	defer s.handlers.Done()
+	r = s.normalizeRequest(r)
 	if assets.Serve(w, r) {
 		return
 	}
@@ -235,7 +177,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			sw.WriteHeader(200)
 		}
 	}()
-	if _, err := requestRemoteIP(r); err != nil {
+	if requestMetadata(r.Context()).ipError != nil {
 		http.Error(w, "IP spoofing attack", 500)
 		return
 	}
@@ -264,7 +206,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if route, _, _ := recognize(r.Method, r.URL.EscapedPath()); route != nil && route.bot {
+	if route, _, _ := recognizeRequest(r); route != nil && route.bot {
 		s.routeHTTP(w, r)
 		return
 	}
@@ -284,7 +226,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid request origin", 422)
 			return
 		}
-		if err := r.ParseForm(); err != nil {
+		if err := parseRequestForm(r); err != nil {
 			var limit *http.MaxBytesError
 			if errors.As(err, &limit) {
 				http.Error(w, "Request too large", 413)
@@ -306,7 +248,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if err := parseJSONParams(r); err != nil {
+		if err := parseRequestParams(r); err != nil {
 			var limit *http.MaxBytesError
 			if errors.As(err, &limit) {
 				http.Error(w, "Request too large", 413)
@@ -318,7 +260,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for key, values := range r.URL.Query() {
 			r.Form[key] = values
 		}
-		normalizeScalarParams(r)
+		if err := normalizeScalarParams(r); err != nil {
+			http.Error(w, "Invalid query", 400)
+			return
+		}
 		if r.Method == "POST" {
 			switch strings.ToUpper(r.PostForm.Get("_method")) {
 			case "PATCH":
@@ -336,7 +281,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	normalizeScalarParams(r)
+	if err := normalizeScalarParams(r); err != nil {
+		http.Error(w, "Invalid query", 400)
+		return
+	}
 	s.routeHTTP(w, r)
 }
 
@@ -348,12 +296,13 @@ func (s *Server) browserWriteAllowed(r *http.Request) bool {
 	}
 	values, provided := r.Header["Sec-Fetch-Site"]
 	if !provided {
-		return !s.Secure && !s.requestHTTPS(r)
+		return !requestMetadata(r.Context()).https
 	}
 	return len(values) > 0 && (values[0] == "same-origin" || values[0] == "same-site")
 }
 
-func (s *Server) sameOrigin(r *http.Request) bool {
+// Socket handshakes retain their origin policy independently of unsafe browser writes.
+func (s *Server) socketOriginAllowed(r *http.Request) bool {
 	site := r.Header.Get("Sec-Fetch-Site")
 	if site == "cross-site" || s.Secure && (site != "same-origin" && site != "same-site") {
 		return false
@@ -387,12 +336,18 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, HealthBody)
 }
 
-func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, status int, p page) {
+// respondPage prepares common application data and live protocol facts before rendering.
+func (s *Server) respondPage(w http.ResponseWriter, r *http.Request, name string, status int, p page) {
 	if name != "incompatible-browser" && respondFormat(w, r, "html") == "" {
 		return
 	}
-	a, err := s.DB.Account(r.Context())
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	layout, err := s.PageQueries.Layout(r.Context(), application.LayoutRequest{
+		UserID:     p.User.ID,
+		Help:       name == "login" || name == "join",
+		Navigation: name == "room-form" || name == "account" || name == "push-subscriptions" || name == "search",
+		LastRoom:   lastRoomCandidate(r),
+	})
+	if err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -401,24 +356,21 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	if p.Error == "" {
 		p.Error = alert
 	}
+	a := layout.Account
 	p.Account = a
 	p.Email = r.Form.Get("email_address")
 	if name == "login" || name == "join" {
 		p.Reload = true
-		users, e := s.DB.Users(r.Context(), 0, false)
-		if e == nil {
-			for _, u := range users {
-				if u.Role == 1 && (p.HelpContact.ID == 0 || u.ID < p.HelpContact.ID) {
-					p.HelpContact = u
-				}
-			}
-		}
+		p.HelpContact = layout.HelpContact
 	}
 	p.BackPath = "/"
 	if name == "room-form" || name == "account" || name == "push-subscriptions" {
-		if id, e := s.lastRoom(r, p.User.ID); e == nil {
-			p.BackPath = fmt.Sprintf("/rooms/%d", id)
+		if layout.ReturnRoom != nil {
+			p.BackPath = fmt.Sprintf("/rooms/%d", *layout.ReturnRoom)
 		}
+	}
+	if layout.ReturnRoom != nil {
+		p.ReturnRoom = *layout.ReturnRoom
 	}
 	p.Version = appVersion()
 	if r.Header.Get("Turbo-Frame") != "" && name != "edit-message" && name != "show-message" &&
@@ -449,33 +401,20 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	if a.CustomStyles != "" {
 		p.CustomStyles = template.HTML("<style>" + a.CustomStyles + "</style>")
 	}
-	raw := p.messageRecords
-	p.messageRecords = nil
+	s.renderPage(w, name, status, p)
+}
+
+// renderPage consumes prepared data only, without consulting a request or query service.
+func (s *Server) renderPage(w http.ResponseWriter, name string, status int, p page) {
 	recorded := p.messageBody
 	p.messageBody = nil
-	if len(raw) > 0 {
-		if name == "room" || name == "messages" || name == "search" {
-			var entry responsebody.Part
-			entry, err = s.messageList(r.Context(), raw)
-			recorded = &entry
-		} else {
-			p.Messages, err = s.messagePageViews(r.Context(), name, raw)
-		}
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-	}
-	if name == "search" {
-		p.ReturnRoom, _ = s.lastRoom(r, p.User.ID)
-	}
-	if (name == "room" || (name == "search" && s.fragments.limit > 0)) && recorded != nil {
+	if (name == "room" || name == "search") && recorded != nil {
 		var parts []responsebody.Part
 		var err error
 		if name == "room" {
-			parts, err = s.roomParts(p, *recorded)
+			parts, err = s.Fragments.RoomParts(layoutInput(p), p.LoadedAt, *recorded)
 		} else {
-			parts, err = s.searchParts(p, *recorded)
+			parts, err = s.Fragments.SearchParts(presentation.SearchInput{LayoutInput: layoutInput(p), Query: p.Query, SearchResultCount: p.SearchResultCount, RecentSearches: p.RecentSearches, ReturnRoom: p.ReturnRoom}, *recorded)
 		}
 		if err != nil {
 			s.fail(w, err)
@@ -489,15 +428,18 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 		p.MessagesHTML = template.HTML("\x00campfire-" + rand.Text() + "\x00")
 	}
 	if name == "sidebar" {
-		p.SidebarHTML, err = s.sidebarHTML(p)
+		parts, err := s.Fragments.SidebarParts(layoutInput(p), sidebarInput(p))
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		writeParts(w, status, parts)
+		return
 	}
 	b := borrowBuffer()
 	defer releaseBuffer(b)
-	if err := s.templates.ExecuteTemplate(b, name, p); err != nil {
+	if err := s.Presentation.ExecuteTemplate(b, name, p); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -509,7 +451,6 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, sta
 	w.WriteHeader(status)
 	w.Write(b.Bytes())
 }
-
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	status := 500
 	if errors.Is(err, sql.ErrNoRows) {
@@ -544,16 +485,11 @@ func (s *Server) auth(
 			s.requestAuthentication(w, r)
 			return
 		}
-		u, err := s.DB.SessionUser(r.Context(), token)
+		u, refreshed, err := s.DB.AuthenticateSession(r.Context(), token, r.UserAgent(), remoteIP(r))
 		if errors.Is(err, sql.ErrNoRows) {
 			s.requestAuthentication(w, r)
 			return
 		}
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		refreshed, err := s.DB.RefreshSession(r.Context(), token, r.UserAgent(), remoteIP(r))
 		if err != nil {
 			s.fail(w, err)
 			return
@@ -581,9 +517,6 @@ func (s *Server) hasAccount(ctx context.Context) (bool, error) {
 }
 
 func (s *Server) loginForm(w http.ResponseWriter, r *http.Request) {
-	if !s.requireUnauthenticated(w, r) {
-		return
-	}
 	exists, err := s.hasAccount(r.Context())
 	if err != nil {
 		s.fail(w, err)
@@ -593,7 +526,7 @@ func (s *Server) loginForm(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/first_run", 302)
 		return
 	}
-	s.render(w, r, "login", 200, page{Title: "Sign in"})
+	s.respondPage(w, r, "login", 200, page{Title: "Sign in"})
 }
 
 func (s *Server) setupForm(w http.ResponseWriter, r *http.Request) {
@@ -606,7 +539,7 @@ func (s *Server) setupForm(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", 302)
 		return
 	}
-	s.render(w, r, "first-run", 200, page{Title: "Set up Campfire", Setup: true})
+	s.respondPage(w, r, "first-run", 200, page{Title: "Set up Campfire", Setup: true})
 }
 
 func (s *Server) allowLogin(ip string) bool {
@@ -631,11 +564,8 @@ func (s *Server) allowLogin(ip string) bool {
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	if !s.requireUnauthenticated(w, r) {
-		return
-	}
 	if !s.allowLogin(remoteIP(r)) {
-		s.render(
+		s.respondPage(
 			w,
 			r,
 			"login",
@@ -655,7 +585,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	valid := bcrypt.CompareHashAndPassword(hash, []byte(r.Form.Get("password"))) == nil
 	if err != nil || !valid {
-		s.render(
+		s.respondPage(
 			w,
 			r,
 			"login",
@@ -670,7 +600,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	password := r.Form.Get("user[password]")
 	if password == "" || len(password) > 72 {
-		s.render(
+		s.respondPage(
 			w,
 			r,
 			"first-run",
@@ -696,19 +626,19 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	if upload != nil {
 		defer upload.Discard()
 	}
-	u, err := s.DB.Setup(
+	result, err := s.AccountCommands.Setup(
 		r.Context(),
 		r.Form.Get("user[name]"),
 		r.Form.Get("user[email_address]"),
 		string(digest),
-		pendingBlob(upload),
+		application.Attachment{File: upload},
 	)
 	if errors.Is(err, database.ErrForbidden) {
 		http.Redirect(w, r, "/", 302)
 		return
 	}
 	if errors.Is(err, database.ErrValidation) {
-		s.render(
+		s.respondPage(
 			w,
 			r,
 			"first-run",
@@ -725,12 +655,12 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.analyzeUpload(upload)
-	s.startSession(w, r, u)
+	logAccountProcessing(result.Processing)
+	s.startSession(w, r, result.Commit.User)
 }
 
 func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u database.User) {
-	token, err := s.DB.StartSession(r.Context(), u.ID, r.UserAgent(), remoteIP(r))
+	token, err := s.SessionCommands.Start(r.Context(), u.ID, r.UserAgent(), remoteIP(r))
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -758,16 +688,9 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, u database.User)
 		s.fail(w, err)
 		return
 	}
-	if _, err = s.DB.Write.ExecContext(r.Context(), "DELETE FROM sessions WHERE token=? AND user_id=?", token, u.ID); err != nil {
+	if err = s.SessionCommands.End(r.Context(), u.ID, token, r.Form.Get("push_subscription_endpoint")); err != nil {
 		s.fail(w, err)
 		return
-	}
-	s.Cable.Disconnect(u.ID)
-	if endpoint := r.Form.Get("push_subscription_endpoint"); endpoint != "" {
-		if _, err := s.DB.Write.ExecContext(r.Context(), "DELETE FROM push_subscriptions WHERE user_id=? AND endpoint=?", u.ID, endpoint); err != nil {
-			s.fail(w, err)
-			return
-		}
 	}
 	browserState(r).reset()
 	http.SetCookie(
@@ -783,21 +706,19 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, u database.User)
 	http.Redirect(w, r, "/", 302)
 }
 
-func (s *Server) lastRoom(r *http.Request, user int64) (int64, error) {
+// Cookie parsing is protocol-owned; candidate authorization and fallback are application-owned.
+func lastRoomCandidate(r *http.Request) *int64 {
 	if cookie, err := r.Cookie("last_room"); err == nil {
 		if id, err := strconv.ParseInt(cookie.Value, 10, 64); err == nil {
-			if _, err = s.DB.Room(r.Context(), user, id); err == nil {
-				return id, nil
-			}
+			return &id
 		}
 	}
-	return s.DB.OriginalRoom(r.Context(), user)
+	return nil
 }
-
 func (s *Server) home(w http.ResponseWriter, r *http.Request, u database.User) {
-	id, err := s.lastRoom(r, u.ID)
+	id, err := s.PageQueries.LastRoom(r.Context(), u.ID, lastRoomCandidate(r))
 	if errors.Is(err, sql.ErrNoRows) {
-		s.render(w, r, "welcome", 200, page{Title: "No rooms yet", User: u})
+		s.respondPage(w, r, "welcome", 200, page{Title: "No rooms yet", User: u})
 		return
 	}
 	if err != nil {
@@ -813,20 +734,14 @@ func roomID(r *http.Request) int64 {
 		value = r.Form.Get("room_id")
 	}
 	if value == "" {
-		value = r.PathValue("id")
+		route, _, _ := recognizeRequest(r)
+		if route == nil || !strings.HasPrefix(route.Endpoint, "messages#") {
+			value = r.PathValue("id")
+		}
 	}
 	id, _ := strconv.ParseInt(value, 10, 64)
 	return id
 }
-
-func viewMessages(messages []database.Message) []messageView {
-	result := make([]messageView, 0, len(messages))
-	for _, m := range messages {
-		result = append(result, messageView{Message: m})
-	}
-	return result
-}
-
 func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
 	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
 	if err != nil {
@@ -838,39 +753,31 @@ func (s *Server) room(w http.ResponseWriter, r *http.Request, u database.User) {
 		hit.serve(w)
 		return
 	}
-	anchor, _ := strconv.ParseInt(strings.TrimPrefix(r.PathValue("anchor"), "@"), 10, 64)
-	messages, err := s.DB.MessagePageReferences(r.Context(), room.ID, anchor, "around")
-	if errors.Is(err, sql.ErrNoRows) {
-		messages, err = s.DB.MessagePageReferences(r.Context(), room.ID, 0, "around")
-	}
+	anchor, _ := strconv.ParseInt(r.PathValue("message_id"), 10, 64)
+	messageBody, _, err := s.MessageQueries.Page(r.Context(), s.messageScope(r.Context()), u.ID, room.ID, anchor, "around", true)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	view, err := s.displayRoom(r.Context(), room, u)
+	roomPage, err := s.PageQueries.RoomPage(r.Context(), room, u.Participant())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	room = view.Room
-	var invitation bool
-	if err = s.DB.Read.QueryRowContext(r.Context(), "SELECT ?=(SELECT id FROM rooms ORDER BY created_at LIMIT 1) AND NOT EXISTS(SELECT 1 FROM messages WHERE room_id=? LIMIT 1 OFFSET 40)", room.ID, room.ID).Scan(&invitation); err != nil {
-		s.fail(w, err)
-		return
-	}
+	room = roomPage.Room.Room
 	s.rememberRoom(w, r, strconv.FormatInt(room.ID, 10))
-	s.render(
+	s.respondPage(
 		w,
 		r,
 		"room",
 		200,
 		page{
-			Invitation:     invitation,
-			Stream:         s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)),
-			Title:          room.Name,
-			User:           u,
-			Room:           room,
-			messageRecords: messages,
+			Invitation:  roomPage.Invitation,
+			Stream:      s.Secrets.SignStream(rails.RoomStream(room.Type, room.ID)),
+			Title:       room.Name,
+			User:        u,
+			Room:        room,
+			messageBody: &messageBody,
 		},
 	)
 }
@@ -881,28 +788,27 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, u database.Use
 		s.fail(w, err)
 		return
 	}
-	if hit := s.responseHit(r); hit != nil {
-		hit.serve(w)
-		return
-	}
-	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
-	direction := "before"
-	if before == 0 {
-		before, _ = strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
-		direction = "after"
-	}
-	messages, err := s.DB.MessagePageReferences(r.Context(), room.ID, before, direction)
+	anchor, direction, _, err := messagePagination(r)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	if len(messages) == 0 {
+	if hit := s.responseHit(r); hit != nil {
+		hit.serve(w)
+		return
+	}
+	messageBody, count, err := s.MessageQueries.Page(r.Context(), s.messageScope(r.Context()), u.ID, room.ID, anchor, direction, false)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if count == 0 {
 		w.WriteHeader(204)
 		return
 	}
 	// The rendered representation, including related users and boosts, defines
 	// freshness. Timestamps alone miss external edits and association changes.
-	s.render(w, r, "messages", 200, page{messageRecords: messages})
+	s.respondPage(w, r, "messages", 200, page{messageBody: &messageBody})
 }
 
 func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u database.User) {
@@ -911,7 +817,7 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 	}
 	if _, err := s.DB.Room(r.Context(), u.ID, roomID(r)); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			s.render(w, r, "room-not-found", 200, page{User: u})
+			s.respondPage(w, r, "room-not-found", 200, page{User: u})
 			return
 		}
 		s.fail(w, err)
@@ -934,45 +840,26 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request, u databas
 		value := r.Form.Get("message[body]")
 		body = &value
 	}
-	m, err := s.saveNewMessage(
+	result, err := s.MessageCommands.Create(
 		r.Context(),
 		u.ID,
 		roomID(r),
 		r.Form.Get("message[client_message_id]"),
 		body,
 		staged,
-		false,
 	)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 
-	b := borrowBuffer()
-	defer releaseBuffer(b)
-	views, err := s.messageViews(r.Context(), []database.Message{m})
+	output, err := s.MessageEffects.Created(r.Context(), s.presentationFacts(r.Context()), result)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	if err = s.templates.ExecuteTemplate(b, "messages", page{Messages: views}); err != nil {
-		s.fail(w, err)
-		return
-	}
-	room, err := s.DB.Room(r.Context(), u.ID, m.RoomID)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	stream := stream("append", room.DOM("messages"), b.String())
-	// Delivery follows commit and outlives a disconnected posting request.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	s.Cable.Publish(ctx, m.RoomID, stream)
-	cancel()
-	s.messageCreated(m, room)
-	s.enqueueWebhooks(m, room)
 	if respondFormat(w, r, "turbo_stream") != "" {
-		writeStream(w, stream)
+		writeStream(w, output)
 	}
 }
 
@@ -981,24 +868,19 @@ func (s *Server) sidebar(w http.ResponseWriter, r *http.Request, u database.User
 		hit.serve(w)
 		return
 	}
-	items, err := s.sidebarRooms(r.Context(), u)
+	data, err := s.PageQueries.Sidebar(r.Context(), u.Participant())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	placeholders, err := s.DB.DirectPlaceholders(r.Context(), u.ID)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	s.render(
+	s.respondPage(
 		w,
 		r,
 		"sidebar",
 		200,
 		page{
-			Placeholders:    placeholders,
-			SidebarRooms:    items,
+			Placeholders:    data.Placeholders,
+			SidebarRooms:    data.Rooms,
 			User:            u,
 			RoomsStream:     s.Secrets.SignStream("rooms"),
 			UserRoomsStream: s.Secrets.SignStream(rails.UserRoomsStream(u.ID)),
@@ -1007,9 +889,9 @@ func (s *Server) sidebar(w http.ResponseWriter, r *http.Request, u database.User
 }
 
 func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User) {
-	q := database.SearchQuery(r.FormValue("q"))
 	if r.Method == "POST" {
-		if err := s.DB.RecordSearch(r.Context(), u.ID, q); err != nil {
+		q, err := s.Searches.Remember(r.Context(), u.ID, r.FormValue("q"))
+		if err != nil {
 			s.fail(w, err)
 			return
 		}
@@ -1017,7 +899,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 		return
 	}
 	if r.Method == "DELETE" {
-		if _, err := s.DB.Write.ExecContext(r.Context(), "DELETE FROM searches WHERE user_id=?", u.ID); err != nil {
+		if err := s.Searches.Clear(r.Context(), u.ID); err != nil {
 			s.fail(w, err)
 			return
 		}
@@ -1028,36 +910,20 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u database.User)
 		hit.serve(w)
 		return
 	}
-	recent, err := s.DB.RecentSearches(r.Context(), u.ID)
+	data, err := s.Searches.Page(r.Context(), s.messageScope(r.Context()), u.ID, r.FormValue("q"))
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	p := page{Title: "Search", Query: q, User: u, RecentSearches: recent}
-	if s.fragments.limit <= 0 {
-		// With no retention, a reference lookup cannot avoid the full query.
-		p.messageRecords, err = s.DB.Search(r.Context(), u.ID, q)
-		p.SearchResultCount = len(p.messageRecords)
-	} else {
-		var refs []database.Message
-		refs, err = s.DB.SearchReferences(r.Context(), u.ID, q)
-		if err == nil {
-			var part responsebody.Part
-			part, p.SearchResultCount, err = s.searchMessageList(r.Context(), u.ID, q, refs)
-			if p.SearchResultCount > 0 {
-				p.messageBody = &part
-			}
-		}
+	p := page{Title: "Search", Query: data.Query, User: u, RecentSearches: data.Recent, SearchResultCount: data.Count}
+	if data.Count > 0 {
+		p.messageBody = &data.Messages
 	}
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	s.render(w, r, "search", 200, p)
+	s.respondPage(w, r, "search", 200, p)
 }
 
 func (s *Server) serveCable(w http.ResponseWriter, r *http.Request, u database.User) {
-	if !s.sameOrigin(r) {
+	if !s.socketOriginAllowed(r) {
 		http.Error(w, "Invalid request origin", 403)
 		return
 	}
@@ -1073,8 +939,15 @@ func (s *Server) serveCable(w http.ResponseWriter, r *http.Request, u database.U
 	}
 	s.Cable.Serve(w, r, u, token)
 }
-func (s *Server) Close() { s.Jobs.Close(10 * time.Second); s.Cable.Close() }
 
+// StopIntake is the cutoff for handler admission. The process owner closes
+// upgraded sockets before WaitHandlers, then joins workers before persistence.
+func (s *Server) StopIntake() {
+	s.intakeMu.Lock()
+	s.closing = true
+	s.intakeMu.Unlock()
+}
+func (s *Server) WaitHandlers() { s.handlers.Wait() }
 func appVersion() string {
 	for _, key := range []string{"APP_VERSION", "GIT_REVISION"} {
 		if value := os.Getenv(key); value != "" {

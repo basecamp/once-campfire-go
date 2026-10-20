@@ -1,0 +1,754 @@
+#!/usr/bin/env python3
+"""Compare observable HTTP workflows and stored state against pinned Rust."""
+
+import argparse
+import hashlib
+import html
+import http.cookiejar
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shutil
+import sqlite3
+import tempfile
+import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+from parity_storage import (
+    attachment_lifecycle,
+    avatar_lifecycle,
+    direct_upload,
+    storage_downloads,
+    upload_metadata,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+loader = importlib.machinery.SourceFileLoader(
+    "upgrade", str(ROOT / "bin/check-upgrade")
+)
+spec = importlib.util.spec_from_loader(loader.name, loader)
+upgrade = importlib.util.module_from_spec(spec)
+loader.exec_module(upgrade)
+
+
+class App:
+    def __init__(self, base, database, labels):
+        self.base, self.database, self.labels = base, database, labels
+        self.trace = []
+        self.clients = {}
+
+    def request(self, actor, method, path, fields=None, frame=None):
+        headers = {}
+        if frame:
+            headers["Turbo-Frame"] = frame
+        body = None
+        if fields is not None:
+            body = urllib.parse.urlencode(fields).encode()
+            headers.update(
+                {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "text/vnd.turbo-stream.html, text/html",
+                }
+            )
+        status, destination, _, data = self.fetch(actor, method, path, body, headers)
+        return status, destination, data.decode("utf-8")
+
+    def fetch(self, actor, method, path, body=None, headers=None):
+        """Consume complete binary responses while retaining actor cookies and headers."""
+        if actor not in self.clients:
+            self.clients[actor] = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+                upgrade.NoRedirect(),
+            )
+        client = self.clients[actor]
+        headers = {
+            "Accept": "text/html",
+            "Accept-Encoding": "identity",
+            "Sec-Fetch-Site": "same-origin",
+            "Origin": self.base,
+        } | (headers or {})
+        request = urllib.request.Request(
+            self.base + path, data=body, headers=headers, method=method
+        )
+        try:
+            response = client.open(request, timeout=10)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            data = response.read()
+            length = response.headers.get("Content-Length")
+            if length is not None and method != "HEAD" and response.status != 304:
+                assert len(data) == int(length), (
+                    "incomplete response",
+                    len(data),
+                    length,
+                )
+            location = urllib.parse.urlsplit(response.headers.get("Location", ""))
+            destination = location.path + (
+                "?" + location.query if location.query else ""
+            )
+            self.trace.append(
+                {
+                    "actor": actor,
+                    "method": method,
+                    "path": path,
+                    "status": response.status,
+                    "location": destination,
+                    "frame": headers.get("Turbo-Frame"),
+                }
+            )
+            return response.status, destination, response.headers, data
+
+    def login(self, actor):
+        return self.request(
+            actor,
+            "POST",
+            "/session",
+            {
+                "email_address": self.labels["emails." + actor],
+                "password": self.labels["passwords.all"],
+            },
+        )
+
+    def rows(self, query, args=()):
+        with sqlite3.connect(f"file:{self.database}?mode=ro", uri=True) as db:
+            return db.execute(query, args).fetchall()
+
+
+def authentication(app):
+    room = app.labels["rooms.hq"]
+    status, location, _ = app.request("david", "GET", f"/rooms/{room}")
+    assert (status, location) == (302, "/session/new"), (status, location)
+    status, location, _ = app.login("david")
+    assert (status, location) == (302, f"/rooms/{room}"), (status, location)
+    assert app.request("david", "GET", f"/rooms/{room}")[0] == 200
+    status, _, body = app.request("david", "GET", "/session/new")
+    assert status == 200 and 'name="password"' in body, ("signed-in login form", status)
+    status, _, _ = app.request(
+        "david",
+        "POST",
+        "/session",
+        {
+            "email_address": app.labels["emails.kevin"],
+            "password": app.labels["passwords.all"],
+        },
+    )
+    assert status == 302
+    assert (
+        app.labels["emails.kevin"]
+        in app.request("david", "GET", "/users/me/profile")[2]
+    )
+    assert app.request("david", "DELETE", "/session", {})[:2] == (302, "/")
+    assert app.request("david", "GET", f"/rooms/{room}")[:2] == (302, "/session/new")
+
+
+def direct_participants(app):
+    assert app.login("david")[0] == 302
+    for actor, method, resource, status in (
+        ("kevin", "DELETE", "account/users", 1),
+        ("jz", "POST", "users", 2),
+    ):
+        member = app.labels["users." + actor]
+        name = app.rows("SELECT name FROM users WHERE id=?", (member,))[0][0]
+        response, location, _ = app.request(
+            "david", "POST", "/rooms/directs", [("user_ids[]", member)]
+        )
+        assert response == 302
+        room = int(location.rsplit("/", 1)[1])
+        path = f"/{resource}/{member}" + ("/ban" if status == 2 else "")
+        assert app.request("david", method, path, {})[0] == 302
+        assert app.rows("SELECT status FROM users WHERE id=?", (member,)) == [(status,)]
+        assert app.rows(
+            "SELECT count(*) FROM memberships WHERE room_id=? AND user_id=?",
+            (room, member),
+        ) == [(1,)]
+        response, _, body = app.request("david", "GET", f"/rooms/directs/{room}/edit")
+        assert (
+            response == 200
+            and f'href="/users/{member}"' in body
+            and (f"<strong>{html.escape(name)}</strong>" in body)
+        ), ("retained ping participant", actor, status, response)
+
+
+def involvement(app):
+    assert app.login("david")[0] == 302
+    room = app.labels["rooms.hq"]
+    path = f"/rooms/{room}/involvement"
+    for fields, expected in (
+        ({"involvement": "everything"}, "everything"),
+        ({"involvement": "nothing"}, "nothing"),
+        ({"involvement": "invisible"}, "invisible"),
+        ({"involvement": "mentions"}, "mentions"),
+    ):
+        response, location, _ = app.request("david", "PUT", path, fields)
+        assert (response, location) == (302, path), (
+            "involvement update",
+            fields,
+            response,
+            location,
+        )
+        assert app.rows(
+            "SELECT involvement FROM memberships WHERE room_id=? AND user_id=?",
+            (room, app.labels["users.david"]),
+        ) == [(expected,)]
+    for frame in (None, f"involvement_rooms_open_{room}"):
+        response, _, body = app.request("david", "GET", path, frame=frame)
+        assert response == 200 and "<html>" in body and "</html>" in body, (
+            "involvement document",
+            frame,
+            response,
+        )
+        assert ('type="importmap"' in body) == (frame is None)
+        assert ('rel="stylesheet"' in body) == (frame is None)
+        assert f'id="involvement_rooms_open_{room}"' in body and 'value="put"' in body
+    assert app.request("david", "GET", "/users/me/profile")[2].count("<html>") == 1
+    assert app.request("david", "PUT", path, {})[:2] == (302, path)
+    assert app.rows(
+        "SELECT involvement FROM memberships WHERE room_id=? AND user_id=?",
+        (room, app.labels["users.david"]),
+    ) == [(None,)]
+
+
+def direct_ping(app):
+    assert app.login("david")[0] == 302
+    for frame in (None, "direct_rooms_control"):
+        status, _, body = app.request("david", "GET", "/rooms/directs/new", frame=frame)
+        assert (
+            status == 200
+            and 'name="user_ids[]"' in body
+            and 'href="/users/me/sidebar"' in body
+        )
+    rooms_before = app.rows("SELECT count(*) FROM rooms")[0][0]
+    target = f"/rooms/{app.labels['rooms.david_and_kevin']}"
+    missing = app.rows("SELECT max(id)+1 FROM users")[0][0]
+    users = app.labels["users.kevin"], app.labels["users.david"]
+    for selected in ([users[0]], [users[1], users[0], users[0]], [users[0], missing]):
+        fields = [("user_ids[]", user) for user in selected]
+        status, location, _ = app.request("david", "POST", "/rooms/directs", fields)
+        assert (status, location) == (302, target), (selected, status, location, target)
+        assert app.rows("SELECT count(*) FROM rooms")[0][0] == rooms_before
+
+
+def message_ids(body):
+    return [int(value) for value in re.findall(r'data-message-id="([0-9]+)"', body)]
+
+
+def pagination(app):
+    assert app.login("david")[0] == 302
+    room, anchor = app.labels["rooms.watercooler"], app.labels["messages.busy_060"]
+    expected = [
+        row[0]
+        for row in app.rows(
+            "SELECT id FROM messages WHERE room_id=? ORDER BY created_at", (room,)
+        )
+    ]
+    created = app.rows("SELECT created_at FROM messages WHERE id=?", (anchor,))[0][0]
+    for direction, operator, reverse in (("before", "<", True), ("after", ">", False)):
+        ids = [
+            row[0]
+            for row in app.rows(
+                f"SELECT id FROM messages WHERE room_id=? AND created_at {operator} ? ORDER BY created_at {'DESC' if reverse else 'ASC'} LIMIT 40",
+                (room, created),
+            )
+        ]
+        if reverse:
+            ids.reverse()
+        status, _, body = app.request(
+            "david", "GET", f"/rooms/{room}/messages?{direction}={anchor}"
+        )
+        assert status == 200 and message_ids(body) == ids, (
+            direction,
+            status,
+            message_ids(body),
+            ids,
+        )
+        foreign = app.labels["messages.plain"]
+        status, _, _ = app.request(
+            "david", "GET", f"/rooms/{room}/messages?{direction}={foreign}"
+        )
+        assert status == 404, ("foreign cursor", direction, status)
+    status, _, body = app.request("david", "GET", f"/rooms/{room}/messages")
+    assert status == 200 and message_ids(body) == expected[-40:]
+    empty = app.labels["rooms.pets"]
+    status, _, body = app.request("david", "GET", f"/rooms/{empty}/messages")
+    assert status == 204 and body == "", (status, body)
+
+
+def sidebar(app):
+    assert app.login("david")[0] == 302
+    for frame in (None, "user_sidebar"):
+        status, _, body = app.request("david", "GET", "/users/me/sidebar", frame=frame)
+        assert status == 200 and "<html" in body and "<body" in body
+        assert 'id="user_sidebar"' in body and 'id="direct_rooms_control"' in body
+        assert ("<!DOCTYPE html>" in body) == (frame is None)
+        assert ('name="current-user-id"' in body) == (frame is None)
+
+
+def message_lifecycle(app):
+    assert app.login("kevin")[0] == 302
+    assert app.login("jz")[0] == 302
+    room = app.labels["rooms.hq"]
+    route = f"/rooms/{room}/messages"
+    client = "contract-message-client"
+    old, new = "contractneedlealpha", "contractneedlebeta"
+    status, _, body = app.request(
+        "kevin",
+        "POST",
+        route,
+        {"message[body]": f"<p>{old}</p>", "message[client_message_id]": client},
+    )
+    assert status == 200 and 'action="append"' in body
+    stored = app.rows(
+        "SELECT id,creator_id FROM messages WHERE client_message_id=?", (client,)
+    )
+    assert len(stored) == 1 and stored[0][1] == app.labels["users.kevin"], stored
+    message = stored[0][0]
+    path = route + f"/{message}"
+    for method, suffix, fields in (
+        ("GET", "/edit", None),
+        ("PATCH", "", {"message[body]": "forbidden"}),
+        ("DELETE", "", {}),
+    ):
+        assert app.request("jz", method, path + suffix, fields)[0] == 403
+    status, _, body = app.request("kevin", "GET", path + "/edit")
+    assert status == 200 and 'name="message[body]"' in body and 'value="patch"' in body
+    assert app.request("kevin", "GET", path)[0] == 200
+    # Warm the reads before mutation: a stale result cache cannot pass this flow.
+    for route in (f"/rooms/{room}", path, f"/searches?q={old}"):
+        assert old in app.request("kevin", "GET", route)[2]
+    assert app.request("kevin", "PATCH", path, {"message[body]": f"<p>{new}</p>"})[
+        :2
+    ] == (302, path)
+    for route in (f"/rooms/{room}", path, f"/searches?q={new}"):
+        assert new in app.request("kevin", "GET", route)[2]
+    assert message not in message_ids(
+        app.request("kevin", "GET", f"/searches?q={old}")[2]
+    )
+    assert app.rows(
+        "SELECT rowid FROM message_search_index WHERE message_search_index MATCH ?",
+        (new,),
+    ) == [(message,)]
+    assert app.request("kevin", "DELETE", path, {})[0] == 200
+    assert app.rows("SELECT id FROM messages WHERE id=?", (message,)) == []
+    assert (
+        app.rows(
+            "SELECT id FROM action_text_rich_texts WHERE record_type='Message' AND record_id=?",
+            (message,),
+        )
+        == []
+    )
+    assert (
+        app.rows("SELECT rowid FROM message_search_index WHERE rowid=?", (message,))
+        == []
+    )
+    assert app.request("kevin", "GET", path)[0] == 404
+
+
+def room_membership(app):
+    for actor in ("david", "kevin", "jz"):
+        assert app.login(actor)[0] == 302
+    david, kevin = (app.labels["users." + actor] for actor in ("david", "kevin"))
+    original, private, reopened = (
+        "Contract shared room",
+        "Contract private room",
+        "Contract reopened room",
+    )
+    needle = "contractroommembershipneedle"
+    status, location, _ = app.request(
+        "david", "POST", "/rooms/opens", {"room[name]": original}
+    )
+    assert status == 302 and re.fullmatch(r"/rooms/\d+", location), (status, location)
+    room = int(location.rsplit("/", 1)[1])
+    members = lambda: app.rows(
+        "SELECT user_id FROM memberships WHERE room_id=? ORDER BY user_id", (room,)
+    )
+    active = app.rows("SELECT id FROM users WHERE status=0 ORDER BY id")
+    assert members() == active
+    status, _, _ = app.request(
+        "david",
+        "POST",
+        location + "/messages",
+        {
+            "message[body]": needle,
+            "message[client_message_id]": "contract-room-member-client",
+        },
+    )
+    assert status == 200
+    message = app.rows(
+        "SELECT id FROM messages WHERE client_message_id='contract-room-member-client'"
+    )[0][0]
+    for actor in ("kevin", "jz"):
+        assert needle in app.request(actor, "GET", location)[2]
+        assert message in message_ids(
+            app.request(actor, "GET", f"/searches?q={needle}")[2]
+        )
+        assert original in app.request(actor, "GET", "/users/me/sidebar")[2]
+    assert (
+        app.request(
+            "kevin", "PATCH", f"/rooms/opens/{room}", {"room[name]": "forbidden"}
+        )[0]
+        == 403
+    )
+    assert app.rows("SELECT name FROM rooms WHERE id=?", (room,)) == [(original,)]
+    assert members() == active
+    fields = [
+        ("room[name]", private),
+        ("user_ids[]", david),
+        ("user_ids[]", kevin),
+        ("user_ids[]", kevin),
+        ("user_ids[]", -1),
+    ]
+    assert app.request("david", "PATCH", f"/rooms/closeds/{room}", fields)[:2] == (
+        302,
+        location,
+    )
+    assert app.rows("SELECT type,name FROM rooms WHERE id=?", (room,)) == [
+        ("Rooms::Closed", private)
+    ]
+    assert members() == sorted([(david,), (kevin,)])
+    assert needle in app.request("kevin", "GET", location)[2]
+    assert private in app.request("kevin", "GET", "/users/me/sidebar")[2]
+    for path in (location, f"/rooms/closeds/{room}", f"/rooms/closeds/{room}/edit"):
+        assert app.request("jz", "GET", path)[:2] == (302, "/"), ("revoked room", path)
+    for namespace in ("opens", "closeds"):
+        result = app.request(
+            "jz", "PATCH", f"/rooms/{namespace}/{room}", {"room[name]": "revoked write"}
+        )
+        assert result[:2] == (302, "/"), ("revoked update", namespace, result[:2])
+    assert app.rows("SELECT name FROM rooms WHERE id=?", (room,)) == [(private,)]
+    assert message not in message_ids(
+        app.request("jz", "GET", f"/searches?q={needle}")[2]
+    )
+    assert private not in app.request("jz", "GET", "/users/me/sidebar")[2]
+    assert app.request("jz", "GET", location + "/messages")[0] == 404
+    result = app.request(
+        "jz", "POST", location + "/messages", {"message[body]": "revoked write"}
+    )
+    assert result[0] == 200 and "This room was deleted." in result[2]
+    assert app.rows("SELECT id FROM messages WHERE room_id=?", (room,)) == [(message,)]
+    assert app.request(
+        "david", "PATCH", f"/rooms/opens/{room}", {"room[name]": reopened}
+    )[:2] == (302, location)
+    assert members() == active
+    assert needle in app.request("jz", "GET", location)[2]
+    assert reopened in app.request("jz", "GET", "/users/me/sidebar")[2]
+    assert message in message_ids(app.request("jz", "GET", f"/searches?q={needle}")[2])
+    direct = app.labels["rooms.david_and_kevin"]
+    assert app.request(
+        "david", "PATCH", f"/rooms/opens/{direct}", {"room[name]": "not shared"}
+    )[:2] == (302, "/")
+    assert app.rows("SELECT type FROM rooms WHERE id=?", (direct,)) == [
+        ("Rooms::Direct",)
+    ]
+    assert app.request("david", "DELETE", location, {})[:2] == (302, "/")
+    for query in (
+        "SELECT id FROM rooms WHERE id=?",
+        "SELECT id FROM messages WHERE room_id=?",
+        "SELECT user_id FROM memberships WHERE room_id=?",
+    ):
+        assert app.rows(query, (room,)) == []
+    assert (
+        app.rows("SELECT rowid FROM message_search_index WHERE rowid=?", (message,))
+        == []
+    )
+
+
+def room_updates(app):
+    assert app.login("david")[0] == 302
+    name = "Contract preserved name"
+    status, location, _ = app.request(
+        "david", "POST", "/rooms/opens", {"room[name]": name}
+    )
+    assert status == 302 and re.fullmatch(r"/rooms/\d+", location)
+    room = int(location.rsplit("/", 1)[1])
+    state = lambda: app.rows(
+        "SELECT name,type,updated_at FROM rooms WHERE id=?", (room,)
+    )[0]
+    original = state()
+    members = lambda: app.rows(
+        "SELECT user_id FROM memberships WHERE room_id=? ORDER BY user_id", (room,)
+    )
+    original_members = members()
+    for namespace in ("opens", "closeds"):
+        for body, content_type in (
+            (b"", "application/x-www-form-urlencoded"),
+            (b"{}", "application/json"),
+            (b'{"room":{}}', "application/json"),
+            (b'{"room":null}', "application/json"),
+        ):
+            result = app.fetch(
+                "david",
+                "PATCH",
+                f"/rooms/{namespace}/{room}",
+                body,
+                {"Content-Type": content_type},
+            )
+            assert result[0] == 400, (
+                "missing room root",
+                namespace,
+                body.decode(),
+                result[0],
+            )
+            assert state() == original and members() == original_members
+            count = app.rows("SELECT count(*) FROM rooms")[0][0]
+            assert (
+                app.fetch(
+                    "david",
+                    "POST",
+                    f"/rooms/{namespace}",
+                    body,
+                    {"Content-Type": content_type},
+                )[0]
+                == 400
+            )
+            assert app.rows("SELECT count(*) FROM rooms")[0][0] == count
+    assert name in app.request("david", "GET", location)[2]
+    assert name in app.request("david", "GET", "/users/me/sidebar")[2]
+    for method, body, content_type in (
+        ("PATCH", b"room[ignored]=value", "application/x-www-form-urlencoded"),
+        ("PUT", b'{"room":{"ignored":true}}', "application/json"),
+        ("PATCH", b'{"room":{"ignored":{}}}', "application/json"),
+    ):
+        status, destination, _, _ = app.fetch(
+            "david",
+            method,
+            f"/rooms/opens/{room}",
+            body,
+            {"Content-Type": content_type},
+        )
+        assert (status, destination) == (302, location)
+        assert state() == original, ("partial room update", method, state(), original)
+    result = app.request(
+        "david",
+        "POST",
+        f"/rooms/opens/{room}?room[ignored]=query",
+        {"_method": "patch", "room[name]": "must not overwrite"},
+    )
+    assert result[:2] == (302, location) and state() == original, (
+        "method override/query room attributes",
+        result[:2],
+        state(),
+    )
+    david, kevin = (app.labels["users." + actor] for actor in ("david", "kevin"))
+    fields = [("room[ignored]", "value"), ("user_ids[]", david), ("user_ids[]", kevin)]
+    assert app.request("david", "PATCH", f"/rooms/closeds/{room}", fields)[:2] == (
+        302,
+        location,
+    )
+    assert state()[:2] == (name, "Rooms::Closed")
+    assert app.rows(
+        "SELECT user_id FROM memberships WHERE room_id=? ORDER BY user_id", (room,)
+    ) == sorted([(david,), (kevin,)])
+    assert app.request(
+        "david", "PATCH", f"/rooms/opens/{room}", {"room[ignored]": "value"}
+    )[:2] == (302, location)
+    assert state()[:2] == (name, "Rooms::Open")
+    for body, content_type, expected in (
+        (b"room[name]=", "application/x-www-form-urlencoded", ""),
+        (b'{"room":{"name":null}}', "application/json", None),
+        (b'{"room":{"ignored":true}}', "application/json", None),
+        (
+            b'{"room":{"name":"Contract renamed room"}}',
+            "application/json",
+            "Contract renamed room",
+        ),
+    ):
+        assert app.fetch(
+            "david",
+            "PATCH",
+            f"/rooms/opens/{room}",
+            body,
+            {"Content-Type": content_type},
+        )[:2] == (302, location)
+        assert state()[0] == expected, ("explicit/omitted room name", state(), expected)
+    name = state()[0]
+    assert name in app.request("david", "GET", location)[2]
+    assert name in app.request("david", "GET", "/users/me/sidebar")[2]
+    assert app.request("david", "DELETE", location, {})[:2] == (302, "/")
+    for body in (b'{"room":{"ignored":true}}', b'{"room":{"name":null}}'):
+        status, destination, _, _ = app.fetch(
+            "david", "POST", "/rooms/opens", body, {"Content-Type": "application/json"}
+        )
+        assert status == 302
+        created = int(destination.rsplit("/", 1)[1])
+        assert app.rows("SELECT name FROM rooms WHERE id=?", (created,)) == [(None,)]
+        assert app.request("david", "DELETE", destination, {})[:2] == (302, "/")
+
+
+def account_settings(app):
+    assert app.login("david")[0] == 302
+    assert app.login("kevin")[0] == 302
+    setting = "restrict_room_creation_to_administrators"
+    field = f"account[settings][{setting}]"
+    for value, expected in (
+        ("1", True),
+        ("off", False),
+        ("OFF", False),
+        ("f", False),
+        ("F", False),
+        ("FALSE", False),
+        ("false", False),
+        ("0", False),
+        ("Off", True),
+        ("", None),
+    ):
+        assert app.request("david", "PATCH", "/account", {field: value})[:2] == (
+            302,
+            "/account/edit",
+        )
+        stored = json.loads(app.rows("SELECT settings FROM accounts")[0][0])
+        assert stored[setting] is expected, ("boolean account setting", value, stored)
+        assert app.request("kevin", "GET", "/rooms/opens/new")[0] == (
+            403 if expected else 200
+        )
+    css = ":root { --contract-color: red; }"
+    assert app.request(
+        "david", "PATCH", "/account/custom_styles", {"account[custom_styles]": css}
+    )[:2] == (302, "/account/custom_styles/edit")
+    assert app.rows("SELECT custom_styles FROM accounts") == [(css,)]
+    status, _, body = app.request("david", "GET", "/account/custom_styles/edit")
+    assert status == 200 and css in body and "✓" in body
+    assert css in app.request("kevin", "GET", "/users/me/sidebar")[2]
+    assert (
+        app.request(
+            "kevin",
+            "PATCH",
+            "/account/custom_styles",
+            {"account[custom_styles]": "forbidden"},
+        )[0]
+        == 403
+    )
+    assert app.request("kevin", "PATCH", "/account", {field: "1"})[0] == 403
+    assert app.rows("SELECT custom_styles FROM accounts") == [(css,)]
+    assert app.request(
+        "david", "PUT", "/account/custom_styles", {"account[ignored]": "value"}
+    )[:2] == (302, "/account/custom_styles/edit")
+    assert app.rows("SELECT custom_styles FROM accounts") == [(css,)]
+
+
+WORKFLOWS = {
+    "direct_participants": direct_participants,
+    "involvement": involvement,
+    "authentication": authentication,
+    "direct_ping": direct_ping,
+    "pagination": pagination,
+    "sidebar": sidebar,
+    "message_lifecycle": message_lifecycle,
+    "room_membership": room_membership,
+    "room_updates": room_updates,
+    "account_settings": account_settings,
+    "direct_upload": direct_upload,
+    "storage_downloads": storage_downloads,
+    "attachment_lifecycle": attachment_lifecycle,
+    "avatar_lifecycle": avatar_lifecycle,
+    "upload_metadata": upload_metadata,
+}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rust-root", type=Path, default=ROOT / "reference")
+    parser.add_argument("--seed", type=Path, required=True)
+    parser.add_argument("--go-binary", type=Path, default=ROOT / "campfire")
+    parser.add_argument("--rust-binary", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--only", choices=WORKFLOWS, nargs="+", default=list(WORKFLOWS))
+    args = parser.parse_args()
+    args.out.mkdir(parents=True, exist_ok=False)
+    labels = json.loads((args.seed / "labels.json").read_text())
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("CAMPFIRE_", "THRUSTER_")) and key != "TLS_DOMAIN"
+    }
+    for line in (args.rust_root / "parity/.env.reference").read_text().splitlines():
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            env[key] = value
+    env.update(
+        DISABLE_SSL="true",
+        TARGET_BIND="127.0.0.1",
+        GOMAXPROCS="4",
+        TOKIO_WORKER_THREADS="4",
+    )
+    binaries = {"rust": args.rust_binary.resolve(), "go": args.go_binary.resolve()}
+    report = {
+        "scope": "Functional HTTP and persisted-state contracts, not exact HTML or JavaScript parity",
+        "binaries": {
+            name: hashlib.sha256(binary.read_bytes()).hexdigest()
+            for name, binary in binaries.items()
+        },
+        "tool_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "storage_tool_sha256": hashlib.sha256(
+            (ROOT / "bin/parity_storage.py").read_bytes()
+        ).hexdigest(),
+        "labels_sha256": hashlib.sha256(
+            (args.seed / "labels.json").read_bytes()
+        ).hexdigest(),
+        "runs": [],
+    }
+    failed = False
+    for name in args.only:
+        for implementation, binary in binaries.items():
+            with tempfile.TemporaryDirectory(
+                prefix="contract-", dir=args.out
+            ) as temporary:
+                work = Path(temporary)
+                database = work / "database.sqlite3"
+                with (
+                    sqlite3.connect(
+                        f"file:{args.seed}/db/production.sqlite3?mode=ro", uri=True
+                    ) as source,
+                    sqlite3.connect(database) as destination,
+                ):
+                    source.backup(destination)
+                shutil.copytree(args.seed / "storage", work / "files")
+                environment = env | {
+                    "CAMPFIRE_DATABASE_PATH": str(database),
+                    "CAMPFIRE_STORAGE_PATH": str(work),
+                    "CAMPFIRE_FILES_PATH": str(work / "files"),
+                }
+                result = {
+                    "workflow": name,
+                    "implementation": implementation,
+                    "seed_snapshot_sha256": hashlib.sha256(
+                        database.read_bytes()
+                    ).hexdigest(),
+                }
+                with upgrade.server(
+                    binary, environment, args.out, implementation + "-" + name
+                ) as base:
+                    app = App(base, database, labels)
+                    try:
+                        WORKFLOWS[name](app)
+                        result["pass"] = True
+                    except (AssertionError, urllib.error.URLError) as error:
+                        result.update(
+                            {
+                                "pass": False,
+                                "error": str(error) or "contract assertion failed",
+                                "failure_traceback": traceback.format_exc(),
+                            }
+                        )
+                        failed = True
+                    result["requests"] = app.trace
+                report["runs"].append(result)
+                print(
+                    implementation,
+                    name,
+                    "PASS" if result["pass"] else "FAIL: " + result["error"],
+                    flush=True,
+                )
+                (args.out / "report.json").write_text(
+                    json.dumps(report, indent=2) + "\n"
+                )
+    return int(failed)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

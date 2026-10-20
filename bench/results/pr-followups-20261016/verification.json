@@ -1,0 +1,42 @@
+{
+  "application_source_head": "5c8388b88480deba6717d7465ad5de0e49238472",
+  "published_source_commits_in_order": [
+    "ad48e29f7202dc32836165d0688eb1a65900b7e1",
+    "24355a7cc887741f0da7a7a870cc3ca69b9f09cf",
+    "5c8388b88480deba6717d7465ad5de0e49238472"
+  ],
+  "source_equivalence": "All cmd/internal/assets/third_party/go.mod/go.sum files match the individually measured and tested retained implementation. Only diagnostic/documentation archives differ.",
+  "go_version": "go version go1.27.1 darwin/arm64",
+  "check": {
+    "command": "bin/check",
+    "pass": true,
+    "sha256_uncompressed_log": "e4cee4576b23fc5207a042bedc88b09b403b706f9d397d12f413073bed85ed97",
+    "covers": [
+      "formatting/assets",
+      "Python benchmark regressions",
+      "root go vet",
+      "root race suite",
+      "nested WebSocket race suite"
+    ]
+  },
+  "http": {
+    "command": "bin/check-parity --only authentication message_lifecycle pagination room_membership direct_participants involvement direct_ping sidebar room_updates account_settings",
+    "passed": 20,
+    "total": 20,
+    "report_sha256_uncompressed": "5f44bd5e5049aea149c77e56f75ec8b1f71d70fd725eaf150186928276414b0d",
+    "binary_sha256": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "5bd23e08451838f5db00391e2e5d61c98ed161423a55eb8d5cf04e7512bc6be1"
+    },
+    "tool_sha256": "e671518fad2a1c8e419edfa1ed0cdefbe1b71877ae54af7ff96437e9d9fb1190"
+  },
+  "limits": [
+    "Not a fresh browser/media-output certification",
+    "Adjacent HTTP/state workflows do not directly certify JSON feed parity; existing Go API tests and exact complete-JSON preflights supplement them",
+    "No refreshed native throughput/latency/rankings",
+    "Three short local performance pairs; non-exclusive host",
+    "API timed responses are consumed fully but not all individually JSON-decoded",
+    "No nested ARM64 WebSocket assembly-vet claim"
+  ],
+  "privacy": "No runtime logs, credentials/cookies, generated databases/storage, complete fixture rosters, profiler traces or compiled binaries are included."
+}

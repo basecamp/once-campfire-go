@@ -1,0 +1,46 @@
+{
+  "artifacts": [
+    {
+      "path": "check.log.gz",
+      "sha256": "bed0eb7f231961870167f20250e56491188c58b9b5fcd345f75ab3fe38321c99",
+      "bytes": 413,
+      "uncompressed_bytes": 2097
+    },
+    {
+      "path": "baseline-regression.log.gz",
+      "sha256": "a42e5dbf06666cd092336550ce4eaeeb7f02259033e8d950c374ebdfacea53ca",
+      "bytes": 413,
+      "uncompressed_bytes": 2139
+    },
+    {
+      "path": "fixed-regression.log.gz",
+      "sha256": "07a1473c63930165adffa94c875fa189d627f6d92bbc7296be69791c21c66e4a",
+      "bytes": 79,
+      "uncompressed_bytes": 62
+    },
+    {
+      "path": "http-report.json.gz",
+      "sha256": "4e37a81a2b1b9f54858926842ceed04842dcdec7a060cadb15bbfc336aabf2ea",
+      "bytes": 1527,
+      "uncompressed_bytes": 35743
+    },
+    {
+      "path": "http_contract.py.gz",
+      "sha256": "de3e301bbb8e6e98256b96157ed94f9e5e26f596f9a059363ed105e5408e162d",
+      "bytes": 1321,
+      "uncompressed_bytes": 3541
+    },
+    {
+      "path": "pr-check.log.gz",
+      "sha256": "452d8cb70fcf37508dc02d83d1de5b761589b4b98c73bfbbbb992ea87e986b9f",
+      "bytes": 413,
+      "uncompressed_bytes": 2098
+    },
+    {
+      "path": "pr-http-report.json.gz",
+      "sha256": "454304d17503bdc800a699a75d4419e1cb492150c4f4fca64a1b12f339cc2d6b",
+      "bytes": 1528,
+      "uncompressed_bytes": 35743
+    }
+  ]
+}

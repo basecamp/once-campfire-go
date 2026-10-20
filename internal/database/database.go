@@ -18,18 +18,30 @@ import (
 //go:embed schema.sql
 var schema string
 
-var migrations = []string{"20231215043540", "20231220143106", "20240110071740", "20240115124901", "20240130003150", "20240130213001", "20240131105830", "20240209110503", "20250825100957", "20250825100958", "20250825100959", "20251126092013", "20251126115722", "20251126130131", "20251212154340"}
+var migrations = []string{
+	"20231215043540",
+	"20231220143106",
+	"20240110071740",
+	"20240115124901",
+	"20240130003150",
+	"20240130213001",
+	"20240131105830",
+	"20240209110503",
+	"20250825100957",
+	"20250825100958",
+	"20250825100959",
+	"20251126092013",
+	"20251126115722",
+	"20251126130131",
+	"20251212154340",
+}
 
 // A single writer prevents pool starvation while WAL readers proceed independently.
 type DB struct {
-	ResetConnections    func(int64)
-	PurgeBlobs          func([]int64)
-	RemoveBannedContent func(int64)
-	Read                *readPool
-	Write               *sql.DB
-	Now                 func() time.Time
-	versionDB           *sql.DB
-	version             *sql.Conn
+	Read    *sql.DB
+	Write   *sql.DB
+	Now     func() time.Time
+	version *versionObserver
 }
 
 func Open(path string, readers int) (*DB, error) {
@@ -40,7 +52,7 @@ func Open(path string, readers int) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 	uri := (&url.URL{Scheme: "file", Path: path}).String()
@@ -60,7 +72,9 @@ func Open(path string, readers int) (*DB, error) {
 	if err = prepare(w); err != nil {
 		return fail(err)
 	}
-	r, err := sql.Open("sqlite3", uri+options+"&mode=ro&_query_only=on")
+	// One bounded, connection-local driver cache serves both ordinary reads and
+	// scoped read transactions. Reuse plans, never results or authority.
+	r, err := sql.Open("sqlite3", uri+options+"&mode=ro&_query_only=on&_stmt_cache_size=256")
 	if err != nil {
 		return fail(err)
 	}
@@ -70,15 +84,8 @@ func Open(path string, readers int) (*DB, error) {
 		r.Close()
 		return fail(err)
 	}
-	v, err := sql.Open("sqlite3", uri+options+"&mode=ro&_query_only=on")
+	version, err := openVersionObserver(uri + options + "&mode=ro&_query_only=on")
 	if err != nil {
-		r.Close()
-		return fail(err)
-	}
-	v.SetMaxOpenConns(1)
-	version, err := v.Conn(context.Background())
-	if err != nil {
-		v.Close()
 		r.Close()
 		return fail(err)
 	}
@@ -87,16 +94,21 @@ func Open(path string, readers int) (*DB, error) {
 		frozen, err := time.Parse(time.RFC3339Nano, raw)
 		if err != nil {
 			version.Close()
-			v.Close()
 			r.Close()
 			return fail(err)
 		}
 		now = func() time.Time { return frozen }
 	}
-	return &DB{Read: &readPool{DB: r, statements: make(map[string]*sql.Stmt)}, Write: w, Now: now, versionDB: v, version: version}, nil
+	return &DB{
+		Read:    r,
+		Write:   w,
+		Now:     now,
+		version: version,
+	}, nil
 }
+
 func (d *DB) Close() error {
-	return errors.Join(d.Read.Close(), d.Write.Close(), d.version.Close(), d.versionDB.Close())
+	return errors.Join(d.Read.Close(), d.Write.Close(), d.version.Close())
 }
 func Stamp(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05.000000") }
 func (d *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {
@@ -110,6 +122,7 @@ func (d *DB) Transaction(ctx context.Context, fn func(*sql.Tx) error) error {
 	}
 	return tx.Commit()
 }
+
 func prepare(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -126,7 +139,9 @@ func prepare(db *sql.DB) error {
 			return err
 		}
 		if count != 0 {
-			return errors.New("refusing to initialize a nonempty database without schema_migrations")
+			return errors.New(
+				"refusing to initialize a nonempty database without schema_migrations",
+			)
 		}
 		if _, err = tx.Exec(schema); err != nil {
 			return err
@@ -149,13 +164,13 @@ func prepare(db *sql.DB) error {
 			return err
 		}
 		if found != 1 {
-			return fmt.Errorf("pending migration %s: migrate with the reference app before starting", v)
+			return fmt.Errorf(
+				"pending migration %s: migrate with the reference app before starting",
+				v,
+			)
 		}
 	}
 	if _, err = tx.Exec("CREATE INDEX IF NOT EXISTS index_messages_on_room_id_and_created_at ON messages(room_id,created_at)"); err != nil {
-		return err
-	}
-	if _, err = tx.Exec("CREATE INDEX IF NOT EXISTS index_messages_on_room_id_and_updated_at ON messages(room_id,updated_at)"); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -185,12 +200,4 @@ func (t timestamp) Scan(value any) error {
 		}
 	}
 	return fmt.Errorf("invalid timestamp %q", raw)
-}
-
-// A pinned reader observes commits from every writer, including this process.
-// PRAGMA data_version is connection-local, so it must never use the read pool.
-func (d *DB) ResponseVersion(ctx context.Context) (uint64, error) {
-	var version uint64
-	err := d.version.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version)
-	return version, err
 }

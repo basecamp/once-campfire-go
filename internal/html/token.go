@@ -1302,9 +1302,18 @@ func NewTokenizer(r io.Reader) *Tokenizer {
 //
 // The input is assumed to be UTF-8 encoded.
 func NewTokenizerFragment(r io.Reader, contextTag string) *Tokenizer {
+	bufferSize := 4096
+	if sized, ok := r.(interface{ Len() int }); ok {
+		if remaining := sized.Len(); remaining >= 0 && remaining < bufferSize {
+			// In-memory message fragments rarely need 4 KiB. Leave one byte
+			// for the EOF probe so an exactly full input does not grow again.
+			// This is only an allocation hint; readByte still grows normally.
+			bufferSize = remaining + 1
+		}
+	}
 	z := &Tokenizer{
 		r:         r,
-		buf:       make([]byte, 0, 4096),
+		buf:       make([]byte, 0, bufferSize),
 		attrNames: make(map[string]bool),
 	}
 	if contextTag != "" {

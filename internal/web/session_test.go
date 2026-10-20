@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -20,7 +22,8 @@ func TestEncryptedLoginReturnAndSessionRefresh(t *testing.T) {
 	app, server, _, user := testApp(t)
 	ctx := context.Background()
 	digest, _ := bcrypt.GenerateFromPassword([]byte("correct horse"), bcrypt.MinCost)
-	if err := app.DB.UpdateUser(ctx, user.ID, map[string]string{"password_digest": string(digest)}, nil); err != nil {
+	passwordDigest := string(digest)
+	if _, err := app.DB.UpdateUser(ctx, user.ID, user.ID, database.UserChanges{Password: &passwordDigest}); err != nil {
 		t.Fatal(err)
 	}
 	jar, _ := cookiejar.New(nil)
@@ -54,13 +57,21 @@ func TestEncryptedLoginReturnAndSessionRefresh(t *testing.T) {
 	if state["return_to_after_authenticating"] != server.URL+"/rooms/1?test=return" {
 		t.Fatal(state)
 	}
-	response = request("POST", "/session", url.Values{"email_address": {user.Email}, "password": {"correct horse"}}.Encode())
-	if response.StatusCode != 302 || response.Header.Get("Location") != server.URL+"/rooms/1?test=return" {
+	response = request(
+		"POST",
+		"/session",
+		url.Values{"email_address": {user.Email}, "password": {"correct horse"}}.Encode(),
+	)
+	if response.StatusCode != 302 ||
+		response.Header.Get("Location") != server.URL+"/rooms/1?test=return" {
 		t.Fatal(response.Status, response.Header)
 	}
 	response = request("GET", "/rooms/1", "")
 	if response.StatusCode != 200 {
 		t.Fatal(response.Status)
+	}
+	if response := request("GET", "/session/new", ""); response.StatusCode != 200 {
+		t.Fatalf("signed-in login form: %s", response.Status)
 	}
 	for _, c := range response.Cookies() {
 		if c.Name == "session_token" || c.Name == browserSessionCookie {
@@ -78,7 +89,13 @@ func TestEncryptedLoginReturnAndSessionRefresh(t *testing.T) {
 	if !refreshed {
 		t.Fatal("missing hourly cookie refresh")
 	}
-	room, err := app.DB.CreateRoom(ctx, user.ID, "Rooms::Open", "Second", nil)
+	room, err := app.DB.CreateRoom(
+		ctx,
+		user.ID,
+		"Rooms::Open",
+		&sql.NullString{String: "Second", Valid: true},
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +115,52 @@ func TestEncryptedLoginReturnAndSessionRefresh(t *testing.T) {
 	}
 }
 
+func TestSignedInLoginCanChangeUser(t *testing.T) {
+	app, server, cookie, owner := testApp(t)
+	digest, err := bcrypt.GenerateFromPassword([]byte("other password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := app.DB.CreateUser(context.Background(), owner.ID, database.UserInput{Name: "Other", Email: "other@example.test", Password: string(digest), Bio: "", Role: 0, Webhook: nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := url.Values{"email_address": {other.Email}, "password": {"other password"}}.Encode()
+	response, data := perform(
+		t,
+		server,
+		"POST",
+		"/session",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(body),
+		cookie,
+	)
+	if response.StatusCode != 302 {
+		t.Fatalf("sign in as another user: %s %s", response.Status, data)
+	}
+	var switched *http.Cookie
+	for _, c := range response.Cookies() {
+		if c.Name == "session_token" {
+			switched = c
+		}
+	}
+	if switched == nil {
+		t.Fatal("authenticated sign-in did not issue the new user's cookie")
+	}
+	response, data = perform(t, server, "GET", "/users/me/profile", "", nil, switched)
+	if response.StatusCode != 200 ||
+		!strings.Contains(
+			string(data),
+			fmt.Sprintf(`<meta name="current-user-id" content="%d">`, other.ID),
+		) {
+		t.Fatalf(
+			"subsequent request did not authenticate the new user: %s %s",
+			response.Status,
+			data,
+		)
+	}
+}
+
 func TestTransferPageHasOneCompleteAutoSubmitForm(t *testing.T) {
 	_, server, _, _ := testApp(t)
 	response, body := perform(t, server, http.MethodGet, "/session/transfers/example", "", nil, nil)
@@ -105,10 +168,12 @@ func TestTransferPageHasOneCompleteAutoSubmitForm(t *testing.T) {
 		t.Fatalf("transfer GET: %s", response.Status)
 	}
 	html := string(body)
-	if strings.Count(html, "<form ") != strings.Count(html, "</form>") || strings.Count(html, `data-controller="auto-submit"`) != 1 {
+	if strings.Count(html, "<form ") != strings.Count(html, "</form>") ||
+		strings.Count(html, `data-controller="auto-submit"`) != 1 {
 		t.Fatal("transfer response must contain one balanced auto-submit form")
 	}
-	if !regexp.MustCompile(`<form\b[^>]*data-controller="auto-submit"[^>]*>(?:\s*<input\b[^>]*>)*\s*</form>`).MatchString(html) {
+	if !regexp.MustCompile(`<form\b[^>]*data-controller="auto-submit"[^>]*>(?:\s*<input\b[^>]*>)*\s*</form>`).
+		MatchString(html) {
 		t.Fatal("transfer form must close after its hidden fields")
 	}
 	if !strings.Contains(html, `action="/session/transfers/example"`) ||

@@ -23,11 +23,6 @@ func AttachmentBlobIDs(ctx context.Context, tx *sql.Tx, condition string, args .
 	}
 	return ids, rows.Err()
 }
-func (d *DB) PurgeDetached(ids []int64) {
-	if len(ids) > 0 && d.PurgeBlobs != nil {
-		d.PurgeBlobs(ids)
-	}
-}
 func (d *DB) MessagesByCreator(ctx context.Context, user int64) ([]Message, error) {
 	rows, err := d.Read.QueryContext(ctx, messageSelect+"WHERE m.creator_id=? ORDER BY m.id", user)
 	if err != nil {

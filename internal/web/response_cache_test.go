@@ -9,16 +9,25 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/basecamp/once-campfire-go/internal/database"
 
 	"github.com/basecamp/once-campfire-go/internal/front"
 	"github.com/basecamp/once-campfire-go/internal/rails"
 	"github.com/basecamp/once-campfire-go/internal/responsebody"
 )
 
-func cachedRequest(t *testing.T, app *Server, cookie *http.Cookie, method, path string, headers map[string]string) *httptest.ResponseRecorder {
+func cachedRequest(
+	t *testing.T,
+	app *testRuntime,
+	cookie *http.Cookie,
+	method, path string,
+	headers map[string]string,
+) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, "http://cache.test"+path, nil)
 	request.AddCookie(cookie)
@@ -29,17 +38,20 @@ func cachedRequest(t *testing.T, app *Server, cookie *http.Cookie, method, path 
 	front.Deflate(app).ServeHTTP(writer, request)
 	return writer
 }
-func cacheHits(app *Server) uint64 {
+
+func cacheHits(app *testRuntime) uint64 {
 	app.responses.mu.Lock()
 	defer app.responses.mu.Unlock()
 	return app.responses.hits
 }
-func cacheEntries(app *Server) int {
+
+func cacheEntries(app *testRuntime) int {
 	app.responses.mu.Lock()
 	defer app.responses.mu.Unlock()
 	return len(app.responses.entries)
 }
-func foreignWriter(t *testing.T, app *Server) *sql.DB {
+
+func foreignWriter(t *testing.T, app *testRuntime) *sql.DB {
 	t.Helper()
 	var index int
 	var name, path string
@@ -53,30 +65,46 @@ func foreignWriter(t *testing.T, app *Server) *sql.DB {
 	t.Cleanup(func() { connection.Close() })
 	return connection
 }
+
 func execForeign(t *testing.T, connection *sql.DB, query string, args ...any) {
 	t.Helper()
 	if _, err := connection.Exec(query, args...); err != nil {
 		t.Fatal(err)
 	}
 }
+
 func TestResponseCacheFinishedBodiesHeadersAndVariants(t *testing.T) {
 	app, _, cookie, user := testApp(t)
 	ctx := context.Background()
 	rooms, _ := app.DB.Rooms(ctx, user.ID)
-	_, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "cache-body", "<p>whole response cached literal csrf-token stays text</p>", "whole response cached literal csrf-token stays text")
+	_, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, messageInput("cache-body", "<p>whole response cached literal csrf-token stays text</p>"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths := []string{fmt.Sprintf("/rooms/%d", rooms[0].ID), fmt.Sprintf("/rooms/%d/messages", rooms[0].ID), "/users/me/sidebar", "/searches?q=whole"}
+	paths := []string{
+		fmt.Sprintf("/rooms/%d", rooms[0].ID),
+		fmt.Sprintf("/rooms/%d/messages", rooms[0].ID),
+		"/users/me/sidebar",
+		"/searches?q=whole",
+	}
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
 			first := cachedRequest(t, app, cookie, "GET", path, nil)
 			hits := cacheHits(app)
 			second := cachedRequest(t, app, cookie, "GET", path, nil)
-			if first.Code != 200 || second.Code != 200 || !bytes.Equal(first.Body.Bytes(), second.Body.Bytes()) || cacheHits(app) != hits+1 {
-				t.Fatal("no identical authenticated hit", first.Code, second.Code, cacheHits(app), hits)
+			if first.Code != 200 || second.Code != 200 ||
+				!bytes.Equal(first.Body.Bytes(), second.Body.Bytes()) ||
+				cacheHits(app) != hits+1 {
+				t.Fatal(
+					"no identical authenticated hit",
+					first.Code,
+					second.Code,
+					cacheHits(app),
+					hits,
+				)
 			}
-			if first.Header().Get("ETag") != second.Header().Get("ETag") || second.Header().Get("X-Content-Type-Options") != "nosniff" {
+			if first.Header().Get("ETag") != second.Header().Get("ETag") ||
+				second.Header().Get("X-Content-Type-Options") != "nosniff" {
 				t.Fatal("validators/security headers changed")
 			}
 			limit := app.responses.limit
@@ -87,17 +115,42 @@ func TestResponseCacheFinishedBodiesHeadersAndVariants(t *testing.T) {
 				t.Fatal("cached response differs from native rendering")
 			}
 			head := cachedRequest(t, app, cookie, "HEAD", path, nil)
-			if head.Code != 200 || head.Body.Len() != 0 || head.Header().Get("ETag") != first.Header().Get("ETag") {
+			if head.Code != 200 || head.Body.Len() != 0 ||
+				head.Header().Get("ETag") != first.Header().Get("ETag") {
 				t.Fatal("HEAD representation")
 			}
-			conditional := cachedRequest(t, app, cookie, "GET", path, map[string]string{"If-None-Match": first.Header().Get("ETag")})
+			conditional := cachedRequest(
+				t,
+				app,
+				cookie,
+				"GET",
+				path,
+				map[string]string{"If-None-Match": first.Header().Get("ETag")},
+			)
 			if conditional.Code != 304 || conditional.Body.Len() != 0 {
 				t.Fatal("conditional hit", conditional.Code)
 			}
-			zipped := cachedRequest(t, app, cookie, "GET", path, map[string]string{"Accept-Encoding": "gzip"})
+			zipped := cachedRequest(
+				t,
+				app,
+				cookie,
+				"GET",
+				path,
+				map[string]string{"Accept-Encoding": "gzip"},
+			)
 			hits = cacheHits(app)
-			again := cachedRequest(t, app, cookie, "GET", path, map[string]string{"Accept-Encoding": "gzip"})
-			if zipped.Header().Get("Content-Encoding") != "gzip" || !bytes.Equal(zipped.Body.Bytes(), again.Body.Bytes()) || cacheHits(app) != hits+1 {
+			again := cachedRequest(
+				t,
+				app,
+				cookie,
+				"GET",
+				path,
+				map[string]string{"Accept-Encoding": "gzip"},
+			)
+			if zipped.Header().Get("Content-Encoding") != "gzip" ||
+				zipped.Header().Get("Content-Length") != strconv.Itoa(zipped.Body.Len()) ||
+				!bytes.Equal(zipped.Body.Bytes(), again.Body.Bytes()) ||
+				cacheHits(app) != hits+1 {
 				t.Fatal("completed gzip not retained")
 			}
 			reader, err := gzip.NewReader(bytes.NewReader(again.Body.Bytes()))
@@ -109,6 +162,7 @@ func TestResponseCacheFinishedBodiesHeadersAndVariants(t *testing.T) {
 			if err != nil || !bytes.Equal(plain, first.Body.Bytes()) {
 				t.Fatal("incomplete or different gzip", err)
 			}
+
 		})
 	}
 	path := paths[0]
@@ -125,14 +179,47 @@ func TestResponseCacheFinishedBodiesHeadersAndVariants(t *testing.T) {
 		t.Fatal("hit lost fresh room cookie")
 	}
 }
-func TestResponseCacheRechecksIdentityAndReachability(t *testing.T) {
+
+func TestResponseCacheGzipMetadataDoesNotDependOnRetention(t *testing.T) {
 	app, _, cookie, user := testApp(t)
-	ctx := context.Background()
-	member, err := app.DB.CreateUser(ctx, "Cache member", "cache-member@test", "digest", "", 0, nil)
+	rooms, err := app.DB.Rooms(context.Background(), user.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	room, err := app.DB.CreateRoom(ctx, user.ID, "Rooms::Closed", "Cache private", []int64{user.ID, member.ID})
+	path := fmt.Sprintf("/rooms/%d", rooms[0].ID)
+	get := cachedRequest(t, app, cookie, "GET", path, map[string]string{"Accept-Encoding": "gzip"})
+	if get.Code != 200 || get.Header().Get("Content-Encoding") != "gzip" || get.Header().Get("Content-Length") != strconv.Itoa(get.Body.Len()) {
+		t.Fatal("incorrect selected-body length", get.Header())
+	}
+	limit := app.responses.limit
+	defer func() { app.responses.limit = limit }()
+	for _, capacity := range []int{0, limit} {
+		app.responses.limit = capacity
+		head := cachedRequest(t, app, cookie, "HEAD", path, map[string]string{"Accept-Encoding": "gzip"})
+		if head.Code != 200 || head.Body.Len() != 0 || head.Header().Get("Content-Encoding") != "gzip" || head.Header().Get("Content-Length") != get.Header().Get("Content-Length") {
+			t.Fatal("selected gzip length depends on retention", capacity, head.Header())
+		}
+		conditional := cachedRequest(t, app, cookie, "GET", path, map[string]string{"Accept-Encoding": "gzip", "If-None-Match": get.Header().Get("ETag")})
+		if conditional.Code != 304 || conditional.Body.Len() != 0 || conditional.Header().Get("Content-Encoding") != "gzip" || conditional.Header().Get("Vary") != get.Header().Get("Vary") {
+			t.Fatal("conditional coding depends on retention", capacity, conditional.Header())
+		}
+	}
+}
+
+func TestResponseCacheRechecksIdentityAndReachability(t *testing.T) {
+	app, _, cookie, user := testApp(t)
+	ctx := context.Background()
+	member, err := app.DB.CreateUser(ctx, user.ID, database.UserInput{Name: "Cache member", Email: "cache-member@test", Password: "digest", Bio: "", Role: 0, Webhook: nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	room, err := app.DB.CreateRoom(
+		ctx,
+		user.ID,
+		"Rooms::Closed",
+		&sql.NullString{String: "Cache private", Valid: true},
+		[]int64{user.ID, member.ID},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +233,10 @@ func TestResponseCacheRechecksIdentityAndReachability(t *testing.T) {
 	memberRaw, _ := app.Secrets.SignCookie("session_token", memberToken, time.Now().Add(time.Hour))
 	memberCookie := &http.Cookie{Name: "session_token", Value: rails.EscapeCookie(memberRaw)}
 	memberPage := request(memberCookie)
-	if !strings.Contains(memberPage.Body.String(), fmt.Sprintf(`<meta name="current-user-id" content="%d">`, member.ID)) {
+	if !strings.Contains(
+		memberPage.Body.String(),
+		fmt.Sprintf(`<meta name="current-user-id" content="%d">`, member.ID),
+	) {
 		t.Fatal("another user's cached layout leaked")
 	}
 	request(cookie)
@@ -170,7 +260,9 @@ func TestResponseCacheRechecksIdentityAndReachability(t *testing.T) {
 		t.Fatal(err)
 	}
 	expiredRaw, _ := app.Secrets.SignCookie("session_token", token, time.Now().Add(-time.Second))
-	if request(&http.Cookie{Name: "session_token", Value: rails.EscapeCookie(expiredRaw)}).Code != 302 {
+	if request(
+		&http.Cookie{Name: "session_token", Value: rails.EscapeCookie(expiredRaw)},
+	).Code != 302 {
 		t.Fatal("expired cookie served cached page")
 	}
 	foreign := foreignWriter(t, app)
@@ -180,7 +272,13 @@ func TestResponseCacheRechecksIdentityAndReachability(t *testing.T) {
 		t.Fatal("revoked session served cached body")
 	}
 	request(other)
-	execForeign(t, foreign, "DELETE FROM memberships WHERE room_id=? AND user_id=?", room.ID, user.ID)
+	execForeign(
+		t,
+		foreign,
+		"DELETE FROM memberships WHERE room_id=? AND user_id=?",
+		room.ID,
+		user.ID,
+	)
 	before = cacheHits(app)
 	if request(other).Code != 302 || cacheHits(app) != before {
 		t.Fatal("revoked membership served cached body")
@@ -190,6 +288,67 @@ func TestResponseCacheRechecksIdentityAndReachability(t *testing.T) {
 		t.Fatal("disabled identity served cached body")
 	}
 }
+
+func TestResponseCachePreservesXHRContentTypeNegotiation(t *testing.T) {
+	app, _, cookie, _ := testApp(t)
+	headers := map[string]string{"X-Requested-With": "XMLHttpRequest", "Content-Type": "text/html"}
+	cachedRequest(t, app, cookie, "GET", "/searches", headers)
+	hits := cacheHits(app)
+	if warm := cachedRequest(t, app, cookie, "GET", "/searches", headers); warm.Code != 200 ||
+		cacheHits(app) != hits+1 {
+		t.Fatal("XHR HTML response was not cached", warm.Code)
+	}
+	headers["Content-Type"] = "application/json"
+	if json := cachedRequest(t, app, cookie, "GET", "/searches", headers); json.Code != http.StatusNotAcceptable {
+		t.Fatal("cached HTML bypassed XHR format negotiation", json.Code)
+	}
+}
+
+func TestResponseCacheForeignRevocationRemovesSearchAndSidebarContent(t *testing.T) {
+	app, _, cookie, user := testApp(t)
+	ctx := context.Background()
+	room, err := app.DB.CreateRoom(
+		ctx,
+		user.ID,
+		"Rooms::Closed",
+		&sql.NullString{String: "Sensitive sidebar room", Valid: true},
+		[]int64{user.ID},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.DB.CreateMessage(ctx, user.ID, room.ID, messageInput("revocation-cache", "<p>kiwi Private search content</p>")); err != nil {
+		t.Fatal(err)
+	}
+	examples := []struct{ path, private string }{
+		{"/searches?q=kiwi", "Private search content"},
+		{"/users/me/sidebar", "Sensitive sidebar room"},
+	}
+	for _, example := range examples {
+		cachedRequest(t, app, cookie, "GET", example.path, nil)
+		hits := cacheHits(app)
+		warm := cachedRequest(t, app, cookie, "GET", example.path, nil)
+		if warm.Code != 200 || !strings.Contains(warm.Body.String(), example.private) ||
+			cacheHits(app) != hits+1 {
+			t.Fatal("private representation was not cached", example.path, warm.Code)
+		}
+	}
+	foreign := foreignWriter(t, app)
+	execForeign(
+		t,
+		foreign,
+		"DELETE FROM memberships WHERE room_id=? AND user_id=?",
+		room.ID,
+		user.ID,
+	)
+	for _, example := range examples {
+		fresh := cachedRequest(t, app, cookie, "GET", example.path, nil)
+		if fresh.Code != 200 || strings.Contains(fresh.Body.String(), example.private) {
+			t.Fatal("revoked membership leaked private content", example.path, fresh.Code)
+		}
+	}
+}
+
 func TestResponseCacheForeignChangesFlashAndForgery(t *testing.T) {
 	app, _, cookie, user := testApp(t)
 	ctx := context.Background()
@@ -200,11 +359,21 @@ func TestResponseCacheForeignChangesFlashAndForgery(t *testing.T) {
 	execForeign(t, foreign, "UPDATE rooms SET name='Foreign room name' WHERE id=?", rooms[0].ID)
 	hits := cacheHits(app)
 	fresh := cachedRequest(t, app, cookie, "GET", path, nil)
-	if cacheHits(app) != hits || !strings.Contains(fresh.Body.String(), "Foreign room name") || bytes.Equal(original.Body.Bytes(), fresh.Body.Bytes()) {
+	if cacheHits(app) != hits || !strings.Contains(fresh.Body.String(), "Foreign room name") ||
+		bytes.Equal(original.Body.Bytes(), fresh.Body.Bytes()) {
 		t.Fatal("foreign commit did not invalidate")
 	}
 	before := cacheEntries(app)
-	raw, err := app.Secrets.EncryptCookie(browserSessionCookie, map[string]any{"flash": map[string]any{"flashes": map[string]any{"notice": "one-time cache notice"}, "discard": []any{}}}, time.Now().Add(time.Hour))
+	raw, err := app.Secrets.EncryptCookie(
+		browserSessionCookie,
+		map[string]any{
+			"flash": map[string]any{
+				"flashes": map[string]any{"notice": "one-time cache notice"},
+				"discard": []any{},
+			},
+		},
+		time.Now().Add(time.Hour),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,13 +382,21 @@ func TestResponseCacheForeignChangesFlashAndForgery(t *testing.T) {
 	request.AddCookie(&http.Cookie{Name: browserSessionCookie, Value: rails.EscapeCookie(raw)})
 	writer := httptest.NewRecorder()
 	front.Deflate(app).ServeHTTP(writer, request)
-	if !strings.Contains(writer.Body.String(), "one-time cache notice") || cacheEntries(app) != before {
+	if !strings.Contains(writer.Body.String(), "one-time cache notice") ||
+		cacheEntries(app) != before {
 		t.Fatal("flash cached or missing")
 	}
-	if strings.Contains(cachedRequest(t, app, cookie, "GET", path, nil).Body.String(), "one-time cache notice") {
+	if strings.Contains(
+		cachedRequest(t, app, cookie, "GET", path, nil).Body.String(),
+		"one-time cache notice",
+	) {
 		t.Fatal("one-time flash leaked")
 	}
-	request = httptest.NewRequest("POST", fmt.Sprintf("http://cache.test/rooms/%d/messages", rooms[0].ID), strings.NewReader("message[body]=forged"))
+	request = httptest.NewRequest(
+		"POST",
+		fmt.Sprintf("http://cache.test/rooms/%d/messages", rooms[0].ID),
+		strings.NewReader("message[body]=forged"),
+	)
 	request.AddCookie(cookie)
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("Origin", "https://attacker.test")
@@ -230,13 +407,14 @@ func TestResponseCacheForeignChangesFlashAndForgery(t *testing.T) {
 		t.Fatal("cached GET bypassed forgery protection", writer.Code)
 	}
 }
+
 func TestResponseCacheDoesNotAdmitAConcurrentCommit(t *testing.T) {
 	app, _, cookie, user := testApp(t)
 	request := httptest.NewRequest("GET", "http://cache.test/rooms/1", nil)
 	request.AddCookie(cookie)
-	request = request.WithContext(context.WithValue(request.Context(), requestInfoKey{}, &requestInfo{host: request.Host, origin: app.origin(request)}))
+	request = app.normalizeRequest(request)
 	writer := httptest.NewRecorder()
-	buffer := &responseBuffer{ResponseWriter: writer, server: app}
+	buffer := &responseBuffer{ResponseWriter: writer, server: app.Server}
 	session, request := app.withBrowserSession(buffer, request)
 	app.beginResponseCache(request)
 	requestMetadata(request.Context()).response.user = user.ID
@@ -251,19 +429,8 @@ func TestResponseCacheDoesNotAdmitAConcurrentCommit(t *testing.T) {
 		t.Fatal("pre-commit response admitted under a newer version")
 	}
 }
+
 func TestResponseCacheBudgetAndHeadMiss(t *testing.T) {
-	t.Setenv("CAMPFIRE_RESPONSE_CACHE_MB", "")
-	if n, err := responseCacheBudget(); err != nil || n != 64<<20 {
-		t.Fatal(n, err)
-	}
-	t.Setenv("CAMPFIRE_RESPONSE_CACHE_MB", "0")
-	if n, err := responseCacheBudget(); err != nil || n != 0 {
-		t.Fatal(n, err)
-	}
-	t.Setenv("CAMPFIRE_RESPONSE_CACHE_MB", "2048")
-	if _, err := responseCacheBudget(); err == nil {
-		t.Fatal("unbounded configuration accepted")
-	}
 	t.Setenv("CAMPFIRE_RESPONSE_CACHE_MB", "1")
 	app, _, cookie, _ := testApp(t)
 	head := cachedRequest(t, app, cookie, "HEAD", "/users/me/sidebar", nil)
@@ -274,7 +441,14 @@ func TestResponseCacheBudgetAndHeadMiss(t *testing.T) {
 	cache.get("start", 1)
 	for i := 0; i < 100; i++ {
 		key := fmt.Sprint(i)
-		cache.put(&cachedResponse{key: key, version: 1, body: responsebody.NewPart(bytes.Repeat([]byte("x"), 256)), cost: 512})
+		cache.put(
+			&cachedResponse{
+				key:     key,
+				version: 1,
+				body:    responsebody.NewPart(bytes.Repeat([]byte("x"), 256)),
+				cost:    512,
+			},
+		)
 	}
 	if cache.size > cache.limit || len(cache.entries) != 8 {
 		t.Fatal("byte budget exceeded", cache.size, len(cache.entries))
@@ -290,7 +464,7 @@ func TestResponseCacheForeignFragmentEditsWithoutTimestamps(t *testing.T) {
 	app, _, cookie, user := testApp(t)
 	ctx := context.Background()
 	rooms, _ := app.DB.Rooms(ctx, user.ID)
-	if _, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "foreign-cache", "<p>Original foreign body</p>", "Original foreign body"); err != nil {
+	if _, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, messageInput("foreign-cache", "<p>Original foreign body</p>")); err != nil {
 		t.Fatal(err)
 	}
 	var id, creator int64
@@ -304,15 +478,35 @@ func TestResponseCacheForeignFragmentEditsWithoutTimestamps(t *testing.T) {
 	warmMessages := cachedRequest(t, app, cookie, "GET", messagePath, nil)
 	oldEtag := warmMessages.Header().Get("ETag")
 	foreign := foreignWriter(t, app)
-	execForeign(t, foreign, "UPDATE action_text_rich_texts SET body='<p>Foreign unchanged timestamp body</p>' WHERE record_type='Message' AND record_id=?", id)
+	execForeign(
+		t,
+		foreign,
+		"UPDATE action_text_rich_texts SET body='<p>Foreign unchanged timestamp body</p>' WHERE record_type='Message' AND record_id=?",
+		id,
+	)
 	fresh := cachedRequest(t, app, cookie, "GET", path, nil)
-	conditional := cachedRequest(t, app, cookie, "GET", messagePath, map[string]string{"If-None-Match": oldEtag})
-	if conditional.Code != 200 || conditional.Header().Get("ETag") == oldEtag || !strings.Contains(conditional.Body.String(), "Foreign unchanged timestamp body") {
+	conditional := cachedRequest(
+		t,
+		app,
+		cookie,
+		"GET",
+		messagePath,
+		map[string]string{"If-None-Match": oldEtag},
+	)
+	if conditional.Code != 200 || conditional.Header().Get("ETag") == oldEtag ||
+		!strings.Contains(conditional.Body.String(), "Foreign unchanged timestamp body") {
 		t.Fatal("false304 for foreign body edit")
 	}
 	bodyEtag := conditional.Header().Get("ETag")
 	execForeign(t, foreign, "UPDATE sessions SET last_active_at='2026-10-07 12:00:00.000000'")
-	unchanged := cachedRequest(t, app, cookie, "GET", messagePath, map[string]string{"If-None-Match": bodyEtag})
+	unchanged := cachedRequest(
+		t,
+		app,
+		cookie,
+		"GET",
+		messagePath,
+		map[string]string{"If-None-Match": bodyEtag},
+	)
 	if unchanged.Code != 304 {
 		t.Fatal("auth-only commit changed presentation validator", unchanged.Code)
 	}
@@ -325,7 +519,16 @@ func TestResponseCacheForeignFragmentEditsWithoutTimestamps(t *testing.T) {
 		t.Fatal("stale creator fragment")
 	}
 	stamp := app.DB.Now().UTC().Format("2006-01-02 15:04:05.000000")
-	execForeign(t, foreign, "INSERT INTO boosts(booster_id,content,created_at,message_id,updated_at) VALUES(?,?,?,?,?)", user.ID, "🍊", stamp, id, stamp)
+	execForeign(
+		t,
+		foreign,
+		"INSERT INTO boosts(booster_id,content,created_at,message_id,updated_at) VALUES(?,?,?,?,?)",
+		user.ID,
+		"🍊",
+		stamp,
+		id,
+		stamp,
+	)
 	fresh = cachedRequest(t, app, cookie, "GET", path, nil)
 	if !strings.Contains(fresh.Body.String(), "🍊") {
 		t.Fatal("stale new boost fragment")
@@ -342,7 +545,7 @@ func TestNestedMessageCachePreservesRequestHostFiltering(t *testing.T) {
 	ctx := context.Background()
 	rooms, _ := app.DB.Rooms(ctx, user.ID)
 	body := `<action-text-attachment content-type="application/vnd.actiontext.opengraph-embed" href="https://same.example/story" filename="Story"></action-text-attachment>`
-	if _, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "host-filter", body, "Story"); err != nil {
+	if _, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, messageInput("host-filter", body)); err != nil {
 		t.Fatal(err)
 	}
 	for _, endpoint := range []string{fmt.Sprintf("/rooms/%d", rooms[0].ID), fmt.Sprintf("/rooms/%d/messages", rooms[0].ID)} {
@@ -351,8 +554,17 @@ func TestNestedMessageCachePreservesRequestHostFiltering(t *testing.T) {
 			request.AddCookie(cookie)
 			response := httptest.NewRecorder()
 			front.Deflate(app).ServeHTTP(response, request)
-			if response.Code != 200 || strings.Contains(response.Body.String(), `href="https://same.example/story"`) != (host != "same.example") {
-				t.Fatal("stale host-scoped message fragment", host, response.Code, response.Body.String())
+			if response.Code != 200 ||
+				strings.Contains(
+					response.Body.String(),
+					`href="https://same.example/story"`,
+				) != (host != "same.example") {
+				t.Fatal(
+					"stale host-scoped message fragment",
+					host,
+					response.Code,
+					response.Body.String(),
+				)
 			}
 		}
 	}

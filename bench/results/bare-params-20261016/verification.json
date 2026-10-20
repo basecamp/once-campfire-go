@@ -1,0 +1,68 @@
+{
+  "scope": "Double-check and bare/null scalar preservation, no performance claim",
+  "baseline": "0e65a86, runtime equivalent to PRa441e6f",
+  "baseline_existing_http_passed": 30,
+  "check": "bin/check passed on final candidate",
+  "regression": "Real bot-key old source and executable lose raw body/FTS; pinned Rust passes; candidate passes",
+  "http_passed": 30,
+  "http_total": 30,
+  "binaries": {
+    "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+    "go": "6114e83f4c2eb614d9c365e71758ab7d5f5272afeb9302298a62459969c5e08d"
+  },
+  "browser": {
+    "result": "PASS: setup, two-tab live messaging, duplicate suppression, and stored-markup safety, copying message permalinks, editing, search, profile/account updates, QR codes, live room creation/renaming, bots, custom styles, session transfers, joining, and autocomplete-started direct pings in Chromium.",
+    "shared_commit": "ec02debb3e44f40b8778a6a42db3c4515b2f9eaf",
+    "smoke_sha256": "1e2de0a95a6835b73f15f0133da90900cdae8523ddd950df3f17ffd23805532b",
+    "method": "Pristine sharedHEAD exported without modifying dirty sharedcheckout; fresh disposable Chromium/server state"
+  },
+  "review": "Initial independent review found bare-param loss; second read-only review found no further concrete issue in correction; parent ran checks",
+  "runtime_files": {
+    "internal/web/bots.go": "7101258af3cdfa3e499c06ca1a1581994abc2ff6476d3519446df4e15233e978",
+    "internal/web/params.go": "6430553ae2536c6734a4a7790d7613914e3fab02ce1266cb296e77655cd62df2",
+    "internal/web/server.go": "e2784d26fe713486ae0e5f82f39a80f0e7f533b24c3c2bdd61b7f528fc02910c",
+    "internal/web/structured_form.go": "255fa45c34fa0686c5ae551db399f006164405a4d019b49d49001485a054c7a0"
+  },
+  "limits": "Not proof of whole-app correctness, all malformed Rack parameters, browserplatforms, mediaoutput or native performance",
+  "pr_verification": {
+    "source_commit": "d6830277812baf91eb9eca4ed250d392d92e1008",
+    "check": "bin/check passed on actual PR branch",
+    "http_passed": 30,
+    "http_total": 30,
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "a361692d124a8d06a962a61b49e637da868d188480e541b7ab4546cbb0cf36b9"
+    },
+    "source_equivalence": "cmd/internal/assets/third_party/go.mod/go.sum match retained verified source",
+    "browser": {
+      "pristine": {
+        "result": "failed at duplicate-or-missing-message assertion",
+        "private_log_sha256": "f8edb3bda826f3e1cdbe5b98537495829382124dc129ec7e4376dba06dc9e145",
+        "failed_instant_count_captured": false
+      },
+      "awaited_diagnostic": {
+        "result": "passed",
+        "lines": [
+          "PERSISTED_ECHO_BEFORE 3",
+          "PERSISTED_ECHO_AFTER 3",
+          "PERSISTED_ECHO_BEFORE 3",
+          "PERSISTED_ECHO_AFTER 3",
+          "PASS: setup, two-tab live messaging, duplicate suppression, and stored-markup safety, copying message permalinks, editing, search, profile/account updates, QR codes, live room creation/renaming, bots, custom styles, session transfers, joining, and autocomplete-started direct pings in Chromium."
+        ],
+        "smoke_sha256": "fc92f039b016e4c38af8b1c6c968e2bd31a78bc17dade837b864b4a5c8c5d67f",
+        "change": "Added wait for persisted message count>=3, plus before/after diagnostics; existing exact3 assertion unchanged",
+        "limits": "Known sender-echo synchronization gap supports harness-race interpretation; this run observed3before/after and does not independently establish the failed instant count or its cause. No repeat-to-win."
+      }
+    }
+  },
+  "browser_count_followup": {
+    "runtime_pr": "41a8c2b",
+    "unforced_original_assertions": [
+      "pass",
+      "pass",
+      "fail"
+    ],
+    "controlled_render_gate": "Captured2persisted+1pending sender,3persistedreceiver; both3uniqueafterrendercomplete",
+    "scope": "Three-message phase diagnostic; sharedcheckout/productionunchanged; originalfailedinstantnotretroactivelycaptured"
+  }
+}

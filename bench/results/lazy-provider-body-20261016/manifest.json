@@ -1,0 +1,64 @@
+{
+  "artifacts": [
+    {
+      "path": "baseline-regression.log.gz",
+      "sha256": "d729a22fdee691393ff2c0f181956991d60c04ed003f132258af476d867e43be",
+      "bytes": 245,
+      "uncompressed_bytes": 576
+    },
+    {
+      "path": "baseline-application-regression.txt.gz",
+      "sha256": "a18a8188b7cec15c28cb60b6705ebd8a8bdcd24d790230452156f82e3bd7bd5b",
+      "bytes": 262,
+      "uncompressed_bytes": 341
+    },
+    {
+      "path": "focused-tests.log.gz",
+      "sha256": "c5760dd7df6215179c48558572c07faaeadf2e3f641454b84006497060f0849b",
+      "bytes": 102,
+      "uncompressed_bytes": 141
+    },
+    {
+      "path": "check.log.gz",
+      "sha256": "82483b813c1ec3f110c24711060d30d33b5c689bc1b9f81f6c8f5a0e3288aaff",
+      "bytes": 418,
+      "uncompressed_bytes": 2096
+    },
+    {
+      "path": "linux-initial-environment-failure.txt.gz",
+      "sha256": "069f4a6d09539080168ba5eaf6b7966667b0b9f66e86bf8b348e1e47d498a5cb",
+      "bytes": 253,
+      "uncompressed_bytes": 482
+    },
+    {
+      "path": "linux-baseline-check.log.gz",
+      "sha256": "80ba619c13690367f62c21bf9b07acaee83d4afb4b3fafe1219d1cf6b501e82e",
+      "bytes": 497,
+      "uncompressed_bytes": 2182
+    },
+    {
+      "path": "linux-candidate-check.log.gz",
+      "sha256": "c473e09e46ce66b197816fbec160cf7849dab6630afa96c4157612bf37e70f2c",
+      "bytes": 488,
+      "uncompressed_bytes": 2188
+    },
+    {
+      "path": "http-report.json.gz",
+      "sha256": "1b9e4aade7725d8d9e94a953987404a5a620572eac19c39f581d7e3858c6fc32",
+      "bytes": 825,
+      "uncompressed_bytes": 8369
+    },
+    {
+      "path": "pr-check.log.gz",
+      "sha256": "0a05b4892ac2c5252ec4207082f4e73a1412f25c426497635f2625e7431feb92",
+      "bytes": 418,
+      "uncompressed_bytes": 2096
+    },
+    {
+      "path": "pr-http-report.json.gz",
+      "sha256": "9d3b79cb07e2db99cf37411d6a99c9d5d354532e792dec451a135d98794008a5",
+      "bytes": 826,
+      "uncompressed_bytes": 8369
+    }
+  ]
+}

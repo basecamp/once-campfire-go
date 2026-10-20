@@ -7,12 +7,14 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/basecamp/once-campfire-go/internal/database"
 )
 
 func TestMentionAutocompleteAndRendering(t *testing.T) {
 	app, server, cookie, owner := testApp(t)
 	ctx := context.Background()
-	_, err := app.DB.CreateUser(ctx, "Other <person>", "other@test", "digest", "", 0, nil)
+	_, err := app.DB.CreateUser(ctx, owner.ID, database.UserInput{Name: "Other <person>", Email: "other@test", Password: "digest", Bio: "", Role: 0, Webhook: nil})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +37,7 @@ func TestMentionAutocompleteAndRendering(t *testing.T) {
 	if response.StatusCode != 200 {
 		t.Fatalf("%d %s", response.StatusCode, raw)
 	}
-	messages, err := app.DB.Messages(ctx, room.ID, 0)
+	messages, err := messageRecords(app.DB, ctx, room.ID, 0)
 	if err != nil || len(messages) != 1 {
 		t.Fatal(err, messages)
 	}
@@ -43,9 +45,13 @@ func TestMentionAutocompleteAndRendering(t *testing.T) {
 	if response.StatusCode != 200 || !strings.Contains(string(raw), `class="mention"`) {
 		t.Fatalf("%d %s", response.StatusCode, raw)
 	}
-	result := app.richText(ctx, messages[0].Body)
-	if result.Plain != "Hi @Owner" || len(result.Mentioned) != 1 || result.Mentioned[0] != owner.ID {
-		t.Fatal(result)
+	result, err := app.ContentQueries.Content(ctx, app.presentationFacts(ctx), messages[0].Body)
+	if err != nil || result.Plain != "Hi @Owner" {
+		t.Fatal(result, err)
+	}
+	ids, err := app.ContentQueries.MentionedIDs(ctx, app.presentationFacts(ctx), messages[0].Body)
+	if err != nil || len(ids) != 1 || ids[0] != owner.ID {
+		t.Fatal(ids, err)
 	}
 	response, raw = perform(t, server, "GET", "/autocompletable/users?filter=Other", "", nil, cookie)
 	if response.StatusCode != 200 || !strings.Contains(string(raw), `<lexxy-prompt-item`) || strings.Contains(string(raw), `Other <person>`) {
@@ -57,9 +63,9 @@ func TestMentionAutocompleteAndRendering(t *testing.T) {
 	}
 }
 func TestManifestAndServiceWorker(t *testing.T) {
-	app, server, _, _ := testApp(t)
+	app, server, _, owner := testApp(t)
 	name := `A "quoted" \\ name`
-	if err := app.DB.UpdateAccount(context.Background(), &name, nil, nil, false); err != nil {
+	if _, err := app.DB.UpdateAccount(context.Background(), owner.ID, database.AccountInput{Name: &name}); err != nil {
 		t.Fatal(err)
 	}
 	response, raw := perform(t, server, "GET", "/webmanifest.json", "", nil, nil)

@@ -13,9 +13,9 @@ func TestIndependentQueuesAndShutdown(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	fast := make(chan struct{})
-	r.Enqueue("slow", func(context.Context) error { close(entered); <-release; return nil })
+	r.Enqueue(testTask{queue: "slow", run: func(context.Context) error { close(entered); <-release; return nil }})
 	<-entered
-	r.Enqueue("fast", func(context.Context) error { close(fast); return nil })
+	r.Enqueue(testTask{queue: "fast", run: func(context.Context) error { close(fast); return nil }})
 	select {
 	case <-fast:
 	case <-time.After(time.Second):
@@ -23,7 +23,7 @@ func TestIndependentQueuesAndShutdown(t *testing.T) {
 	}
 	close(release)
 	r.Close(time.Second)
-	if r.Enqueue("fast", func(context.Context) error { return nil }) {
+	if admission := r.Enqueue(testTask{queue: "fast", run: func(context.Context) error { return nil }}); admission != Closed {
 		t.Fatal("accepted work after shutdown")
 	}
 }
@@ -38,13 +38,13 @@ func TestConcurrentShutdown(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				r := New(1, "work")
 				release := make(chan struct{})
-				r.Enqueue("work", func(ctx context.Context) error {
+				r.Enqueue(testTask{queue: "work", run: func(ctx context.Context) error {
 					select {
 					case <-release:
 					case <-ctx.Done():
 					}
 					return nil
-				})
+				}})
 				var closers sync.WaitGroup
 				for range 2 {
 					closers.Go(func() { r.Close(time.Minute) })
@@ -63,12 +63,42 @@ func TestConcurrentShutdown(t *testing.T) {
 				if elapsed := time.Since(start); elapsed != want {
 					t.Fatalf("shutdown took %s; want %s", elapsed, want)
 				}
-				if r.Enqueue("work", func(context.Context) error { return nil }) {
+				if admission := r.Enqueue(testTask{queue: "work", run: func(context.Context) error { return nil }}); admission != Closed {
 					t.Fatal("accepted work after concurrent shutdown")
 				}
 			})
 		})
 	}
+}
+
+func TestShutdownJoinsCancelledWorkForEveryCloser(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := New(1, "work")
+		cancelled := make(chan struct{})
+		release := make(chan struct{})
+		defer close(release)
+		r.Enqueue(testTask{queue: "work", run: func(ctx context.Context) error {
+			<-ctx.Done()
+			close(cancelled)
+			<-release // Cancellation cannot preempt every owned operation.
+			return nil
+		}})
+		var closers sync.WaitGroup
+		returned := make(chan struct{}, 2)
+		for range 2 {
+			closers.Go(func() { r.Close(time.Second); returned <- struct{}{} })
+		}
+		<-cancelled
+		synctest.Wait()
+		select {
+		case <-returned:
+			t.Fatal("shutdown returned while cancelled work still owned resources")
+		default:
+		}
+		// Release without closing twice; the deferred close also handles failures.
+		release <- struct{}{}
+		closers.Wait()
+	})
 }
 
 func TestShutdownDrainsDependentJobs(t *testing.T) {
@@ -77,14 +107,14 @@ func TestShutdownDrainsDependentJobs(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan struct{})
 	child := make(chan struct{})
-	r.Enqueue("parent", func(context.Context) error {
+	r.Enqueue(testTask{queue: "parent", run: func(context.Context) error {
 		close(entered)
 		<-release
-		if !r.Enqueue("child", func(context.Context) error { close(child); return nil }) {
+		if admission := r.Enqueue(testTask{queue: "child", run: func(context.Context) error { close(child); return nil }}); admission != Accepted {
 			t.Error("dependent job dropped")
 		}
 		return nil
-	})
+	}})
 	<-entered
 	go func() { r.Close(time.Second); close(done) }()
 	close(release)
@@ -94,4 +124,45 @@ func TestShutdownDrainsDependentJobs(t *testing.T) {
 	default:
 		t.Fatal("dependent job did not finish")
 	}
+}
+
+type testTask struct {
+	queue string
+	run   func(context.Context) error
+}
+
+func (task testTask) Queue() string                 { return task.queue }
+func (task testTask) Run(ctx context.Context) error { return task.run(ctx) }
+
+// Saturation must distinguish rejection from admission, and cancelled queued
+// payloads must not remain retained after all workers have been joined.
+func TestAdmissionAndCancelledQueueRetention(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := New(1, "work")
+		entered := make(chan struct{})
+		if got := r.Enqueue(testTask{queue: "work", run: func(ctx context.Context) error {
+			close(entered)
+			<-ctx.Done()
+			return nil
+		}}); got != Accepted {
+			t.Fatal(got)
+		}
+		<-entered
+		queued := testTask{queue: "work", run: func(context.Context) error { return nil }}
+		for range 1024 {
+			if got := r.Enqueue(queued); got != Accepted {
+				t.Fatal(got)
+			}
+		}
+		if got := r.Enqueue(queued); got != Full {
+			t.Fatalf("saturation: %s", got)
+		}
+		r.Close(time.Second)
+		if got := r.Enqueue(queued); got != Closed {
+			t.Fatalf("shutdown: %s", got)
+		}
+		if len(r.queues) != 0 || r.pending != 0 {
+			t.Fatal("cancelled queue still retains admitted tasks")
+		}
+	})
 }

@@ -1,51 +1,43 @@
 package web
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"html"
-	"html/template"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
-	"github.com/basecamp/once-campfire-go/internal/richtext"
-	"github.com/basecamp/once-campfire-go/internal/storage"
+	"github.com/basecamp/once-campfire-go/internal/presentation"
+	"github.com/basecamp/once-campfire-go/internal/rails"
 )
 
-func (s *Server) registerMessageRoutes() {
-	s.mux.HandleFunc("GET /messages", s.auth(s.messages))
-	s.mux.HandleFunc("POST /messages", s.auth(s.createMessage))
-	s.mux.HandleFunc("GET /messages/{message}", s.auth(s.showMessage))
-	s.mux.HandleFunc("GET /messages/{message}/edit", s.auth(s.editMessage))
-	s.mux.HandleFunc("PATCH /messages/{message}", s.auth(s.updateMessage))
-	s.mux.HandleFunc("PUT /messages/{message}", s.auth(s.updateMessage))
-	s.mux.HandleFunc("DELETE /messages/{message}", s.auth(s.deleteMessage))
-	s.mux.HandleFunc("GET /rooms/{id}/messages/{message}", s.auth(s.showMessage))
-	s.mux.HandleFunc("GET /rooms/{id}/messages/{message}/edit", s.auth(s.editMessage))
-	s.mux.HandleFunc("PATCH /rooms/{id}/messages/{message}", s.auth(s.updateMessage))
-	s.mux.HandleFunc("PUT /rooms/{id}/messages/{message}", s.auth(s.updateMessage))
-	s.mux.HandleFunc("DELETE /rooms/{id}/messages/{message}", s.auth(s.deleteMessage))
-	s.mux.HandleFunc("GET /messages/{message}/boosts", s.auth(s.boosts))
-	s.mux.HandleFunc("GET /messages/{message}/boosts/new", s.auth(s.newBoost))
-	s.mux.HandleFunc("POST /messages/{message}/boosts", s.auth(s.createBoost))
-	s.mux.HandleFunc("DELETE /messages/{message}/boosts/{boost}", s.auth(s.deleteBoost))
-	s.mux.HandleFunc("GET /rooms/{id}/refresh", s.auth(s.refreshRoom))
-}
 func pathInt(r *http.Request, key string) int64 {
 	id, _ := strconv.ParseInt(r.PathValue(key), 10, 64)
 	return id
 }
-func (s *Server) findMessage(r *http.Request, u database.User, administer bool) (database.Message, error) {
-	if route, _, _ := recognize(r.Method, r.URL.EscapedPath()); route != nil && strings.HasPrefix(route.Endpoint, "messages#") && roomID(r) == 0 {
+
+// Messages and boosts use different canonical capture names in the route table.
+func messageID(r *http.Request) int64 {
+	if r.PathValue("message_id") != "" {
+		return pathInt(r, "message_id")
+	}
+	return pathInt(r, "id")
+}
+
+func (s *Server) findMessage(
+	r *http.Request,
+	u database.User,
+	administer bool,
+) (database.Message, error) {
+	if route, _, _ := recognizeRequest(r); route != nil &&
+		strings.HasPrefix(route.Endpoint, "messages#") &&
+		roomID(r) == 0 {
 		return database.Message{}, sql.ErrNoRows
 	}
-	m, err := s.DB.ReachableMessage(r.Context(), u.ID, pathInt(r, "message"))
+	m, err := s.DB.ReachableMessage(r.Context(), u.ID, messageID(r))
 	if err != nil {
 		return m, err
 	}
@@ -57,201 +49,54 @@ func (s *Server) findMessage(r *http.Request, u database.User, administer bool) 
 	}
 	return m, nil
 }
-func (s *Server) messageViews(ctx context.Context, messages []database.Message) ([]messageView, error) {
-	views := viewMessages(messages)
-	if err := s.hydrateMessageViews(ctx, views); err != nil {
-		return nil, err
-	}
-	return views, nil
-}
 
-// Single-message forms consume different data from a displayed message. Keep
-// their reads fresh without rendering and retaining an unused message fragment.
-func (s *Server) messagePageViews(ctx context.Context, name string, records []database.Message) ([]messageView, error) {
-	if name != "edit-message" && name != "boosts-index" && name != "new-boost" {
-		return s.messageViews(ctx, records)
-	}
-	views := viewMessages(records)
-	for i := range views {
-		if name == "new-boost" {
-			continue
-		}
-		// Missing creators suppress attachment/boost presentation in the
-		// reference. This observation is required even by these narrow views.
-		_, err := s.DB.User(ctx, views[i].CreatorID)
-		missingCreator := errors.Is(err, sql.ErrNoRows)
-		if err != nil && !missingCreator {
-			return nil, err
-		}
-		switch name {
-		case "edit-message":
-			if !missingCreator {
-				if err := s.messageAttachment(ctx, &views[i]); err != nil {
-					return nil, err
-				}
-			}
-			if views[i].Attachment == nil {
-				views[i].Editable, _ = richtext.Editable(views[i].Body, s.richContext(ctx))
-			}
-		case "boosts-index":
-			if missingCreator {
-				continue
-			}
-			var err error
-			views[i].Boosts, err = s.DB.Boosts(ctx, views[i].ID)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	return views, nil
-}
-
-// Hydrate only uncached views in place, sharing room/creator reads across misses.
-func (s *Server) hydrateMessageViews(ctx context.Context, views []messageView) error {
-	roomNames := map[int64]string{}
-	creators := map[int64]database.User{}
-	for i := range views {
-		if views[i].Fragment != "" {
-			continue
-		}
-		name, ok := roomNames[views[i].RoomID]
-		if !ok {
-			room, err := s.DB.FindRoom(ctx, views[i].RoomID)
-			if err != nil {
-				return err
-			}
-			name = room.Name
-			if room.Type == "Rooms::Direct" {
-				view, err := s.displayRoom(ctx, room, database.User{})
-				if err != nil {
-					return err
-				}
-				name = view.Name
-			}
-			roomNames[room.ID] = name
-		}
-		creator, found := creators[views[i].CreatorID]
-		if !found {
-			var err error
-			creator, err = s.DB.User(ctx, views[i].CreatorID)
-			if errors.Is(err, sql.ErrNoRows) {
-				views[i].Fragment = unrenderableMessage
-				continue
-			}
-			if err != nil {
-				return err
-			}
-			creators[creator.ID] = creator
-		}
-		views[i].CreatorTitle = creator.Title()
-		views[i].CreatorUpdatedAt = creator.UpdatedAt
-		views[i].Permalink = messagePermalink(ctx, views[i].RoomID, views[i].ID)
-		views[i].RoomName = name
-		result, _ := richtext.Display(views[i].Body, s.richContext(ctx))
-		views[i].HTML = template.HTML(result.Presentation)
-		views[i].AllEmoji = allEmoji(result.Plain)
-		if sound := soundHTML(result.Plain); sound != "" {
-			views[i].HTML = template.HTML(sound)
-		}
-		boosts, err := s.DB.Boosts(ctx, views[i].ID)
-		if err != nil {
-			return err
-		}
-		views[i].Boosts = boosts
-		if err := s.messageAttachment(ctx, &views[i]); err != nil {
-			return err
-		}
-		key := s.fragmentKey(ctx, messageCacheKey(views[i].Message))
-		if html, ok := s.fragments.get(key); ok {
-			views[i].Fragment = html
-		} else {
-			body, err := s.messageMarkup(views[i])
-			if err != nil {
-				return err
-			}
-			views[i].Fragment = s.fragments.put(key, template.HTML(body))
-		}
-	}
-	return nil
-}
-func (s *Server) messageAttachment(ctx context.Context, view *messageView) error {
-	blob, err := s.Storage.Attached(ctx, "Message", view.ID, "attachment")
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	view.Attachment = &blob
-	view.BlobURL = s.Storage.BlobURL(blob)
-	view.DownloadURL = view.BlobURL + "?disposition=attachment"
-	view.Image = storage.Variable(blob.Type())
-	if view.Image || storage.Previewable(blob.Type()) {
-		variation := storage.Resize(1200, 800, "")
-		if storage.Previewable(blob.Type()) {
-			variation = storage.Variation{{Key: "format", Value: storage.Symbol("webp")}, {Key: "resize_to_limit", Value: []any{int64(1200), int64(800)}}}
-		}
-		view.PreviewURL, err = s.Storage.RepresentationURL(blob, variation)
-		if err != nil {
-			return err
-		}
-	}
-	view.HTML = template.HTML(attachmentHTML(blob, view.BlobURL, view.DownloadURL, view.PreviewURL))
-	return nil
-}
-
-func (s *Server) markup(name string, data any) (string, error) {
-	var b bytes.Buffer
-	err := s.templates.ExecuteTemplate(&b, name, data)
-	return b.String(), err
-}
-
-func messagePermalink(ctx context.Context, room, message int64) string {
-	var origin string
+func (s *Server) presentationFacts(ctx context.Context) presentation.Facts {
+	facts := presentation.Facts{Now: s.DB.Now()}
 	if info := requestMetadata(ctx); info != nil {
-		origin = info.origin
+		facts.Host, facts.Origin = info.host, info.origin
 	}
-	if origin == "" {
-		origin = "http://example.org"
-	}
-	return fmt.Sprintf("%s/rooms/%d/@%d", origin, room, message)
+	return facts
 }
-func stream(action, target, markup string) string {
-	if action == "remove" {
-		return fmt.Sprintf(`<turbo-stream action="remove" target="%s"></turbo-stream>`, template.HTMLEscapeString(target))
-	}
-	attr := ""
-	if action == "replace" && strings.HasPrefix(target, "presentation_message_") || action == "append" && strings.HasPrefix(target, "boosts_message_") {
-		attr = ` maintain_scroll="true"`
-	}
-	return `<turbo-stream action="` + action + `" target="` + html.EscapeString(target) + `"` + attr + `><template>` + markup + `</template></turbo-stream>`
-}
-func (s *Server) publish(room int64, markup string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	s.Cable.Publish(ctx, room, markup)
-}
+
 func writeStream(w http.ResponseWriter, markup string) {
 	w.Header().Set("Content-Type", "text/vnd.turbo-stream.html; charset=utf-8")
 	fmt.Fprint(w, markup)
 }
+
 func (s *Server) showMessage(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, false)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "show-message", 200, page{User: u, messageRecords: []database.Message{m}})
+	if respondFormat(w, r, "html") == "" {
+		return
+	}
+	views, err := s.MessageQueries.Views(r.Context(), s.presentationFacts(r.Context()), []database.Message{m})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.respondPage(w, r, "show-message", 200, page{User: u, Messages: views})
 }
+
 func (s *Server) editMessage(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, true)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "edit-message", 200, page{User: u, messageRecords: []database.Message{m}})
+	if respondFormat(w, r, "html") == "" {
+		return
+	}
+	view, err := s.MessageQueries.Edit(r.Context(), s.presentationFacts(r.Context()), m)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.respondPage(w, r, "edit-message", 200, page{User: u, Messages: []presentation.MessageView{view}})
 }
+
 func (s *Server) updateMessage(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, true)
 	if err != nil {
@@ -261,22 +106,16 @@ func (s *Server) updateMessage(w http.ResponseWriter, r *http.Request, u databas
 	if !requireMessage(w, r) {
 		return
 	}
-	m, err = s.updateMessageAttributes(r, u, m, "message[body]", "message[attachment]", nil)
+	result, err := s.updateMessageAttributes(r, u, m, "message[body]", "message[attachment]", nil)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	views, err := s.messageViews(r.Context(), []database.Message{m})
-	if err != nil {
+	m = result.Commit.Message
+	if err = s.MessagePublications.Updated(r.Context(), s.presentationFacts(r.Context()), result); err != nil {
 		s.fail(w, err)
 		return
 	}
-	markup, err := s.markup("presentation", views[0])
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	s.publish(m.RoomID, stream("replace", "presentation_message_"+m.ClientID, markup))
 	format := respondFormat(w, r, "html", "json")
 	if format == "" {
 		return
@@ -287,72 +126,86 @@ func (s *Server) updateMessage(w http.ResponseWriter, r *http.Request, u databas
 	}
 	http.Redirect(w, r, fmt.Sprintf("/rooms/%d/messages/%d", m.RoomID, m.ID), 302)
 }
+
 func (s *Server) deleteMessage(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, true)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	if err = s.DB.DeleteMessage(r.Context(), u.ID, m.ID); err != nil {
+	result, err := s.MessageCommands.Delete(r.Context(), u.ID, m.ID)
+	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	markup := stream("remove", "message_"+m.ClientID, "")
-	s.publish(m.RoomID, markup)
+	markup, err := s.MessagePublications.Removed(r.Context(), result)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	if respondFormat(w, r, "turbo_stream") != "" {
 		writeStream(w, markup)
 	}
 }
+
 func (s *Server) boosts(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, false)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "boosts-index", 200, page{User: u, messageRecords: []database.Message{m}})
+	if respondFormat(w, r, "html") == "" {
+		return
+	}
+	view, err := s.MessageQueries.Boosts(r.Context(), m)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.respondPage(w, r, "boosts-index", 200, page{User: u, Messages: []presentation.MessageView{view}})
 }
+
 func (s *Server) newBoost(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, false)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, r, "new-boost", 200, page{User: u, messageRecords: []database.Message{m}})
+	s.respondPage(w, r, "new-boost", 200, page{User: u, Messages: []presentation.MessageView{presentation.ViewMessage(m)}})
 }
+
 func (s *Server) createBoost(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, false)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	boost, err := s.DB.CreateBoost(r.Context(), u.ID, m.ID, r.Form.Get("boost[content]"))
+	result, err := s.BoostCommands.Create(r.Context(), u.ID, m.ID, r.Form.Get("boost[content]"))
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	markup, err := s.markup("boost", boost)
-	if err != nil {
-		s.fail(w, err)
+	if result.Processing != nil {
+		s.fail(w, result.Processing)
 		return
 	}
-	s.publish(m.RoomID, stream("append", "boosts_message_"+m.ClientID, markup))
-	http.Redirect(w, r, fmt.Sprintf("/messages/%d/boosts", m.ID), 302)
+	http.Redirect(w, r, fmt.Sprintf("/messages/%d/boosts", result.Commit.MessageID), 302)
 }
+
 func (s *Server) deleteBoost(w http.ResponseWriter, r *http.Request, u database.User) {
 	m, err := s.findMessage(r, u, false)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	id := pathInt(r, "boost")
-	if err = s.DB.DeleteBoost(r.Context(), u.ID, m.ID, id); err != nil {
+	id := pathInt(r, "id")
+	if _, err = s.BoostCommands.Delete(r.Context(), u.ID, m.ID, id); err != nil {
 		s.fail(w, err)
 		return
 	}
-	markup := stream("remove", fmt.Sprintf("boost_%d", id), "")
-	s.publish(m.RoomID, markup)
 	w.WriteHeader(204)
 }
+
 func (s *Server) refreshRoom(w http.ResponseWriter, r *http.Request, u database.User) {
 	room, err := s.DB.Room(r.Context(), u.ID, roomID(r))
 	if err != nil {
@@ -375,22 +228,17 @@ func (s *Server) refreshRoom(w http.ResponseWriter, r *http.Request, u database.
 		action   string
 		messages []database.Message
 	}{{"append", created}, {"replace", updated}} {
-		views, err := s.messageViews(r.Context(), group.messages)
+		views, err := s.MessageQueries.Views(r.Context(), s.presentationFacts(r.Context()), group.messages)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
 		for _, m := range views {
-			markup, err := s.markup("message", m)
-			if err != nil {
-				s.fail(w, err)
-				return
-			}
 			target := room.DOM("messages")
 			if group.action == "replace" {
 				target = "message_" + m.ClientID
 			}
-			result.WriteString(stream(group.action, target, markup))
+			result.WriteString(rails.TurboStream(group.action, target, string(m.Fragment)))
 		}
 	}
 	writeStream(w, result.String())

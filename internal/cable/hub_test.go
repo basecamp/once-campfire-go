@@ -54,7 +54,7 @@ func TestRoomAuthorizationAndDelivery(t *testing.T) {
 	hub := New(db, secrets)
 	defer hub.Close()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u := user
+		u := user.User
 		if r.URL.Path == "/stranger" {
 			u.ID = stranger
 		}
@@ -166,7 +166,7 @@ func TestRoomAuthorizationAndDelivery(t *testing.T) {
 	if err = wsjson.Read(ctx, duplicate, &frame); err != nil || frame["message"] != "only remaining room subscriber" {
 		t.Fatal("remaining room subscription lost delivery", frame, err)
 	}
-	hub.PublishStream(ctx, fmt.Sprintf("user_%d_reads", user.ID), "stream marker")
+	hub.PublishStreams(ctx, "stream marker", fmt.Sprintf("user_%d_reads", user.ID))
 	if err = wsjson.Read(ctx, owner, &frame); err != nil || frame["identifier"] != readIdentifier || frame["message"] != "stream marker" {
 		t.Fatal("unsubscribed room or wrong stream received delivery", frame, err)
 	}

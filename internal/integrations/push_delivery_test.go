@@ -18,11 +18,17 @@ func TestPushDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	clientKey, _ := ecdh.P256().GenerateKey(rand.Reader)
-	for _, status := range []int{201, 404, 410, 429, 500} {
+	for _, test := range []struct {
+		status   int
+		encoding string
+	}{{201, "gzip"}, {404, "gzip"}, {410, "deflate"}, {429, ""}, {500, ""}} {
+		status := test.status
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			sender := NewPushSender(vapid)
 			sender.Resolver = &oracleDNS{map[string][][]string{"fcm.googleapis.com": {{"8.8.8.8"}}}, map[string]int{}}
-			sender.Client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			// Exercise the real response decoder: status-only push handling must
+			// not read even an empty/malformed compressed provider body.
+			sender.Client = &http.Client{Transport: rubyTransport{roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				if r.Method != "POST" || r.Header.Get("TTL") != "2419200" || r.Header.Get("Content-Encoding") != "aes128gcm" || !strings.HasPrefix(r.Header.Get("Authorization"), "vapid t=") {
 					t.Fatalf("request headers: %v", r.Header)
 				}
@@ -30,8 +36,8 @@ func TestPushDelivery(t *testing.T) {
 				if len(body) < 100 {
 					t.Fatal("missing encrypted record")
 				}
-				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(""))}, nil
-			})}
+				return &http.Response{StatusCode: status, Header: http.Header{"Content-Encoding": {test.encoding}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+			})}}
 			err := sender.Send(context.Background(), "https://fcm.googleapis.com/send/test", encode64(clientKey.PublicKey().Bytes()), encode64(make([]byte, 16)), []byte(`{"title":"Hi"}`))
 			if (err == nil) != (status == 201) {
 				t.Fatalf("status %d: %v", status, err)

@@ -3,19 +3,65 @@ package integrations
 import (
 	"compress/gzip"
 	"compress/zlib"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // Net::HTTP's default request encodings and transparent response inflation.
 type rubyTransport struct{ next http.RoundTripper }
 type inflatedBody struct {
-	io.ReadCloser
-	original io.Closer
+	original io.ReadCloser
+	encoding string
+	mu       sync.Mutex
+	reader   io.ReadCloser
+	err      error
+	closed   bool
 }
 
-func (b *inflatedBody) Close() error { b.ReadCloser.Close(); return b.original.Close() }
+func (b *inflatedBody) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return 0, http.ErrBodyReadAfterClose
+	}
+	if b.reader == nil && b.err == nil {
+		var reader io.ReadCloser
+		switch b.encoding {
+		case "gzip", "x-gzip":
+			reader, b.err = gzip.NewReader(b.original)
+		case "deflate":
+			reader, b.err = zlib.NewReader(b.original)
+		}
+		if b.err == nil {
+			// Retain only a successfully initialized decoder, not a typed nil.
+			b.reader = reader
+		} else if errors.Is(b.err, io.EOF) {
+			// An absent compressed header is truncation, not a valid empty body.
+			// Returning EOF here would make io.ReadAll silently accept it.
+			b.err = io.ErrUnexpectedEOF
+		}
+	}
+	if b.err != nil {
+		return 0, b.err
+	}
+	return b.reader.Read(p)
+}
+
+func (b *inflatedBody) Close() error {
+	// Close the source before waiting for Read: inflater initialization itself
+	// reads headers and may be blocked on the network until Close unblocks it.
+	err := b.original.Close()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.closed && b.reader != nil {
+		b.reader.Close()
+	}
+	b.closed = true
+	return err
+}
 func (t rubyTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	req := request.Clone(request.Context())
 	if req.Header.Get("Accept-Encoding") == "" && req.Header.Get("Range") == "" {
@@ -28,20 +74,13 @@ func (t rubyTransport) RoundTrip(request *http.Request) (*http.Response, error) 
 	if req.Method == "HEAD" || response.StatusCode == 204 || response.StatusCode == 304 {
 		return response, nil
 	}
-	var inflated io.ReadCloser
-	switch strings.ToLower(response.Header.Get("Content-Encoding")) {
-	case "gzip", "x-gzip":
-		inflated, err = gzip.NewReader(response.Body)
-	case "deflate":
-		inflated, err = zlib.NewReader(response.Body)
+	encoding := strings.ToLower(response.Header.Get("Content-Encoding"))
+	switch encoding {
+	case "gzip", "x-gzip", "deflate":
+		response.Body = &inflatedBody{original: response.Body, encoding: encoding}
 	default:
 		return response, nil
 	}
-	if err != nil {
-		response.Body.Close()
-		return nil, err
-	}
-	response.Body = &inflatedBody{inflated, response.Body}
 	response.Header.Del("Content-Encoding")
 	response.Header.Del("Content-Length")
 	response.ContentLength = -1

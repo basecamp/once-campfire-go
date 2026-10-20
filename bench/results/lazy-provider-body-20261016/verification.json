@@ -1,0 +1,44 @@
+{
+  "scope": "Lazy outbound response inflation; status-only push handling and scoped invalidation",
+  "baseline_local": "0b120a1",
+  "baseline_pr": "8a0e6fa",
+  "regressions": "Old201gzip returnsEOF;404gzip and410deflate failErrPushGone; real410gzip exchange leaves selectedsubscriptionstored",
+  "local_check": "bin/check passed",
+  "native_check": {
+    "source": "Current8a runtime plus four changed source/test files, hashes verified",
+    "platform": "Fedora7.2.10-200.fc44.x86_64, Linux/amd64 container",
+    "go": "1.27.1",
+    "libvips": "8.16.1",
+    "baseline": "bin/check passed after requiredzstdCLI supplied",
+    "candidate": "bin/check passed",
+    "base_image": "3f9d42c34c8f57795f9a70fc5bcfc6a1e4fc33206dda7e07869af6ab7bab4eda",
+    "complete_image": "92c084bfd15f5440fd898eb32283756e0b565b5c5b43e52fe3aa51e58c507cce",
+    "limitation": "Hostdirtycheckoutunchanged; task-ownedtoolchainimageaddsCLI; GOFLAGS=-buildvcs=false forisolatedcontainer, identities recordedhere; notnativeperformanceevidence"
+  },
+  "http_passed": 2,
+  "http_total": 2,
+  "binaries": {
+    "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+    "go": "3829e9703a38a31952966f398ea6cd41b5f1b3e572088f3b2174688a2810ba5e"
+  },
+  "source_sha256": {
+    "internal/integrations/compression.go": "49cd0ca9839a4bf1949d584de37c75d581acde270116210fb9bd86a237160524",
+    "internal/integrations/compression_test.go": "6ed4a051597074f170930f8e1cf37d7d2181b010e5b378c10a3c675e9936865d",
+    "internal/integrations/push_delivery_test.go": "b4119f857d90e8f1103f9c11d309718a30ceebcc1b3ab9d2a28769e78264fa4b",
+    "internal/application/message_notifications_test.go": "62b0e10a0bfb2783fe38574f9286c8a250f9afa6f383852fedd0be21ade25de7"
+  },
+  "review": "Read-onlycandidate review: no actionablefinding; tests/buildsparentowned",
+  "limits": "No actualexternalprovidercontact or freshbrowser/media/performanceclaim; notfullintegrationcorrectness",
+  "pr_verification": {
+    "source_commit": "fc9490860c60dfb7048996e94b39295ef8e8d626",
+    "check": "bin/check passed on actual PR branch",
+    "http_passed": 2,
+    "http_total": 2,
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "12a24a6500e828859514ffc935bdd1b7e0bdcd103ce19306291133cfe9d68185"
+    },
+    "native_evidence": "Linux checked source hashes match this PR source; Go1.27.1/libvips8.16.1 fullbin/check passed",
+    "source_equivalence": "cmd/internal/assets/third_party/go.mod/go.sum match local1092bdd"
+  }
+}

@@ -19,7 +19,7 @@ func TestJSONParametersKeepRawBodyAndQueryPrecedence(t *testing.T) {
 	if err := r.ParseForm(); err != nil {
 		t.Fatal(err)
 	}
-	if err := parseJSONParams(r); err != nil {
+	if err := parseRequestParams(r); err != nil {
 		t.Fatal(err)
 	}
 	if !nullParam(r, "message[body]") || !r.Form.Has("message[attachment]") || r.Form.Get("room_id") != "17" || strings.Join(r.Form["ids[]"], ",") != "1,2" {
@@ -29,11 +29,11 @@ func TestJSONParametersKeepRawBodyAndQueryPrecedence(t *testing.T) {
 	if string(body) != raw {
 		t.Fatalf("raw body: %q", body)
 	}
-	for _, raw := range []string{`{"broken":`, `{} {}`} {
+	for _, raw := range []string{`{"broken":`, `{} {}`, " \r\n"} {
 		r := httptest.NewRequest("POST", "/", strings.NewReader(raw))
 		r.Header.Set("Content-Type", "application/json")
 		r.ParseForm()
-		if err := parseJSONParams(r); err == nil {
+		if err := parseRequestParams(r); err == nil {
 			t.Fatalf("accepted %s", raw)
 		}
 	}
@@ -74,6 +74,32 @@ func TestMultipartSpoolsLargeFilesAndRemovesTemporaryFiles(t *testing.T) {
 type zeroReader struct{}
 
 func (*zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
+
+func TestMultipartStructuredRejectionCleansEarlierFiles(t *testing.T) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, _ := writer.CreateFormFile("attachment", "first.txt")
+	part.Write([]byte("content"))
+	writer.WriteField("blob[metadata][broken", "value")
+	writer.Close()
+	r := httptest.NewRequest("POST", "/rails/active_storage/direct_uploads", &body)
+	r.Header.Set("Content-Type", writer.FormDataContentType())
+	cleanup, err := parseMultipart(r, multipartBoundary(r))
+	defer cleanup()
+	if err == nil {
+		t.Fatal("accepted malformed structured field")
+	}
+	paths := r.Context().Value(uploadedPathsKey{}).(map[*multipart.FileHeader]string)
+	if len(paths) != 1 {
+		t.Fatal("fixture did not spool its file")
+	}
+	cleanup()
+	for _, path := range paths {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("temporary file survived structured rejection: %v", err)
+		}
+	}
+}
 
 func TestMultipartTextLimitCleansEarlierFiles(t *testing.T) {
 	var body bytes.Buffer

@@ -2,12 +2,11 @@ package web
 
 import (
 	"bytes"
-	"fmt"
-
+	"log/slog"
 	"net/http"
-	"strconv"
 	"sync"
 
+	"github.com/basecamp/once-campfire-go/internal/front"
 	"github.com/basecamp/once-campfire-go/internal/responsebody"
 )
 
@@ -21,23 +20,32 @@ func releaseBuffer(b *bytes.Buffer) {
 	}
 }
 
-// Rack::ETag and Rack::ConditionalGet operate on completed, non-streaming bodies.
-// Disk/representation downloads and upgraded sockets retain their streaming writers.
+// Finite output is prepared before emission. A successful file selection switches
+// to its own streaming policy; failures before selecting a file remain completed
+// application responses. Cookies still commit through the session writer.
 type responseBuffer struct {
 	http.ResponseWriter
 	body      *bytes.Buffer
 	status    int
 	exception bool
+	streaming bool
 	parts     []responsebody.Part
 	server    *Server
 }
 
 func (w *responseBuffer) WriteHeader(status int) {
+	if w.streaming {
+		w.ResponseWriter.WriteHeader(status)
+		return
+	}
 	if w.status == 0 {
 		w.status = status
 	}
 }
 func (w *responseBuffer) Write(body []byte) (int, error) {
+	if w.streaming {
+		return w.ResponseWriter.Write(body)
+	}
 	if w.status == 0 {
 		w.status = 200
 	}
@@ -46,64 +54,53 @@ func (w *responseBuffer) Write(body []byte) (int, error) {
 	}
 	return w.body.Write(body)
 }
-func (w *responseBuffer) finish(r *http.Request) {
-	if w.body == nil {
-		w.body = borrowBuffer()
+
+func streamFileResponse(w http.ResponseWriter) {
+	for {
+		if buffered, ok := w.(*responseBuffer); ok {
+			if buffered.status != 0 || buffered.body != nil || len(buffered.parts) != 0 {
+				panic("file selected after completed response output")
+			}
+			buffered.streaming = true
+			return
+		}
+		wrapper, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return
+		}
+		w = wrapper.Unwrap()
 	}
-	defer releaseBuffer(w.body)
-	if w.status == 0 {
-		w.status = 200
+}
+
+func (w *responseBuffer) finish(r *http.Request) {
+	if w.streaming {
+		return
 	}
 	parts := w.parts
 	if len(parts) == 0 {
-		// The buffer is not recycled until all writes below have completed.
+		if w.body == nil {
+			w.body = borrowBuffer()
+		}
+		// This buffer remains borrowed until synchronous emission finishes.
 		parts = []responsebody.Part{responsebody.NewPart(w.body.Bytes())}
 	}
-	h := w.Header()
-	digested := false
-	if !w.exception && (w.status == 200 || w.status == 201) && w.body.Len() > 0 && h.Get("ETag") == "" && h.Get("Last-Modified") == "" {
-		hash := parts[0].Digest()
-		h.Set("ETag", fmt.Sprintf("W/\"%x\"", hash[:16]))
-		digested = true
+	if w.body != nil {
+		defer releaseBuffer(w.body)
 	}
-	if !w.exception && h.Get("Cache-Control") == "" {
-		value := "no-cache"
-		if digested {
-			value = "max-age=0, private, must-revalidate"
+	alreadyEncoded := w.Header().Get("Content-Encoding") != ""
+	response, err := front.PrepareResponse(w.ResponseWriter, r, front.CompletedResponse{Status: w.status, Parts: parts, Exception: w.exception})
+	if err != nil {
+		w.Header().Del("Content-Encoding")
+		w.Header().Del("Content-Length")
+		w.Header().Del("ETag")
+		http.Error(w.ResponseWriter, "Internal server error", http.StatusInternalServerError)
+	} else {
+		if w.server != nil && !alreadyEncoded {
+			response = w.server.cacheResponse(r, w, response)
 		}
-		h.Set("Cache-Control", value)
+		err = front.EmitResponse(w.ResponseWriter, r, response)
 	}
-	if w.status == 200 {
-		modified, _ := http.ParseTime(h.Get("Last-Modified"))
-		if notModified(w.ResponseWriter, r, h.Get("ETag"), modified) {
-			return
-		}
-	}
-	if h.Get("Content-Type") == "" && w.status != 204 && w.status != 304 {
-		h.Set("Content-Type", "text/html; charset=utf-8")
-	}
-	if w.server != nil {
-		parts = w.server.cacheResponse(r, w, parts)
-	}
-	if len(parts) > 0 && w.status != 204 && w.status != 304 {
-		size := 0
-		for _, part := range parts {
-			size += part.Len()
-		}
-		h.Set("Content-Length", strconv.Itoa(size))
-	}
-	w.ResponseWriter.WriteHeader(w.status)
-	if r.Method != "HEAD" && w.status != 204 && w.status != 304 {
-		// Hand completed bytes to the compressor without joining recorded parts.
-		// Streaming/download writers do not use this optional contract.
-		if writer, ok := w.ResponseWriter.(interface {
-			WriteBody([]responsebody.Part) (int, error)
-		}); ok {
-			writer.WriteBody(parts)
-		} else {
-			for _, part := range parts {
-				part.WriteTo(w.ResponseWriter)
-			}
-		}
+	if err != nil && r.Context().Err() == nil {
+		slog.Debug("response delivery failed", "error", err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -16,16 +17,22 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/rails"
 )
 
-// Run in the Docker toolchain target to use the pinned media libraries.
+// Use the pinned media toolchain, including FFmpeg's architecture. A fresh Rails
+// capture can be selected explicitly, as in Rust; the checked-in vectors remain
+// the default and no version or byte comparison is skipped.
 func TestMediaOutputBytes(t *testing.T) {
+	type vectorBlob struct {
+		database.Blob
+		Metadata string `json:"metadata"`
+	}
 	type output struct {
 		File            string
-		Blob            Blob
+		Blob            vectorBlob
 		Transformations json.RawMessage `json:"transformations_typed"`
 	}
 	type fixture struct {
 		Fixture  string
-		Blob     Blob
+		Blob     vectorBlob
 		Variants []output
 		Preview  *output `json:"preview_image"`
 	}
@@ -33,7 +40,11 @@ func TestMediaOutputBytes(t *testing.T) {
 		Messages, Avatars, Logos []fixture
 		Versions                 map[string]string
 	}
-	raw, err := os.ReadFile("../../reference/vectors/storage.json")
+	vectors := os.Getenv("CAMPFIRE_STORAGE_VECTORS")
+	if vectors == "" {
+		vectors = "../../reference/vectors/storage.json"
+	}
+	raw, err := os.ReadFile(vectors)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +70,7 @@ func TestMediaOutputBytes(t *testing.T) {
 	secrets, _ := rails.NewSecrets("media-vectors")
 	store := New(db, secrets, root)
 	ctx := context.Background()
-	check := func(t *testing.T, blob Blob, want output) {
+	check := func(t *testing.T, blob database.Blob, want vectorBlob, expectedFile string) {
 		t.Helper()
 		path, err := store.Path(blob.Key)
 		if err != nil {
@@ -69,21 +80,43 @@ func TestMediaOutputBytes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		expected, err := os.ReadFile(filepath.Join("../../reference/vectors/storage", want.File))
+		expected, err := os.ReadFile(expectedFile)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(got, expected) {
-			t.Fatalf("%s: bytes differ, size %d/%d checksum %s/%s", want.File, len(got), len(expected), blob.Checksum, want.Blob.Checksum)
+			t.Errorf(
+				"bytes differ, size %d/%d checksum %s/%s",
+				len(got),
+				len(expected),
+				blob.Checksum,
+				want.Checksum,
+			)
 		}
-		if blob.Type() != want.Blob.Type() {
-			t.Fatalf("content type %s/%s", blob.Type(), want.Blob.Type())
+		if blob.Type() != want.Type() || blob.Filename != want.Filename ||
+			blob.ServiceName != want.ServiceName || blob.ByteSize != want.ByteSize ||
+			blob.Checksum != want.Checksum {
+			t.Errorf("blob got %+v; want %+v", blob, want)
+		}
+		var gotMetadata, wantMetadata any
+		if err := json.Unmarshal(blob.Metadata, &gotMetadata); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(want.Metadata), &wantMetadata); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(gotMetadata, wantMetadata) {
+			t.Errorf("metadata got %s; want %s", blob.Metadata, want.Metadata)
 		}
 	}
 	for _, fixtures := range [][]fixture{data.Messages, data.Avatars, data.Logos} {
 		for _, v := range fixtures {
 			t.Run(v.Fixture, func(t *testing.T) {
-				file, err := os.Open(filepath.Join("../../reference/reference/test/fixtures/files", v.Fixture))
+				original := filepath.Join(
+					"../../reference/reference/test/fixtures/files",
+					v.Fixture,
+				)
+				file, err := os.Open(original)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -92,19 +125,42 @@ func TestMediaOutputBytes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				blob, err = store.Analyze(ctx, blob)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Run("original", func(t *testing.T) { check(t, blob, v.Blob, original) })
 				if v.Preview != nil {
-					preview, err := store.PreviewImage(ctx, blob)
-					if err != nil {
-						t.Fatal(err)
-					}
-					check(t, preview, *v.Preview)
+					t.Run(v.Preview.File, func(t *testing.T) {
+						preview, err := store.PreviewImage(ctx, blob)
+						if err != nil {
+							t.Fatal(err)
+						}
+						check(
+							t,
+							preview,
+							v.Preview.Blob,
+							filepath.Join(filepath.Dir(vectors), "storage", v.Preview.File),
+						)
+					})
 				}
 				for _, variant := range v.Variants {
-					result, err := store.Representation(ctx, blob, typedValue(t, variant.Transformations).(Variation))
-					if err != nil {
-						t.Fatal(err)
-					}
-					check(t, result, variant)
+					t.Run(variant.File, func(t *testing.T) {
+						result, err := store.Representation(
+							ctx,
+							blob,
+							typedValue(t, variant.Transformations).(Variation),
+						)
+						if err != nil {
+							t.Fatal(err)
+						}
+						check(
+							t,
+							result,
+							variant.Blob,
+							filepath.Join(filepath.Dir(vectors), "storage", variant.File),
+						)
+					})
 				}
 			})
 		}

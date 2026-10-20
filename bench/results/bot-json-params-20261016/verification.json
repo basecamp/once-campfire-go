@@ -1,0 +1,35 @@
+{
+  "scope": "Bot JSON syntax and supported scalar attachment/body ownership, no performance claim",
+  "baseline": "5c9090c, runtime equivalent to PR50dcfb5",
+  "check": "bin/check passed",
+  "regression": "Old handlers fail; review regressions fail initial candidate; final checks pass",
+  "http_passed": 8,
+  "http_total": 8,
+  "binaries": {
+    "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+    "go": "56d8b8745c5c5b5ef64a2f39a92b4e8830e3bd965f5c3fbd9e3eebf4d494732f"
+  },
+  "runtime_files": {
+    "internal/web/bots.go": "2d5964dc699bf2d8d13d1a92e7cd58de8bfb3d53a1d9f5f5afab025d118f7956",
+    "internal/web/message_attributes.go": "b6efca84ce3f4cd9f68cbe3fff41aa259e2f35bad27ca781908aa86fc5bab37c",
+    "internal/web/params.go": "89782acc9fe6076fea08fced4bf5476ce2a470f0525e767ee71846fdfe2516f7"
+  },
+  "review": "Read-only review found empty-body presence bypass and whitespace-only JSON omission; both reproduced and fixed by parent, final suite and Rust comparison pass",
+  "fixture_corrections": [
+    "Explicitly authenticate david in extension; previous fixture had only kevin/jz login",
+    "Read body from action_text_rich_texts rather than nonexistent messages.body"
+  ],
+  "limits": "Not full nested/malformed parameter or all attachment-type parity. No browser/media-output recertification or performance claim.",
+  "pr_verification": {
+    "source_commit": "1fb723e40545b29f9a53a1e1bc4ff8e28c9018f1",
+    "check": "bin/check passed on actual PR branch",
+    "http_passed": 8,
+    "http_total": 8,
+    "special_cases": "JSON rejection and committed raw/attachment/null ownership pass against Rust on actual PR binary",
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "0a51058c936e2b3fda303e9d7b60f1e8d3fc9ba291ada5733eb6ef7c57468e55"
+    },
+    "source_equivalence": "cmd/internal/assets/third_party/go.mod/go.sum match retained verified source"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "check": {
+    "command": "bin/check",
+    "pass": true
+  },
+  "focused_races": "Complete presentation and web packages",
+  "http": {
+    "passed": 8,
+    "total": 8,
+    "workflows": [
+      "attachment_lifecycle",
+      "storage_downloads",
+      "message_lifecycle",
+      "pagination"
+    ],
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "69aa2e894e10a2d04556ecb6e1f227f216edb714745c914ab04e9a7060575627"
+    }
+  },
+  "tested_measured_binary_sha256": "69aa2e894e10a2d04556ecb6e1f227f216edb714745c914ab04e9a7060575627",
+  "probe_removal_binary_identical": true,
+  "limits": "Local Mac work evidence only; not full browser/media-output certification or native capacity/latency. No changes to byte processing. Raw profiles, runtime logs and generated credentials/data remain private.",
+  "pr_verification": {
+    "runtime_source_commit": "86ca12b60c7a3ffbec4ff5b1b73e58846914c9a3",
+    "check": "bin/check passed on actual PR branch",
+    "http_passed": 8,
+    "http_total": 8,
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "b90452476ddc4cf185cbcb0baa0c0ccef7d0483929504d6678f5e5019e15346c"
+    },
+    "source_equivalence": "cmd/internal/assets/third_party/go.mod/go.sum match measured retained source"
+  }
+}

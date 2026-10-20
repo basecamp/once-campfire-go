@@ -1,0 +1,32 @@
+{
+  "scope": "Scalar message cursor input correction, no performance claim",
+  "baseline": "48c26b8, runtime equivalent to PR82ee20a",
+  "check": "bin/check passed",
+  "regression": "Old handlers fail; corrected handlers pass",
+  "http_passed": 8,
+  "http_total": 8,
+  "special_cases": "10 scalar cases x HTML/JSON x Go/Rust; full bodies, IDs/counts/Link checked against persisted timestamps",
+  "binaries": {
+    "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+    "go": "0df030e6884837f661255962d7649967aa092d85bb6e2b58cfcae686b03ee99d"
+  },
+  "runtime_files": {
+    "internal/web/message_pagination.go": "7ddba8b3f7886065a20c409eff82ae832f97b9820d2cd361b9f5d46bfb8e3661",
+    "internal/web/server.go": "e2373466010af011d4c28808c123c2ac32eab914382a915c35707edf278b71a3",
+    "internal/web/bots.go": "26473c7c2638b6f7e152a7a3aace4c32850009c19c468e8d57367cbb366f8f0f"
+  },
+  "review": "Independent read-only source review, no actionable finding; parent owns check execution",
+  "limits": "Not full nested/malformed parameter, browser or media certification; no refreshed native/performance claim",
+  "pr_verification": {
+    "source_commit": "a22542580ecb57e7048c9052c36bf3425c94fe15",
+    "check": "bin/check passed on actual PR branch",
+    "http_passed": 8,
+    "http_total": 8,
+    "scalar_cases": "10 cases x HTML/JSON x Go/Rust passed on actual PR binary",
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "308208c4542ef6e2ac8eac5e3e4ef222d24707a381af575cdcf5c03a8297a16e"
+    },
+    "source_equivalence": "cmd/internal/assets/third_party/go.mod/go.sum match retained verified source"
+  }
+}

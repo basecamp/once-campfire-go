@@ -15,11 +15,18 @@ import (
 
 type nullParamsKey struct{}
 
-// Retain the raw body for direct uploads and push subscriptions, whose handlers
-// also consume JSON. Query parameters take precedence, as in Action Dispatch.
-func parseJSONParams(r *http.Request) error {
+// Decode JSON once while retaining raw bytes for bot message bodies. Strong
+// nested attributes use the same intake owner for JSON, forms and multipart.
+func parseRequestParams(r *http.Request) error {
 	media, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if media != "application/json" {
+		if needsStructuredParams(r) {
+			if _, captured := r.Context().Value(structuredParamsKey{}).(map[string]any); !captured {
+				// URL-encoded and multipart intake capture their ordered fields.
+				// Other media types have no form-body source to merge with query.
+				return storeStructuredParams(r, map[string]any{})
+			}
+		}
 		return nil
 	}
 	raw, err := io.ReadAll(r.Body)
@@ -27,7 +34,10 @@ func parseJSONParams(r *http.Request) error {
 		return err
 	}
 	r.Body = io.NopCloser(bytes.NewReader(raw))
-	if len(bytes.TrimSpace(raw)) == 0 {
+	if len(raw) == 0 {
+		if needsStructuredParams(r) {
+			return storeStructuredParams(r, map[string]any{})
+		}
 		return nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -88,6 +98,9 @@ func parseJSONParams(r *http.Request) error {
 		delete(nulls, key)
 	}
 	*r = *r.WithContext(context.WithValue(r.Context(), nullParamsKey{}, nulls))
+	if needsStructuredParams(r) {
+		return storeStructuredParams(r, formJSONValue(value).(map[string]any))
+	}
 	return nil
 }
 
@@ -97,7 +110,7 @@ func nullParam(r *http.Request, key string) bool {
 }
 
 // Rack overwrites repeated scalar keys; [] keys retain all values.
-func normalizeScalarParams(r *http.Request) {
+func normalizeScalarParams(r *http.Request) error {
 	for _, values := range []url.Values{r.Form, r.PostForm} {
 		for key, items := range values {
 			if len(items) > 1 && !strings.HasSuffix(key, "[]") {
@@ -105,4 +118,40 @@ func normalizeScalarParams(r *http.Request) {
 			}
 		}
 	}
+	return recordFormNulls(r, r.URL.RawQuery)
+}
+
+// url.Values loses the distinction between a bare key (null) and key= (empty).
+// Record it at intake, after decoding has validated the form. Later sources win,
+// including an explicit query value replacing a body null. Ordinary value-only
+// forms need no metadata allocation.
+func recordFormNulls(r *http.Request, raw string) error {
+	nulls, _ := r.Context().Value(nullParamsKey{}).(map[string]bool)
+	created := false
+	for pair := range strings.SplitSeq(raw, "&") {
+		if pair == "" {
+			continue
+		}
+		key, _, hasValue := strings.Cut(pair, "=")
+		if hasValue && len(nulls) == 0 {
+			continue
+		}
+		key, err := url.QueryUnescape(key)
+		if err != nil {
+			return err
+		}
+		if hasValue {
+			delete(nulls, key)
+			continue
+		}
+		if nulls == nil {
+			nulls = map[string]bool{}
+			created = true
+		}
+		nulls[key] = true
+	}
+	if created {
+		*r = *r.WithContext(context.WithValue(r.Context(), nullParamsKey{}, nulls))
+	}
+	return nil
 }

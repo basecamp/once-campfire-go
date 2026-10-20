@@ -13,8 +13,21 @@ import (
 	"time"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/presentation"
 	"github.com/basecamp/once-campfire-go/internal/responsebody"
 )
+
+func capturedMessagePart(ctx context.Context, app *testRuntime, records []database.Message) (responsebody.Part, error) {
+	views, err := app.MessageQueries.Views(ctx, app.presentationFacts(ctx), records)
+	if err != nil {
+		return responsebody.Part{}, err
+	}
+	fragments := make([]template.HTML, len(views))
+	for i, view := range views {
+		fragments[i] = view.Fragment
+	}
+	return presentation.FragmentList(fragments), nil
+}
 
 func TestMessageControllersRenderFreshRecords(t *testing.T) {
 	app, server, cookie, user := testApp(t)
@@ -23,7 +36,7 @@ func TestMessageControllersRenderFreshRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	message, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "record-input", "<p>record before</p>", "record before")
+	message, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, messageInput("record-input", "<p>record before</p>"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,140 +58,93 @@ func TestMessageControllersRenderFreshRecords(t *testing.T) {
 		}
 	}
 	check("record before")
-	if _, err := app.DB.UpdateMessage(ctx, user.ID, message.ID, "<p>record after</p>", "record after"); err != nil {
+	if _, err := app.DB.UpdateMessage(ctx, user.ID, message.ID, messageInput("", "<p>record after</p>")); err != nil {
 		t.Fatal(err)
 	}
 	check("record after")
 }
 
-func TestMessageItemsBatchMissesKeepOrderAndBytes(t *testing.T) {
+func TestScopedMessageMissesKeepOrderAndBytes(t *testing.T) {
 	app, _, _, user := testApp(t)
 	ctx := context.Background()
 	rooms, _ := app.DB.Rooms(ctx, user.ID)
 	var records []database.Message
 	for i := 0; i < 4; i++ {
-		m, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, fmt.Sprint("batch-", i), fmt.Sprintf("<p>batch &amp; %d</p>", i), fmt.Sprintf("batch %d", i))
+		m, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, messageInput(fmt.Sprint("batch-", i), fmt.Sprintf("<p>batch &amp; %d</p>", i)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		records = append(records, m)
+		records = append(records, m.Message)
 	}
-	app.fragments = newFragmentCache(0)
+	setFragmentLimit(app, 0)
 	var want []template.HTML
 	for _, record := range records {
-		views, err := app.messageViews(ctx, []database.Message{record})
+		views, err := app.MessageQueries.Views(ctx, app.presentationFacts(ctx), []database.Message{record})
 		if err != nil {
 			t.Fatal(err)
 		}
 		want = append(want, views[0].Fragment)
 	}
-	for _, references := range []bool{false, true} {
-		input := append([]database.Message(nil), records...)
-		if references {
-			for i, m := range input {
-				input[i] = database.Message{ID: m.ID, RoomID: m.RoomID, UpdatedAt: m.UpdatedAt}
-			}
-		}
-		for _, limit := range []int{0, 32 << 20} {
-			app.fragments = newFragmentCache(limit)
-			// Nonadjacent hits must not shift the positions of batched misses.
-			if _, err := app.messageViews(ctx, []database.Message{records[0], records[2]}); err != nil {
+	for _, limit := range []int{0, 32 << 20} {
+		setFragmentLimit(app, limit)
+		// Nonadjacent fragment hits must not shift the positions of scoped misses.
+		for _, warm := range []struct {
+			anchor    int64
+			direction string
+		}{
+			{records[1].ID, "before"}, // first fragment
+			{records[1].ID, "after"},  // nonadjacent third (and fourth) fragments
+		} {
+			if _, _, err := app.MessageQueries.Page(ctx, app.messageScope(ctx), user.ID, rooms[0].ID, warm.anchor, warm.direction, false); err != nil {
 				t.Fatal(err)
 			}
-			got, err := app.messageItems(ctx, input)
-			if err != nil || len(got) != len(want) {
-				t.Fatal("batch size/error differs", err)
-			}
-			for i := range want {
-				if got[i].Fragment != want[i] {
-					t.Fatalf("references=%v, limit=%d: message %d bytes/order differ", references, limit, i)
-				}
+		}
+		got, err := app.MessageQueries.Views(ctx, app.presentationFacts(ctx), records)
+		if err != nil || len(got) != len(want) {
+			t.Fatal("batch size/error differs", err)
+		}
+		for i := range want {
+			if got[i].Fragment != want[i] {
+				t.Fatalf("limit=%d: message %d bytes/order differ", limit, i)
 			}
 		}
-	}
-}
-
-func TestMessageListOwnershipAndAdmission(t *testing.T) {
-	app, _, _, user := testApp(t)
-	ctx := context.Background()
-	rooms, err := app.DB.Rooms(ctx, user.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	message, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "ownership", "<p>owned bytes</p>", "owned bytes")
-	if err != nil {
-		t.Fatal(err)
-	}
-	messages := []database.Message{message}
-	original, err := app.messageList(ctx, messages)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := func(part responsebody.Part) string {
-		t.Helper()
-		var b bytes.Buffer
-		if _, err := part.WriteTo(&b); err != nil {
+		part, count, err := app.MessageQueries.Page(ctx, app.messageScope(ctx), user.ID, rooms[0].ID, 0, "around", false)
+		var body bytes.Buffer
+		if err != nil || count != len(want) {
+			t.Fatal("scoped batch size/error differs", count, err)
+		}
+		if _, err := part.WriteTo(&body); err != nil {
 			t.Fatal(err)
 		}
-		return b.String()
+		var expected strings.Builder
+		for _, fragment := range want {
+			expected.WriteString(string(fragment))
+		}
+		if body.String() != expected.String() {
+			t.Fatalf("limit=%d: scoped batch changed bytes/order", limit)
+		}
 	}
-	want := body(original)
-	key := app.fragmentKey(context.Background(), messageListCacheKey(messages))
-	cost := len(key) + len(want) + 240
-	for _, test := range []struct {
-		name     string
-		limit    int
-		retained bool
-	}{
-		{"disabled", 0, false},
-		{"oversized", (cost - 1) * 4, false},
-		{"admitted", cost * 4, true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			app.fragments = newFragmentCache(test.limit)
-			part, err := app.messageList(ctx, messages)
-			if err != nil || body(part) != want || part.Digest() != original.Digest() {
-				t.Fatal("cache admission changed response", err)
-			}
-			entry, retained := app.fragments.entry(key)
-			if retained != test.retained {
-				t.Fatalf("retained=%v, want %v", retained, test.retained)
-			}
-			if retained && (entry.html != "" || entry.bytes != cost || body(entry.part) != want) {
-				t.Fatal("list payload must be retained and charged once")
-			}
-			// Eviction releases the cache's reference, not an outstanding response.
-			for i := 0; i < 40; i++ {
-				app.fragments.putEntry(fragmentEntry{key: fmt.Sprint(i), part: responsebody.NewPart([]byte(want))})
-			}
-			if _, retained := app.fragments.entry(key); retained || app.fragments.bytes > test.limit {
-				t.Fatal("eviction/admission bound was not enforced")
-			}
-			if body(part) != want || body(original) != want {
-				t.Fatal("eviction changed outstanding response bytes")
-			}
-		})
-	}
+
 }
 
 func TestRecordedMessagesPreserveBodyAndInvalidate(t *testing.T) {
 	app, _, _, user := testApp(t)
 	ctx := context.Background()
 	rooms, _ := app.DB.Rooms(ctx, user.ID)
-	message, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "recorded", "<p>one &amp; two</p>", "one & two")
+	message, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, messageInput("recorded", "<p>one &amp; two</p>"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	list := []database.Message{message}
-	views, err := app.messageItems(ctx, list)
+	list := []database.Message{message.Message}
+	views, err := app.MessageQueries.Views(ctx, app.presentationFacts(ctx), list)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var original bytes.Buffer
-	if err := app.templates.ExecuteTemplate(&original, "messages", page{Messages: views}); err != nil {
+	if err := app.Presentation.ExecuteTemplate(&original, "messages", page{Messages: views}); err != nil {
 		t.Fatal(err)
 	}
-	fragment, err := app.messageList(ctx, list)
+	fragment, err := capturedMessagePart(ctx, app, list)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +179,7 @@ func TestRecordedMessagesPreserveBodyAndInvalidate(t *testing.T) {
 	}
 	list[0].UpdatedAt = list[0].UpdatedAt.Add(time.Second)
 	list[0].Body = "<p>changed</p>"
-	changed, err := app.messageList(ctx, list)
+	changed, err := capturedMessagePart(ctx, app, list)
 	if err != nil {
 		t.Fatal(err)
 	}

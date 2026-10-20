@@ -5,27 +5,28 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/basecamp/once-campfire-go/internal/storage"
 	"strings"
 	"testing"
+
+	"github.com/basecamp/once-campfire-go/internal/database"
 )
 
 func TestProfileAttachmentAssignments(t *testing.T) {
 	app, server, cookie, user := testApp(t)
 	ctx := context.Background()
 	contentType := "image/png"
-	blob, err := app.Storage.Create(ctx, storage.Blob{Filename: "avatar.png", ContentType: &contentType})
+	blob, err := app.DB.CreateBlob(ctx, database.Blob{Filename: "avatar.png", ContentType: &contentType})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = app.Storage.Attach(ctx, blob, "User", user.ID, "avatar"); err != nil {
+	if _, err = app.DB.UpdateUser(ctx, user.ID, user.ID, database.UserChanges{Avatar: &database.AttachmentInput{ID: blob.ID}}); err != nil {
 		t.Fatal(err)
 	}
 	response, _ := perform(t, server, "PATCH", "/users/me/profile", "application/json", strings.NewReader(`{"user":{"avatar":null,"bio":"kept"}}`), cookie)
 	if response.StatusCode != 302 {
 		t.Fatal(response.Status)
 	}
-	if _, err = app.Storage.Attached(ctx, "User", user.ID, "avatar"); err != nil {
+	if _, err = app.DB.AttachedBlob(ctx, "User", user.ID, "avatar"); err != nil {
 		t.Fatal("nil profile avatar must be omitted", err)
 	}
 	response, _ = perform(t, server, "PATCH", "/users/me/profile", "application/json", strings.NewReader(`{"user":{"avatar":"invalid","bio":"rollback"}}`), cookie)
@@ -40,14 +41,14 @@ func TestProfileAttachmentAssignments(t *testing.T) {
 	if response.StatusCode != 302 {
 		t.Fatal(response.Status)
 	}
-	if _, err = app.Storage.Attached(ctx, "User", user.ID, "avatar"); !errors.Is(err, sql.ErrNoRows) {
+	if _, err = app.DB.AttachedBlob(ctx, "User", user.ID, "avatar"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatal("empty string must delete", err)
 	}
 }
 func TestBotPartialUpdateKeepsOmittedFields(t *testing.T) {
-	app, server, cookie, _ := testApp(t)
+	app, server, cookie, owner := testApp(t)
 	webhook := "https://example.test/hook"
-	bot, err := app.DB.CreateUser(context.Background(), "Notifier", "", "", "", 2, &webhook)
+	bot, err := app.DB.CreateUser(context.Background(), owner.ID, database.UserInput{Name: "Notifier", Email: "", Password: "", Bio: "", Role: 2, Webhook: &webhook})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +64,7 @@ func TestBotPartialUpdateKeepsOmittedFields(t *testing.T) {
 	if response.StatusCode != 302 {
 		t.Fatal(response.Status)
 	}
-	bot, err = app.DB.User(context.Background(), bot.ID)
+	bot.User, err = app.DB.User(context.Background(), bot.ID)
 	if err != nil || bot.Name != "Renamed" {
 		t.Fatalf("omitted name changed: %+v %v", bot, err)
 	}

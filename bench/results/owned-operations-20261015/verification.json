@@ -1,0 +1,188 @@
+{
+  "source_revision": "8351224b56c9a3c6784ed5d7510857212133ac4c",
+  "checked_source_head": "d287f419d052a196c52497acb2c06fca85742f27",
+  "clean_branch": {
+    "date": "2026-10-15",
+    "bin_check": "pass",
+    "runtime_source_matches_checked_source": true,
+    "binary_matches_http_interoperability_binary": true,
+    "binary_sha256": "f1470665a951c05298353ea06db8397064ce668f27383d6f0b5ab47ef6b3fdac",
+    "bin_check_log_sha256": "3b145ae104738558e380f5f404f80faa8e8b784be40ddb7af91c5ba3a7d68c9c"
+  },
+  "http": {
+    "date": "2026-10-14",
+    "scope": "Functional HTTP and persisted-state contracts, not exact HTML or JavaScript parity",
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "f1470665a951c05298353ea06db8397064ce668f27383d6f0b5ab47ef6b3fdac"
+    },
+    "tool_sha256": "e671518fad2a1c8e419edfa1ed0cdefbe1b71877ae54af7ff96437e9d9fb1190",
+    "storage_tool_sha256": "6e9fba2a5238ef882bb5ac8bd84d6962f618dcfe2bca595f0e2129b40ff79a9c",
+    "labels_sha256": "089726b88abf5f9baf1bb19b2e86beb83d3105ab976d5e6e50f6265cde324d5e",
+    "workflows": [
+      {
+        "workflow": "authentication",
+        "implementation": "rust",
+        "passed": true,
+        "requests": 8
+      },
+      {
+        "workflow": "authentication",
+        "implementation": "go",
+        "passed": true,
+        "requests": 8
+      },
+      {
+        "workflow": "message_lifecycle",
+        "implementation": "rust",
+        "passed": true,
+        "requests": 18
+      },
+      {
+        "workflow": "message_lifecycle",
+        "implementation": "go",
+        "passed": true,
+        "requests": 18
+      },
+      {
+        "workflow": "pagination",
+        "implementation": "rust",
+        "passed": true,
+        "requests": 7
+      },
+      {
+        "workflow": "pagination",
+        "implementation": "go",
+        "passed": true,
+        "requests": 7
+      },
+      {
+        "workflow": "room_membership",
+        "implementation": "rust",
+        "passed": true,
+        "requests": 30
+      },
+      {
+        "workflow": "room_membership",
+        "implementation": "go",
+        "passed": true,
+        "requests": 30
+      },
+      {
+        "workflow": "direct_participants",
+        "implementation": "rust",
+        "passed": true,
+        "requests": 7
+      },
+      {
+        "workflow": "direct_participants",
+        "implementation": "go",
+        "passed": true,
+        "requests": 7
+      },
+      {
+        "workflow": "involvement",
+        "implementation": "rust",
+        "passed": true,
+        "requests": 9
+      },
+      {
+        "workflow": "involvement",
+        "implementation": "go",
+        "passed": true,
+        "requests": 9
+      },
+      {
+        "workflow": "direct_ping",
+        "implementation": "rust",
+        "passed": true,
+        "requests": 6
+      },
+      {
+        "workflow": "direct_ping",
+        "implementation": "go",
+        "passed": true,
+        "requests": 6
+      },
+      {
+        "workflow": "sidebar",
+        "implementation": "rust",
+        "passed": true,
+        "requests": 3
+      },
+      {
+        "workflow": "sidebar",
+        "implementation": "go",
+        "passed": true,
+        "requests": 3
+      },
+      {
+        "workflow": "room_updates",
+        "implementation": "rust",
+        "passed": true,
+        "requests": 37
+      },
+      {
+        "workflow": "room_updates",
+        "implementation": "go",
+        "passed": true,
+        "requests": 37
+      },
+      {
+        "workflow": "account_settings",
+        "implementation": "rust",
+        "passed": true,
+        "requests": 28
+      },
+      {
+        "workflow": "account_settings",
+        "implementation": "go",
+        "passed": true,
+        "requests": 28
+      }
+    ],
+    "full_private_report_sha256": "ccf2537a5e5b534ccf245104c92da5c883793f971edec9fb6672c01c2b4b38a6"
+  },
+  "browser": {
+    "date": "2026-10-14",
+    "result": "pass",
+    "surface": "public listener; fresh database; pristine shared smoke",
+    "binary_sha256": "8a1409c09aa79e188010fb04dfa0c63b66e4f2748de734a117f6ae5db49b0e29",
+    "shared_smoke_sha256": "38746232a3358bce203e4e6f410338e5f74e5b091f4c9d8d03d0978db184bdfb",
+    "image_sha256": "302ca92e52388a674fdb736be504c06fb5f39733be49f5221988ecd6f21ae669",
+    "joined_exit": 0,
+    "log_sha256": "1b7e3b675aa494311ee8ab2caf2c29033c937ca953ba383550bfdb5df841733b"
+  },
+  "interoperability": {
+    "date": "2026-10-14",
+    "result": "pass",
+    "contract": "bin/check-upgrade assertions with explicit binary paths",
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "f1470665a951c05298353ea06db8397064ce668f27383d6f0b5ab47ef6b3fdac"
+    },
+    "checks": [
+      "Rust cookie accepted by Go",
+      "Go cookie accepted by Rust",
+      "Rust renders Go-written message",
+      "Rust searches Go-written FTS entry"
+    ],
+    "original_seed_unchanged": true,
+    "log_sha256": "da0e829c09f7c72edd20d5bea977626e2ffbec66c19eba08366742374c1a0ade"
+  },
+  "reviews": {
+    "date": "2026-10-14",
+    "mode": "targeted independent static source review; no universal certification",
+    "scopes": [
+      "database/application hot paths",
+      "Cable/transport/response-cache hot paths"
+    ],
+    "concrete_blockers_found": 0
+  },
+  "limitations": [
+    "No freshly repeated optional media-output vectors in final packaging",
+    "No new competitor benchmark after kernel update",
+    "Inherited unchanged-fork ARM64 assembly-vet warning remains; application vet and fork amd64 vet pass",
+    "No universal correctness, exact DOM/network parity or algorithmic-optimality claim"
+  ]
+}

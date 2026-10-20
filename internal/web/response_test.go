@@ -6,6 +6,18 @@ import (
 	"testing"
 )
 
+func TestFileResponsePreservesHEADLength(t *testing.T) {
+	_, server, _, _ := testApp(t)
+	get, body := perform(t, server, "GET", "/account/logo", "", nil, nil)
+	head, headBody := perform(t, server, "HEAD", "/account/logo", "", nil, nil)
+	if get.StatusCode != 200 || head.StatusCode != 200 || len(body) == 0 || len(headBody) != 0 {
+		t.Fatal(get.Status, head.Status, len(body), len(headBody))
+	}
+	if get.Header.Get("Content-Length") != head.Header.Get("Content-Length") || get.Header.Get("ETag") != head.Header.Get("ETag") {
+		t.Fatal("file representation changed on HEAD", get.Header, head.Header)
+	}
+}
+
 func TestCompletedResponseValidators(t *testing.T) {
 	for _, method := range []string{"GET", "HEAD"} {
 		request := httptest.NewRequest(method, "/up", nil)

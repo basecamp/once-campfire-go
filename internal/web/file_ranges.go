@@ -5,17 +5,42 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/basecamp/once-campfire-go/internal/httpcompat"
 	"io"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/basecamp/once-campfire-go/internal/httpcompat"
 )
 
-func serveStorageFile(w http.ResponseWriter, r *http.Request, file *os.File, stat os.FileInfo, ct string, proxy bool) {
+type storageFileMode uint8
+
+const (
+	diskFile storageFileMode = iota
+	blobFile
+	representationFile
+	contentFile // Avatar/logo files use net/http's ordinary content policy.
+)
+
+func serveStorageFile(
+	w http.ResponseWriter,
+	r *http.Request,
+	file *os.File,
+	stat os.FileInfo,
+	ct string,
+	mode storageFileMode,
+) {
 	size := stat.Size()
-	if proxy && r.Header.Get("Range") != "" {
+	proxy := mode != diskFile
+	rangeHeader := r.Header.Get("Range")
+	// Representation proxies stream the complete image; only blob and disk
+	// controllers implement byte ranges. Their validators differ as well.
+	if mode == representationFile || strings.TrimSpace(rangeHeader) == "" {
+		rangeHeader = ""
+	}
+	if proxy && rangeHeader != "" {
 		w.Header().Set("Cache-Control", "no-cache")
 	}
 	if !proxy {
@@ -26,7 +51,7 @@ func serveStorageFile(w http.ResponseWriter, r *http.Request, file *os.File, sta
 			return
 		}
 		w.Header().Set("Last-Modified", modified)
-	} else if r.Header.Get("Range") == "" {
+	} else if rangeHeader == "" {
 		modified := time.Date(2011, 1, 1, 0, 0, 0, 0, time.UTC)
 		hash := sha256.Sum256([]byte(r.URL.RequestURI()))
 		etag := fmt.Sprintf("W/\"%x\"", hash[:16])
@@ -36,8 +61,8 @@ func serveStorageFile(w http.ResponseWriter, r *http.Request, file *os.File, sta
 			return
 		}
 	}
-	ranges := httpcompat.ByteRanges(r.Header.Get("Range"), size)
-	if ranges != nil && len(ranges) == 0 || proxy && r.Header.Get("Range") != "" && ranges == nil {
+	ranges := httpcompat.ByteRanges(rangeHeader, size)
+	if ranges != nil && len(ranges) == 0 || proxy && rangeHeader != "" && ranges == nil {
 		if proxy {
 			w.Header().Del("Content-Type")
 			w.Header().Del("Content-Disposition")
@@ -56,7 +81,7 @@ func serveStorageFile(w http.ResponseWriter, r *http.Request, file *os.File, sta
 	}
 	if ranges == nil {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
-		if proxy {
+		if mode == blobFile {
 			w.Header().Set("Accept-Ranges", "bytes")
 		}
 		w.WriteHeader(200)
@@ -97,7 +122,16 @@ func serveStorageFile(w http.ResponseWriter, r *http.Request, file *os.File, sta
 	headers := make([]string, len(ranges))
 	length := int64(0)
 	for i, span := range ranges {
-		headers[i] = fmt.Sprintf("\r\n--%s\r\n%s: %s\r\n%s: bytes %d-%d/%d\r\n\r\n", boundary, typeHeader, mimeType, rangeHeader, span[0], span[1], size)
+		headers[i] = fmt.Sprintf(
+			"\r\n--%s\r\n%s: %s\r\n%s: bytes %d-%d/%d\r\n\r\n",
+			boundary,
+			typeHeader,
+			mimeType,
+			rangeHeader,
+			span[0],
+			span[1],
+			size,
+		)
 		length += int64(len(headers[i])) + span[1] - span[0] + 1
 	}
 	ending := "\r\n--" + boundary + "--\r\n"

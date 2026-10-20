@@ -1,0 +1,36 @@
+{
+  "check": {
+    "command": "bin/check",
+    "pass": true
+  },
+  "focused_races": "Complete richtext, presentation and web packages, including concurrent/repeated shared Document Content and later Display preservation",
+  "independent_review": "No concrete finding; reviewed guard coverage, namespace/Trix/gallery/error/combined-field branches and actual callers; no independent execution",
+  "http": {
+    "passed": 8,
+    "total": 8,
+    "workflows": [
+      "message_lifecycle",
+      "pagination",
+      "room_membership",
+      "direct_ping"
+    ],
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "781226de65b5cac9c3a8eea9b217f13dd00c0f2bab19be3ace17cc29ea8bf745"
+    }
+  },
+  "tested_measured_binary_sha256": "781226de65b5cac9c3a8eea9b217f13dd00c0f2bab19be3ace17cc29ea8bf745",
+  "probe_removal_binary_identical": true,
+  "limits": "Local Mac work evidence only; attachment-free body-copy workload, not general/native performance. Dense/control HTTP medians variable. Not full browser/media certification. Raw profiles, runtime logs and generated credentials/data remain private.",
+  "pr_verification": {
+    "runtime_source_commit": "a2532444348a85a53c02d69b41db11625500f7f1",
+    "check": "bin/check passed on actual PR branch",
+    "http_passed": 8,
+    "http_total": 8,
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "26d42e96dffd35e433e3ef252ed07b841abe8c703ed1f6bfcd27b4046bcaba30"
+    },
+    "source_equivalence": "cmd/internal/assets/third_party/go.mod/go.sum match measured retained source"
+  }
+}

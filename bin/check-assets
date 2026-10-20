@@ -1,36 +1,113 @@
 #!/usr/bin/env python3
-"""Compare every pinned frontend asset with the running Rust reference."""
-from pathlib import Path
+"""Compare pinned frontend assets with Rust, including declared Go overrides."""
+
+import argparse
+import hashlib
 import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import sqlite3
 import tempfile
 import urllib.request
-ROOT=Path(__file__).resolve().parents[1]
-loader=importlib.machinery.SourceFileLoader('upgrade_helpers',str(ROOT/'bin/check-upgrade'))
-spec=importlib.util.spec_from_loader(loader.name,loader);helper=importlib.util.module_from_spec(spec);loader.exec_module(helper)
-rust=ROOT.parent/'once-campfire-rust';seed=rust/'parity/.seed/default/db/production.sqlite3'
-env={k:v for k,v in os.environ.items() if not k.startswith(('THRUSTER_','CAMPFIRE_')) and k!='TLS_DOMAIN'}
-for line in (rust/'parity/.env.reference').read_text().splitlines():
- if line and not line.startswith('#') and '=' in line:k,v=line.split('=',1);env[k]=v
-env.update(TARGET_BIND='127.0.0.1',DISABLE_SSL='1')
-with tempfile.TemporaryDirectory(prefix='assets-',dir=ROOT/'.cache/tmp') as tmp:
- work=Path(tmp);db=work/'db.sqlite3'
- with sqlite3.connect(f'file:{seed}?mode=ro',uri=True) as src,sqlite3.connect(db) as dst:src.backup(dst)
- env.update(CAMPFIRE_DATABASE_PATH=str(db),CAMPFIRE_STORAGE_PATH=str(work/'storage'))
- ours=json.loads((ROOT/'assets/generated/manifest.json').read_text())
- with helper.server(rust/'target/release/campfire',env,work,'assets-reference') as base:
-  with urllib.request.urlopen(base+'/assets/.manifest.json') as response:expected=json.load(response)
-  for name,entry in expected.items():
-   assert ours.get(name)==entry,(name,ours.get(name),entry)
-   with urllib.request.urlopen(base+'/assets/'+entry['digested_path']) as response:body=response.read()
-   actual=(ROOT/'assets/generated/public/assets'/entry['digested_path']).read_bytes()
-   if body!=actual:
-    offset=next((i for i,(a,b) in enumerate(zip(body,actual)) if a!=b),min(len(body),len(actual)))
-    raise AssertionError(f'{name} body differs at {offset}: Rust={body[offset-50:offset+150]!r} Go={actual[offset-50:offset+150]!r}')
-  _,_,page=helper.request(base,'/session/new')
-  for name in ('importmap.html','stylesheets.html'):
-   assert (ROOT/'assets/generated'/name).read_bytes() in page,name+' differs from Rust'
-  print(f'PASS: all {len(expected)} Rust asset paths and bodies, import map, and stylesheet tags match.')
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+loader = importlib.machinery.SourceFileLoader(
+    "upgrade_helpers", str(ROOT / "bin/check-upgrade")
+)
+spec = importlib.util.spec_from_loader(loader.name, loader)
+helper = importlib.util.module_from_spec(spec)
+loader.exec_module(helper)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rust-root", type=Path, default=ROOT / "reference")
+    parser.add_argument("--rust-binary", type=Path)
+    parser.add_argument("--seed", type=Path)
+    args = parser.parse_args()
+    rust = args.rust_root.resolve()
+    binary = (args.rust_binary or rust / "target/release/campfire").resolve()
+    seed = (args.seed or rust / "parity/.seed/default").resolve()
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("THRUSTER_", "CAMPFIRE_")) and k != "TLS_DOMAIN"
+    }
+    for line in (rust / "parity/.env.reference").read_text().splitlines():
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            env[key] = value
+    env.update(TARGET_BIND="127.0.0.1", DISABLE_SSL="1")
+    initializer = (rust / "reference/config/initializers/assets.rb").read_text()
+    version = re.search(
+        r"""^\s*Rails\.application\.config\.assets\.version\s*=\s*["']([^"']*)""",
+        initializer,
+        re.MULTILINE,
+    )
+    version = (version.group(1) if version else "1").encode()
+    ours = json.loads((ROOT / "assets/generated/manifest.json").read_text())
+    override = (ROOT / "assets/overrides/turbo.js").read_bytes()
+    override_entry = {
+        "digested_path": "turbo-"
+        + hashlib.sha1(override + version).hexdigest()[:8]
+        + ".js",
+        "integrity": None,
+    }
+    with tempfile.TemporaryDirectory(prefix="assets-", dir=ROOT / ".cache/tmp") as tmp:
+        work = Path(tmp)
+        database = work / "db.sqlite3"
+        with (
+            sqlite3.connect(
+                f"file:{seed}/db/production.sqlite3?mode=ro", uri=True
+            ) as source,
+            sqlite3.connect(database) as destination,
+        ):
+            source.backup(destination)
+        env.update(
+            CAMPFIRE_DATABASE_PATH=str(database),
+            CAMPFIRE_STORAGE_PATH=str(work / "storage"),
+        )
+        with helper.server(binary, env, work, "assets-reference") as base:
+            with urllib.request.urlopen(base + "/assets/.manifest.json") as response:
+                expected = json.load(response)
+            assert set(ours) == set(expected), "asset inventory differs"
+            for name, entry in expected.items():
+                with urllib.request.urlopen(
+                    base + "/assets/" + entry["digested_path"]
+                ) as response:
+                    body = response.read()
+                wanted = entry
+                if name == "turbo.js":
+                    # Only this library differs. Its exact two-await derivation and
+                    # license are checked by assets.TestTurboCancellationOverride.
+                    original = (
+                        rust
+                        / "crates/assets/vendor/turbo-rails/app/assets/javascripts/turbo.js"
+                    ).read_bytes()
+                    assert body == original, "Rust Turbo differs from the pinned source"
+                    body, wanted = override, override_entry
+                assert ours[name] == wanted, (name, ours[name], wanted)
+                actual = (
+                    ROOT / "assets/generated/public/assets" / wanted["digested_path"]
+                ).read_bytes()
+                assert actual == body, name + " body differs"
+            _, _, page = helper.request(base, "/session/new")
+            page = page.replace(
+                expected["turbo.js"]["digested_path"].encode(),
+                override_entry["digested_path"].encode(),
+            )
+            for name in ("importmap.html", "stylesheets.html"):
+                assert (ROOT / "assets/generated" / name).read_bytes() in page, (
+                    name + " differs"
+                )
+            print(
+                f"PASS: {len(expected)} asset paths/bodies, import map and stylesheets; "
+                "only the declared Turbo override differs from Rust."
+            )
+
+
+if __name__ == "__main__":
+    main()

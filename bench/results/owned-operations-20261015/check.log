@@ -1,0 +1,36 @@
+Compiled 315 assets and 89 imports
+...
+----------------------------------------------------------------------
+Ran 3 tests in 0.005s
+
+OK
+ok  	github.com/basecamp/once-campfire-go/assets	1.403s
+ok  	github.com/basecamp/once-campfire-go/bench/httprate	2.052s
+ok  	github.com/basecamp/once-campfire-go/cmd/campfire	6.356s
+ok  	github.com/basecamp/once-campfire-go/internal/application	11.129s
+ok  	github.com/basecamp/once-campfire-go/internal/cable	4.242s
+ok  	github.com/basecamp/once-campfire-go/internal/database	3.160s
+ok  	github.com/basecamp/once-campfire-go/internal/front	2.756s
+ok  	github.com/basecamp/once-campfire-go/internal/html	3.766s
+ok  	github.com/basecamp/once-campfire-go/internal/httpcompat	1.918s
+ok  	github.com/basecamp/once-campfire-go/internal/integrations	9.318s
+ok  	github.com/basecamp/once-campfire-go/internal/jobs	4.354s
+ok  	github.com/basecamp/once-campfire-go/internal/presentation	6.597s
+ok  	github.com/basecamp/once-campfire-go/internal/qrcode	3.394s
+ok  	github.com/basecamp/once-campfire-go/internal/rails	4.788s
+?   	github.com/basecamp/once-campfire-go/internal/responsebody	[no test files]
+ok  	github.com/basecamp/once-campfire-go/internal/richtext	10.201s
+ok  	github.com/basecamp/once-campfire-go/internal/storage	7.102s
+ok  	github.com/basecamp/once-campfire-go/internal/useragent	4.867s
+ok  	github.com/basecamp/once-campfire-go/internal/web	12.282s
+ok  	github.com/basecamp/once-campfire-go/internal/zstd	3.966s
+ok  	github.com/coder/websocket	12.816s
+?   	github.com/coder/websocket/internal/bpool	[no test files]
+?   	github.com/coder/websocket/internal/errd	[no test files]
+?   	github.com/coder/websocket/internal/test	[no test files]
+?   	github.com/coder/websocket/internal/test/assert	[no test files]
+?   	github.com/coder/websocket/internal/test/wstest	[no test files]
+?   	github.com/coder/websocket/internal/test/xrand	[no test files]
+?   	github.com/coder/websocket/internal/util	[no test files]
+ok  	github.com/coder/websocket/internal/xsync	1.519s
+ok  	github.com/coder/websocket/wsjson	1.753s [no tests to run]

@@ -1,0 +1,58 @@
+{
+  "artifacts": [
+    {
+      "path": "check.log.gz",
+      "sha256": "6d34a49e9e23df7ae5158ba92161409676feb5d6efc16ef7c3723d7910f1e4e2",
+      "bytes": 413,
+      "uncompressed_bytes": 2097
+    },
+    {
+      "path": "baseline-regression.log.gz",
+      "sha256": "a676187eb8aec4483941e1288160d4290a8a5152073348558ec8283c7a28d0c2",
+      "bytes": 392,
+      "uncompressed_bytes": 1267
+    },
+    {
+      "path": "review-regression.log.gz",
+      "sha256": "5ca0db65c588624e88151cb32cd70676ad6bce0d1f201f21ff2f16dca2238b25",
+      "bytes": 496,
+      "uncompressed_bytes": 1162
+    },
+    {
+      "path": "fixed-regression.log.gz",
+      "sha256": "fed63699649a3668b4ed06173ea2855c3b516145cf4bda7ff5d4067a6c1eb154",
+      "bytes": 79,
+      "uncompressed_bytes": 62
+    },
+    {
+      "path": "baseline-http-report.json.gz",
+      "sha256": "c34458ff89e4966596b95eb0e5484551a5b70d41e39c4e5007b46dca303a03d2",
+      "bytes": 1202,
+      "uncompressed_bytes": 11268
+    },
+    {
+      "path": "http-report.json.gz",
+      "sha256": "9c191252780428a0b8bf51fb96020f589d496d50370aa30f2d3875374a66dc82",
+      "bytes": 1681,
+      "uncompressed_bytes": 34123
+    },
+    {
+      "path": "http_contract.py.gz",
+      "sha256": "b081a93d1b65bfc698ffc4b185fa8dc8e01816c7d6e456a539a5e0248635d68d",
+      "bytes": 1304,
+      "uncompressed_bytes": 3333
+    },
+    {
+      "path": "pr-check.log.gz",
+      "sha256": "fcfc245a09a07e42d116a2697c642ad8756ecc07c0b5627c37a65d402af1d3ff",
+      "bytes": 413,
+      "uncompressed_bytes": 2097
+    },
+    {
+      "path": "pr-http-report.json.gz",
+      "sha256": "80ad128534e1ade5196d1d084779a8a8c56d188728b9d195cde6c63a9dd84571",
+      "bytes": 1681,
+      "uncompressed_bytes": 34123
+    }
+  ]
+}

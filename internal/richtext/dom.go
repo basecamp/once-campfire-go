@@ -2,6 +2,7 @@ package richtext
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	xhtml "github.com/basecamp/once-campfire-go/internal/html"
 	"golang.org/x/net/html/atom"
@@ -11,12 +12,24 @@ func parse(body string) (*xhtml.Node, error) {
 	return parseIn(body, nil)
 }
 func parseIn(body string, context *xhtml.Node) (*xhtml.Node, error) {
+	body = strings.TrimPrefix(body, "\ufeff")
+	// In the body context, valid literal text needs neither tokenization nor
+	// tree correction. Keep entities, markup, newline normalization and invalid
+	// characters on the parser path, including all non-body contexts.
+	if (context == nil || context.Type == xhtml.ElementNode && context.Data == "body" && context.Namespace == "") &&
+		!strings.ContainsAny(body, "<&\r\x00") && utf8.ValidString(body) {
+		root := &xhtml.Node{Type: xhtml.DocumentNode}
+		if body != "" {
+			root.AppendChild(&xhtml.Node{Type: xhtml.TextNode, Data: body})
+		}
+		return root, nil
+	}
 	if context == nil || context.Type != xhtml.ElementNode {
 		context = &xhtml.Node{Type: xhtml.ElementNode, Data: "body", DataAtom: atom.Body}
 	} else {
 		context = &xhtml.Node{Type: xhtml.ElementNode, Data: context.Data, DataAtom: context.DataAtom, Namespace: context.Namespace}
 	}
-	nodes, err := xhtml.ParseFragmentWithOptions(strings.NewReader(strings.TrimPrefix(body, "\ufeff")), context, xhtml.ParseOptionEnableScripting(false))
+	nodes, err := xhtml.ParseFragmentWithOptions(strings.NewReader(body), context, xhtml.ParseOptionEnableScripting(false))
 	if err != nil {
 		return nil, err
 	}
@@ -56,6 +69,18 @@ func walk(n *xhtml.Node, fn func(*xhtml.Node)) {
 	}
 	fn(n)
 }
+func hasAttachments(n *xhtml.Node) bool {
+	if n.Data == "action-text-attachment" {
+		return true
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if hasAttachments(c) {
+			return true
+		}
+	}
+	return false
+}
+
 func clone(n *xhtml.Node) *xhtml.Node {
 	out := &xhtml.Node{Type: n.Type, Data: n.Data, DataAtom: n.DataAtom, Namespace: n.Namespace, Attr: append([]xhtml.Attribute(nil), n.Attr...)}
 	for c := n.FirstChild; c != nil; c = c.NextSibling {

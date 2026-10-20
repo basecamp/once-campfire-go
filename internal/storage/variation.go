@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"time"
 )
 
 type Symbol string
@@ -80,13 +79,6 @@ func (v Variation) MarshalJSON() ([]byte, error) {
 	}
 	out.WriteByte('}')
 	return out.Bytes(), nil
-}
-func (s *Store) VariationKey(v Variation) (string, error) {
-	raw, err := v.MarshalJSON()
-	if err != nil {
-		return "", err
-	}
-	return s.Verifier.GenerateRaw(raw, "variation", time.Time{})
 }
 func (s *Store) DecodeVariation(key string) (Variation, error) {
 	raw, err := s.Verifier.VerifyRaw(key, "variation", s.DB.Now())

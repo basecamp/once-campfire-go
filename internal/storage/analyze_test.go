@@ -59,7 +59,7 @@ func TestMediaMetadataAndTrackedPreview(t *testing.T) {
 				t.Fatalf("metadata got %s want %s", blob.Metadata, v.Blob.Metadata)
 			}
 			if Previewable(blob.Type()) {
-				var images [2]Blob
+				var images [2]database.Blob
 				var errs [2]error
 				var wg sync.WaitGroup
 				for i := range images {

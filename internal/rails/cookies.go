@@ -107,8 +107,13 @@ func envelope(value any, name string, expires time.Time) ([]byte, error) {
 	}{base64.StdEncoding.EncodeToString(data), expiry, "cookie." + name}})
 }
 
+// Cookies, signed identifiers and streams accept either base64 alphabet,
+// including the historical mixed alphabet. The immutable translator is shared;
+// constructing its lookup table for every payload needlessly repeats work.
+var base64Alphabet = strings.NewReplacer("-", "+", "_", "/")
+
 func decode64(s string) ([]byte, error) {
-	return base64.RawStdEncoding.DecodeString(strings.TrimRight(strings.NewReplacer("-", "+", "_", "/").Replace(s), "="))
+	return base64.RawStdEncoding.DecodeString(strings.TrimRight(base64Alphabet.Replace(s), "="))
 }
 
 func unpack(data []byte, name string, now time.Time, dest any) error {
@@ -163,7 +168,10 @@ func (s *Secrets) VerifyCookie(name, raw string, now time.Time, dest any) error 
 	payload, signature := raw[:i], raw[i+2:]
 	mac := hmac.New(sha1.New, s.signing)
 	mac.Write([]byte(payload))
-	if !hmac.Equal([]byte(signature), []byte(hex.EncodeToString(mac.Sum(nil)))) {
+	var digest [sha1.Size]byte
+	var expected [sha1.Size * 2]byte
+	hex.Encode(expected[:], mac.Sum(digest[:0]))
+	if !hmac.Equal([]byte(signature), expected[:]) {
 		return ErrInvalid
 	}
 	data, err := decode64(payload)

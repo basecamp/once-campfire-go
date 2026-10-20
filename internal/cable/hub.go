@@ -20,6 +20,8 @@ type Hub struct {
 	db          *database.DB
 	secrets     *rails.Secrets
 	mu          sync.RWMutex
+	closed      bool
+	serving     sync.WaitGroup
 	clients     map[*client]struct{}
 	subscribers map[publication][]recipient
 }
@@ -122,6 +124,17 @@ func (c *client) sendFrame(data *websocket.PreparedMessage) bool {
 	}
 }
 func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, token string) {
+	// Admission and the join count share the close lock, including upgrades that
+	// have not yet installed their client. No positive Add can race a zero Wait.
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	h.serving.Add(1)
+	h.mu.Unlock()
+	defer h.serving.Done()
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"actioncable-v1-json"}, CompressionMode: websocket.CompressionNoContextTakeover, CompressionThreshold: 256})
 	if err != nil {
 		return
@@ -136,6 +149,10 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 	defer cancel()
 	c := &client{disconnect: make(chan bool, 1), user: user, token: token, cancel: cancel, out: make(chan *websocket.PreparedMessage, 256), subscriptions: map[string]subscription{}}
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
 	h.clients[c] = struct{}{}
 	h.mu.Unlock()
 	defer func() {
@@ -160,6 +177,8 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 		defer cancel()
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
+		writer := newFrameWriter(ctx, cancel, conn, 30*time.Second)
+		defer writer.Close()
 		for {
 			var data []byte
 			var frame *websocket.PreparedMessage
@@ -177,13 +196,10 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 				}
 				data, _ = json.Marshal(map[string]any{"type": "ping", "message": time.Now().Unix()})
 			}
-			timeout, stop := context.WithTimeout(ctx, 30*time.Second)
 			if frame == nil {
 				frame = websocket.NewPreparedMessage(websocket.MessageText, data)
 			}
-			err := conn.WritePrepared(timeout, frame)
-			stop()
-			if err != nil || closeAfter {
+			if err := writer.Write(frame); err != nil || closeAfter {
 				return
 			}
 		}
@@ -226,21 +242,28 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 					h.mu.Unlock()
 					c.send(map[string]string{"type": "confirm_subscription", "identifier": command.Identifier})
 					if sub.Channel == "PresenceChannel" {
-						h.PublishStream(ctx, fmt.Sprintf("user_%d_reads", c.user.ID), map[string]any{"room_id": sub.Room})
+						h.PublishStreams(ctx, map[string]any{"room_id": sub.Room}, fmt.Sprintf("user_%d_reads", c.user.ID))
 					}
 					continue
 				}
 			}
 			c.send(map[string]string{"type": "reject_subscription", "identifier": command.Identifier})
 		case "unsubscribe":
+			h.mu.RLock()
+			sub, exists := c.subscriptions[command.Identifier]
+			h.mu.RUnlock()
+			if !exists {
+				continue
+			}
+			// Keep presence owned until its decrement commits. On failure,
+			// disconnect cleanup retains the cancellation-independent retry.
+			if sub.Present && h.db.Presence(ctx, c.user.ID, sub.Room, "absent") != nil {
+				return
+			}
 			h.mu.Lock()
-			sub := c.subscriptions[command.Identifier]
-			h.unindex(sub)
+			h.unindex(c.subscriptions[command.Identifier])
 			delete(c.subscriptions, command.Identifier)
 			h.mu.Unlock()
-			if sub.Present {
-				h.db.Presence(ctx, c.user.ID, sub.Room, "absent")
-			}
 		case "message":
 			h.mu.RLock()
 			sub, exists := c.subscriptions[command.Identifier]
@@ -263,7 +286,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 			switch sub.Channel {
 			case "TypingNotificationsChannel":
 				if payload.Action == "start" || payload.Action == "stop" {
-					h.PublishStream(ctx, sub.Stream, map[string]any{"action": payload.Action, "user": map[string]any{"id": c.user.ID, "name": c.user.Name}})
+					h.PublishStreams(ctx, map[string]any{"action": payload.Action, "user": map[string]any{"id": c.user.ID, "name": c.user.Name}}, sub.Stream)
 				}
 			case "PresenceChannel":
 				action := payload.Action
@@ -271,9 +294,9 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 					continue
 				}
 				if action == "present" && sub.Present {
-					action = "refresh"
+					action = "read"
 				}
-				if action == "absent" && !sub.Present {
+				if (action == "absent" || action == "refresh") && !sub.Present {
 					continue
 				}
 				if h.db.Presence(ctx, c.user.ID, sub.Room, action) == nil {
@@ -282,7 +305,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, user database.User, 
 					h.setSubscription(c, command.Identifier, sub)
 					h.mu.Unlock()
 					if payload.Action == "present" {
-						h.PublishStream(ctx, fmt.Sprintf("user_%d_reads", c.user.ID), map[string]any{"room_id": sub.Room})
+						h.PublishStreams(ctx, map[string]any{"room_id": sub.Room}, fmt.Sprintf("user_%d_reads", c.user.ID))
 					}
 				}
 			}
@@ -306,43 +329,53 @@ func (h *Hub) disconnect(user int64, reconnect bool) {
 	}
 }
 func (h *Hub) Close() {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	h.mu.Lock()
+	h.closed = true
 	for c := range h.clients {
 		c.cancel()
 	}
+	h.mu.Unlock()
+	// Serve returns only after its writer, persisted absence and socket close.
+	h.serving.Wait()
 }
 func (h *Hub) Publish(ctx context.Context, room int64, markup string) {
-	h.publish(ctx, publication{room: room}, markup)
+	h.publish(ctx, markup, publication{room: room})
 }
-func (h *Hub) PublishStream(ctx context.Context, name string, message any) {
-	h.publish(ctx, publication{stream: name}, message)
+
+// PublishStreams publishes one event to its selected streams. Each distinct
+// session is authorized afresh; frames are shared only for identical identifiers.
+func (h *Hub) PublishStreams(ctx context.Context, message any, names ...string) {
+	keys := make([]publication, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if _, exists := seen[name]; !exists {
+			seen[name] = struct{}{}
+			keys = append(keys, publication{stream: name})
+		}
+	}
+	h.publish(ctx, message, keys...)
 }
-func (h *Hub) publish(ctx context.Context, key publication, message any) {
+
+func (h *Hub) publish(ctx context.Context, message any, keys ...publication) {
 	var recipients []recipient
 	h.mu.RLock()
-	if bucket := h.subscribers[key]; key != (publication{}) && len(bucket) != 0 {
-		recipients = append([]recipient(nil), bucket...)
+	for _, key := range keys {
+		if key != (publication{}) {
+			recipients = append(recipients, h.subscribers[key]...)
+		}
 	}
 	h.mu.RUnlock()
 	// Recheck every publication; batch distinct sessions rather than trusting a
 	// long-lived authorization cache or querying once for every receiving socket.
-	groups := make(map[int64]map[string]struct{})
+	allowed := make(map[int64]map[string]int64)
 	for _, recipient := range recipients {
-		if groups[recipient.room] == nil {
-			groups[recipient.room] = make(map[string]struct{})
+		if allowed[recipient.room] == nil {
+			allowed[recipient.room] = make(map[string]int64)
 		}
-		groups[recipient.room][recipient.client.token] = struct{}{}
+		allowed[recipient.room][recipient.client.token] = 0
 	}
-	allowed := make(map[int64]map[string]int64, len(groups))
-	for room, tokens := range groups {
-		keys := make([]string, 0, len(tokens))
-		for token := range tokens {
-			keys = append(keys, token)
-		}
-		var err error
-		allowed[room], err = h.db.AuthorizedSessions(ctx, keys, room)
-		if err != nil {
+	for room, sessions := range allowed {
+		if err := h.db.AuthorizeSessions(ctx, sessions, room); err != nil {
 			allowed[room] = nil
 		}
 	}

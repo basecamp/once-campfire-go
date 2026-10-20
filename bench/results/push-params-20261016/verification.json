@@ -1,0 +1,43 @@
+{
+  "scope": "Push subscription source/scope correction and ordered multipart intake; no performance claim",
+  "baseline_local": "d19a143",
+  "baseline_pr": "ea661a9",
+  "check": "bin/check passed",
+  "http_passed": 16,
+  "http_total": 16,
+  "binaries": {
+    "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+    "go": "79e8ef9b1ed1e927e742300b22e8935b97b32c67048ce24337784daafbaba575"
+  },
+  "permanent_regressions": [
+    "Rejected push registrations preserve credentials; source/root selection and permitted scalar values",
+    "Ordered multipart direct-upload response and persisted metadata reuse existing expected vectors",
+    "Structured rejection cleans previously spooled file"
+  ],
+  "source_sha256": {
+    "web/params.go": "89689f8fb19986ca4b8375417eba43313303aa425ee4520c4316d087357c3a37",
+    "web/server.go": "65a4af4f75214affdf0223bb1f4a1f5ebffa226c22e3b95a48a433265a5fa360",
+    "web/multipart.go": "3c5d6a13a994e41547482699fe556e8d3880475cc14cb30d2a83e8555c1758ff",
+    "web/rooms.go": "2b060a8e336b0f9a7f1df47ae3c296a27460e8353ed7dc4c2aac65c6a00512b8",
+    "web/bots.go": "7f206e2433a5ea82fbf555119b33e0cfd5f360fa83bf21a122f8f864c335b8c1",
+    "web/push.go": "c50d17868ba5d760c73e7e40b858309e56d95f2722a5e654fabf71fff76facad",
+    "web/structured_form.go": "7ee42864b2cb78513044fd7e473b60af06c0f49d39c837ee373517900642081d",
+    "web/uploads.go": "bff2a103da22811182dd122c8e441fe5b918a4d2cf956f7b6bb1d93b041aa5dc"
+  },
+  "independent_reviews": [
+    "Initial read-only review found candidate multipart re-sorting defect before delivery",
+    "Follow-up read-only review found no concrete introduced issue in ordered capture/validation/method/query/cleanup; no execution checks by reviewers"
+  ],
+  "limits": "Existing sharedHTTP workflows extended narrowly; no provider sends, new browser/media recertification, full Rack parity or whole-app correctness guarantee. Earlier disclosed browser count timing failure unchanged.",
+  "pr_verification": {
+    "source_commit": "b930ce070a73ef722ce50cdb65979a6d1efc24c2",
+    "check": "bin/check passed on actual PR branch",
+    "http_passed": 16,
+    "http_total": 16,
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "0802deaf5eec7af5d7998317056f707f9b324775367bb0bceb56139ffcabe6f2"
+    },
+    "source_equivalence": "cmd/internal/assets/third_party/go.mod/go.sum match verified local db8e011"
+  }
+}

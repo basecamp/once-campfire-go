@@ -6,15 +6,13 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"runtime"
 	"runtime/pprof"
 	"syscall"
+	"time"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
 	"github.com/basecamp/once-campfire-go/internal/front"
 	"github.com/basecamp/once-campfire-go/internal/rails"
-	"github.com/basecamp/once-campfire-go/internal/web"
 )
 
 func env(key, fallback string) string {
@@ -46,32 +44,62 @@ func run() error {
 	if len(os.Args) > 1 {
 		command = os.Args[1]
 	}
-	if command != "server" && command != "db:prepare" && command != "backup" {
-		return fmt.Errorf("unknown command %q (server, db:prepare, or backup)", command)
+	if command != "server" && command != "db:prepare" && command != "backup" && command != "restore" {
+		return fmt.Errorf("unknown command %q (server, db:prepare, backup, or restore)", command)
 	}
-	secrets, err := rails.NewSecrets(os.Getenv("SECRET_KEY_BASE"))
+	databaseConfig := databaseConfigFromEnv()
+	if command == "restore" {
+		return database.Restore(context.Background(), databaseConfig.backupPath(), databaseConfig.Path)
+	}
+	if command != "server" {
+		if _, err := rails.NewSecrets(databaseConfig.Secret); err != nil {
+			return err
+		}
+		db, err := database.Open(databaseConfig.Path, databaseConfig.Readers)
+		if err != nil {
+			return err
+		}
+		if command == "db:prepare" {
+			return db.Close()
+		}
+		defer db.Close()
+		return db.Backup(context.Background(), databaseConfig.backupPath())
+	}
+	config, err := serverConfigFromEnv(databaseConfig)
 	if err != nil {
 		return err
 	}
-	storage := env("CAMPFIRE_STORAGE_PATH", "storage")
-	path := env("CAMPFIRE_DATABASE_PATH", filepath.Join(storage, "db", env("RAILS_ENV", "production")+".sqlite3"))
-	db, err := database.Open(path, max(1, runtime.GOMAXPROCS(0)))
+	app, err := openApplication(config)
 	if err != nil {
 		return err
 	}
-	defer db.Close()
-	if command == "backup" {
-		return db.Backup(context.Background(), filepath.Join(storage, "backups", filepath.Base(path)))
-	}
-	if command == "db:prepare" {
-		return nil
-	}
-	app, err := web.New(db, secrets, os.Getenv("DISABLE_SSL") == "", storage)
-	if err != nil {
-		return err
-	}
-	defer app.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return front.Serve(ctx, front.FromEnv(), app)
+	closing, finished := make(chan struct{}), make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-closing:
+		case <-finished:
+			return
+		}
+		timer := time.NewTimer(30 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-finished:
+		case <-timer.C:
+			// Native media work cannot always be preempted. This is forced exit,
+			// not successful teardown: persistence stays open under surviving work.
+			slog.Error("shutdown grace expired; forcing process exit")
+			os.Exit(1)
+		}
+	}()
+	defer func() {
+		close(closing)
+		if err := app.Close(); err != nil {
+			slog.Error("database shutdown failed", "error", err)
+		}
+		close(finished)
+	}()
+	return front.Serve(ctx, front.FromEnv(), app.HTTP)
 }

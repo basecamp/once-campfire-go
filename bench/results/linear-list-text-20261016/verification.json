@@ -1,0 +1,37 @@
+{
+  "check": {
+    "command": "bin/check",
+    "pass": true
+  },
+  "focused_races": "Complete richtext, database and web packages; original-source overlay confirms new plaintext expectations",
+  "write_probe": "Actual CreateMessage and UpdateMessage check exact persisted1000/20-item FTS text against independent lines",
+  "independent_review": "No material semantic/complexity finding; reviewed actual Document/API/OpenGraph/FTS callers, no independent execution",
+  "http": {
+    "passed": 8,
+    "total": 8,
+    "workflows": [
+      "message_lifecycle",
+      "pagination",
+      "room_membership",
+      "direct_ping"
+    ],
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "29a12e6fb4819e22b999ac54129bfacac40b1f0b6f14e62aa9b7741d1acf419b"
+    }
+  },
+  "tested_measured_binary_sha256": "29a12e6fb4819e22b999ac54129bfacac40b1f0b6f14e62aa9b7741d1acf419b",
+  "probe_removal_binary_identical": true,
+  "limits": "Local Mac work evidence only; long numbered-list workload, not general/native performance. Paragraph pairs mixed despite median gate pass. Not full browser/media certification. Raw profiles, runtime logs and generated credentials/data remain private.",
+  "pr_verification": {
+    "runtime_source_commit": "d9e938b32c8acd623b64a2316995d34efa9add51",
+    "check": "bin/check passed on actual PR branch",
+    "http_passed": 8,
+    "http_total": 8,
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "6793f6a7d04858c8cde7f73f3686d2b9554becc8eae157fe9d073fc8b388b325"
+    },
+    "source_equivalence": "cmd/internal/assets/third_party/go.mod/go.sum match measured retained source"
+  }
+}

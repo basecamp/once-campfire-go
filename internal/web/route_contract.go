@@ -2,7 +2,6 @@ package web
 
 import (
 	"errors"
-	"github.com/basecamp/once-campfire-go/internal/database"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -15,6 +14,21 @@ type routeContract struct {
 	regex                             *regexp.Regexp
 	names                             []string
 	bot                               bool
+	index                             int
+	controller, endpointAction        string
+}
+
+// Cable is a protocol endpoint, not part of the Rails controller vector. Its
+// exact path is deliberately not normalized into a new upgrade target.
+var cableRoute = routeContract{Method: "GET", Pattern: "/cable", Endpoint: "cable#show", Action: "cable::show"}
+
+type routeGroup struct{ method, segment string }
+
+var routeGroups = make(map[routeGroup][]*routeContract)
+
+func firstSegment(path string) string {
+	segment, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+	return segment
 }
 
 func compileContract(pattern string) (*regexp.Regexp, []string) {
@@ -51,19 +65,23 @@ func compileContract(pattern string) (*regexp.Regexp, []string) {
 var escapedHex = regexp.MustCompile(`%[a-fA-F0-9]{2}`)
 
 func normalizedPath(path string) string {
+	if strings.HasPrefix(path, "/") && (len(path) == 1 || !strings.HasSuffix(path, "/")) &&
+		!strings.Contains(path, "//") && !strings.Contains(path, "%") {
+		return path
+	}
 	parts := strings.FieldsFunc(path, func(r rune) bool { return r == '/' })
 	return escapedHex.ReplaceAllStringFunc("/"+strings.Join(parts, "/"), strings.ToUpper)
 }
+
 func recognize(method, path string) (*routeContract, map[string]string, error) {
-	path = normalizedPath(path)
 	if method == "HEAD" {
 		method = "GET"
 	}
-	for i := range contracts {
-		route := &contracts[i]
-		if route.Method != method {
-			continue
-		}
+	path = normalizedPath(path)
+	// Every controller route has a literal first segment. This index excludes
+	// impossible matches without changing declaration order within a group.
+	segment, _, _ := strings.Cut(firstSegment(path), ".")
+	for _, route := range routeGroups[routeGroup{method, segment}] {
 		captures := route.regex.FindStringSubmatch(path)
 		if captures == nil {
 			continue
@@ -85,83 +103,71 @@ func recognize(method, path string) (*routeContract, map[string]string, error) {
 			}
 			params[name] = value
 		}
-		parts := strings.SplitN(route.Endpoint, "#", 2)
-		params["controller"] = parts[0]
-		params["action"] = parts[1]
+		params["controller"] = route.controller
+		params["action"] = route.endpointAction
 		return route, params, nil
 	}
 	return nil, nil, nil
 }
+
+// Recognition is pure in method/path. Method overrides select a new match;
+// dispatch leaves the original URL intact and reuses its selected captures.
+type recognizedRoute struct {
+	method, path string
+	route        *routeContract
+	params       map[string]string
+	err          error
+}
+
+func recognizeRequest(r *http.Request) (*routeContract, map[string]string, error) {
+	info := requestMetadata(r.Context())
+	path := r.URL.EscapedPath()
+	if r.URL.Path == cableRoute.Pattern {
+		return &cableRoute, nil, nil
+	}
+	if info == nil {
+		return recognize(r.Method, path)
+	}
+	if match := info.routing; match != nil && match.method == r.Method && match.path == path {
+		return match.route, match.params, match.err
+	}
+	route, params, err := recognize(r.Method, path)
+	info.routing = &recognizedRoute{
+		method: r.Method,
+		path:   path,
+		route:  route,
+		params: params,
+		err:    err,
+	}
+	return route, params, err
+}
+
 func init() {
 	for i := range contracts {
-		contracts[i].regex, contracts[i].names = compileContract(contracts[i].Pattern)
-		contracts[i].bot = strings.Contains(contracts[i].Pattern, ":bot_key")
+		route := &contracts[i]
+		route.regex, route.names = compileContract(route.Pattern)
+		route.bot = strings.Contains(route.Pattern, ":bot_key")
+		route.index = i
+		route.controller, route.endpointAction, _ = strings.Cut(route.Endpoint, "#")
+		segment, _, _ := strings.Cut(firstSegment(route.Pattern), "(")
+		group := routeGroup{route.Method, segment}
+		routeGroups[group] = append(routeGroups[group], route)
 	}
+	cableRoute.index = len(contracts)
 }
+
 func (s *Server) routeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/cable" {
-		s.mux.ServeHTTP(w, r)
-		return
-	}
-	route, params, err := recognize(r.Method, r.URL.EscapedPath())
+	route, params, err := recognizeRequest(r)
 	if err != nil {
 		http.Error(w, "Invalid path parameters", 400)
 		return
 	}
-	if route == nil || route.Action == "action_not_found" {
+	if route == nil {
 		publicError(w, r, 404)
-		return
-	}
-	if route.Action == "missing_controller" {
-		publicError(w, r, 500)
 		return
 	}
 	for key, value := range params {
 		r.SetPathValue(key, value)
 	}
-	path := normalizedPath(r.URL.EscapedPath())
-	if format := params["format"]; format != "" {
-		suffix := "." + url.PathEscape(format)
-		if strings.HasSuffix(path, suffix) {
-			path = strings.TrimSuffix(path, suffix)
-		}
-	}
-	clone := *r.URL
-	clone.Path, _ = url.PathUnescape(path)
-	clone.RawPath = path
-	r.URL = &clone
-	if strings.HasPrefix(route.Action, "mailbox::") {
-		if route.Action == "mailbox::conductor" {
-			w.WriteHeader(403)
-		} else {
-			w.WriteHeader(404)
-		}
-		return
-	}
-	if strings.HasPrefix(route.Action, "turbo_native::") {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		text := map[string]string{"turbo_native::recede": "Going back…", "turbo_native::resume": "Staying put…", "turbo_native::refresh": "Refreshing…"}[route.Action]
-		w.Write([]byte(text))
-		return
-	}
-	if route.Action == "rooms::destroy_without_room" || route.Action == "rooms::directs::show" {
-		s.auth(func(w http.ResponseWriter, r *http.Request, _ database.User) {
-			publicError(w, r, 500)
-		})(w, r)
-		return
-	}
-	if route.Action == "rooms::index" {
-		s.auth(s.roomsIndex)(w, r)
-		return
-	}
-	if route.bot {
-		if !s.botRequest(w, r) {
-			publicError(w, r, 404)
-		}
-		return
-	}
-	if strings.HasPrefix(route.Endpoint, "messages#") && params["room_id"] == "" {
-		r.SetPathValue("id", "")
-	}
-	s.mux.ServeHTTP(w, r)
+	s.dispatch[route.index](w, r)
 }

@@ -11,7 +11,7 @@ import (
 var qrSlots = make(chan struct{}, 4)
 
 func (s *Server) qrCode(w http.ResponseWriter, r *http.Request) {
-	value := strings.NewReplacer("-", "+", "_", "/").Replace(r.PathValue("code"))
+	value := strings.NewReplacer("-", "+", "_", "/").Replace(r.PathValue("id"))
 	var data []byte
 	var err error
 	if strings.Contains(value, "=") {

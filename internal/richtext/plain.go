@@ -9,6 +9,29 @@ import (
 
 func chomp(s string) string { return strings.TrimRight(s, "\r\n") }
 func plain(n *xhtml.Node) string {
+	depth, list := 0, ""
+	for p := n.Parent; p != nil; p = p.Parent {
+		if p.Data == "ul" || p.Data == "ol" {
+			depth++
+			if list == "" {
+				list = p.Data
+			}
+		}
+	}
+	index := 1
+	if n.Data == "li" && list == "ol" {
+		for prev := n.PrevSibling; prev != nil; prev = prev.PrevSibling {
+			if prev.Type == xhtml.ElementNode {
+				index++
+			}
+		}
+	}
+	return plainAt(n, depth, list, index)
+}
+
+// Subtree callers inherit their existing list context once. Descendants carry
+// that context and their element-sibling ordinal instead of rescanning the tree.
+func plainAt(n *xhtml.Node, depth int, list string, index int) string {
 	if n.Type == xhtml.TextNode {
 		return chomp(n.Data)
 	}
@@ -18,21 +41,20 @@ func plain(n *xhtml.Node) string {
 	if n.Data == "script" || n.Data == "style" || n.Data == "unsupported" {
 		return ""
 	}
+	childDepth, childList := depth, list
+	if n.Data == "ul" || n.Data == "ol" {
+		childDepth++
+		childList = n.Data
+	}
 	var b strings.Builder
+	childIndex := 0
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		b.WriteString(plain(c))
+		if c.Type == xhtml.ElementNode {
+			childIndex++
+		}
+		b.WriteString(plainAt(c, childDepth, childList, childIndex))
 	}
 	text := b.String()
-	depth := 0
-	list := ""
-	for p := n.Parent; p != nil; p = p.Parent {
-		if p.Data == "ul" || p.Data == "ol" {
-			depth++
-			if list == "" {
-				list = p.Data
-			}
-		}
-	}
 	switch n.Data {
 	case "p", "h1":
 		return chomp(text) + "\n\n"
@@ -58,12 +80,6 @@ func plain(n *xhtml.Node) string {
 	case "li":
 		bullet := "•"
 		if list == "ol" {
-			index := 1
-			for prev := n.PrevSibling; prev != nil; prev = prev.PrevSibling {
-				if prev.Type == xhtml.ElementNode {
-					index++
-				}
-			}
 			bullet = fmt.Sprintf("%d.", index)
 		}
 		indent := ""

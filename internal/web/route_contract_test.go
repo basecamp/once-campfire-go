@@ -1,11 +1,47 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"testing"
 )
+
+func TestRouteDispatchUsesDecodedFormat(t *testing.T) {
+	s := &Server{}
+	s.dispatch = s.bindRoutes()
+	for _, path := range []string{"/up.json", "//up.j%73on//"} {
+		r := s.normalizeRequest(httptest.NewRequest("GET", "http://chat.test"+path+"?probe=one", nil))
+		w := httptest.NewRecorder()
+		s.routeHTTP(w, r)
+		var body struct{ Status string }
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != 200 || body.Status != "up" {
+			t.Fatalf("%s: %d %s, %v", path, w.Code, w.Body.String(), err)
+		}
+	}
+}
+
+func TestProtocolRouteRejectionsPrecedeAuthentication(t *testing.T) {
+	app, server, _, owner := testApp(t)
+	rooms, err := app.DB.Rooms(context.Background(), owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ method, path string }{
+		{"GET", "/%63able"},
+		{"POST", "/cable"},
+		{"POST", fmt.Sprintf("/rooms/%d/messages/messages", rooms[0].ID)},
+		{"POST", fmt.Sprintf("/rooms/%d/key%%2Fextra/messages", rooms[0].ID)},
+	} {
+		response, _ := perform(t, server, tc.method, tc.path, "", nil, nil)
+		if response.StatusCode != 404 {
+			t.Errorf("%s %s reached authentication: %s", tc.method, tc.path, response.Status)
+		}
+	}
+}
 
 func TestReferenceRoutes(t *testing.T) {
 	raw, err := os.ReadFile("../../reference/vectors/campfire_routes.json")

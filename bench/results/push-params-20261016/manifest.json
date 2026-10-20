@@ -1,0 +1,58 @@
+{
+  "artifacts": [
+    {
+      "path": "check.log.gz",
+      "sha256": "792c519b96add07b03d29dbe50d09299062693670a284c0d4c13ceb5e8646d40",
+      "bytes": 412,
+      "uncompressed_bytes": 2097
+    },
+    {
+      "path": "baseline-regression.log.gz",
+      "sha256": "92365b23191eec3cbd6d5d9bb0b26a2a40f8f4de59e979268be07631d04d080c",
+      "bytes": 430,
+      "uncompressed_bytes": 2217
+    },
+    {
+      "path": "baseline-http-report.json.gz",
+      "sha256": "94728a500e6d567b7cc6ae23463babf9b9fe4fae1804f542de37a4bbfbbd6d6b",
+      "bytes": 1234,
+      "uncompressed_bytes": 14524
+    },
+    {
+      "path": "http-report.json.gz",
+      "sha256": "619ecc50d168b9b1f9ec34a02b9d41d66d6897d8ab00f1378c25eb9392eebfd4",
+      "bytes": 3223,
+      "uncompressed_bytes": 80209
+    },
+    {
+      "path": "http_contract.py.gz",
+      "sha256": "236aebb5a65bb74e81a41ac79bddddfbde70be6c0bdde0f42a4b6b8f9341473c",
+      "bytes": 1877,
+      "uncompressed_bytes": 5688
+    },
+    {
+      "path": "order-regression.log.gz",
+      "sha256": "0732764b284608c54aee33a92165d376f632064f214b5d8049b6d4b0df712178",
+      "bytes": 209,
+      "uncompressed_bytes": 288
+    },
+    {
+      "path": "fixture-migration-check.txt.gz",
+      "sha256": "6879947eb0af605c7b7d2943e57b36a346441690fcf75d404e43f4cc18d82d5e",
+      "bytes": 128,
+      "uncompressed_bytes": 125
+    },
+    {
+      "path": "pr-check.log.gz",
+      "sha256": "ae53d331119680d38c2070a33f6452b63b445f8d094bf9007f260bef4de28ed1",
+      "bytes": 414,
+      "uncompressed_bytes": 2097
+    },
+    {
+      "path": "pr-http-report.json.gz",
+      "sha256": "e7a587d08c63439016f9841cec5d1f04b1cda39a4b3a1db0d84cc951a5dad630",
+      "bytes": 3226,
+      "uncompressed_bytes": 80209
+    }
+  ]
+}

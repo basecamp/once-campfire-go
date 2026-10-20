@@ -13,36 +13,6 @@ import (
 	"github.com/basecamp/once-campfire-go/internal/zstd"
 )
 
-func publicEncoding(r *http.Request) string {
-	if r.Method == "HEAD" {
-		return ""
-	}
-	quality := func(name string) float64 {
-		for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
-			pieces := strings.Split(part, ";")
-			if !strings.EqualFold(strings.TrimSpace(pieces[0]), name) {
-				continue
-			}
-			q := 1.0
-			for _, p := range pieces[1:] {
-				if value, ok := strings.CutPrefix(strings.TrimSpace(p), "q="); ok {
-					q, _ = strconv.ParseFloat(value, 64)
-					q = min(1, max(0, q))
-				}
-			}
-			return q
-		}
-		return 0
-	}
-	gz, zs := quality("gzip"), quality("zstd")
-	if zs > 0 && zs >= gz {
-		return "zstd"
-	}
-	if gz > 0 {
-		return "gzip"
-	}
-	return ""
-}
 func compressibleType(value string) bool {
 	value = strings.ToLower(strings.TrimSpace(value))
 	for _, part := range []string{"compress", "zip", "snappy", "lzma", "xz", "zstd", "brotli", "stuffit"} {

@@ -170,14 +170,17 @@ EOF
 RUN mkdir -p /rails/storage/db /rails/storage/files /rails/storage/backups && \
     chown -R 1000:1000 /rails
 
-# ONCE backup/restore hooks. pre-backup is script/admin/prepare-backup (`campfire backup`);
-# post-restore is the reference's own script.
+# Both ONCE hooks use the application's configured storage and database paths.
 COPY --chmod=755 <<'EOF' /hooks/pre-backup
 #!/bin/bash
 cd /rails
 exec /usr/local/bin/campfire backup
 EOF
-COPY --chmod=755 reference/reference/hooks/post-restore /hooks/post-restore
+COPY --chmod=755 <<'EOF' /hooks/post-restore
+#!/bin/sh
+cd /rails
+exec /usr/local/bin/campfire restore
+EOF
 
 USER 1000:1000
 

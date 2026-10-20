@@ -376,6 +376,30 @@ func (s *Secrets) VerifySGID(message, purpose string, now time.Time) (string, er
 	return old.GID, nil
 }
 
+// UnverifiedUserID applies the User-only attachable exception and treats missing
+// or non-integer identities as absent, while retaining malformed-token errors.
+func UnverifiedUserID(sgid string) (int64, error) {
+	gid, err := UnverifiedUserGID(sgid)
+	if err != nil {
+		return 0, err
+	}
+	return UserGIDID(gid), nil
+}
+
+// UserGIDID parses a resolved User GID, including a verified legacy payload.
+func UserGIDID(gid string) int64 {
+	gid, _, _ = strings.Cut(gid, "?")
+	parts := strings.Split(gid, "/")
+	if len(parts) != 5 || parts[3] != "User" {
+		return 0
+	}
+	value, err := strconv.ParseInt(parts[4], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
 // UnverifiedUserGID is the deliberately User-only exception in rails_ext/action_text_attachables.rb.
 var unverifiedGID = regexp.MustCompile(`gid://campfire/[^/]+/\d+`)
 

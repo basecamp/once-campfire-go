@@ -5,6 +5,7 @@ import gzip, threading
 import argparse, datetime, hashlib, json, math, os, platform, shutil, socket, sqlite3, statistics, subprocess, tempfile, time, urllib.request
 from pathlib import Path
 from message_forms import contract as form_contract, seed_message
+from acknowledged_writes import verify as verify_acknowledged_writes
 FORM_ROUTES = {'message_edit', 'message_edit_attachment', 'new_boost', 'boosts_index'}
 ROOT = Path(__file__).resolve().parents[1]
 def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -79,6 +80,7 @@ def main():
         'rust_commit':text('git','-C',str(rust),'rev-parse','HEAD'),'settings':{k:str(v) if isinstance(v,Path) else v for k,v in vars(a).items()},
         'binaries':{k:{'sha256':digest(v),'bytes':v.stat().st_size} for k,v in binaries.items()},'seed_sha256':digest(seed/'db/production.sqlite3'),
         'harness_sha256':digest(Path(__file__)), 'form_contract_sha256':digest(ROOT/'bench/message_forms.py'),
+        'acknowledged_writes_sha256':digest(ROOT/'bench/acknowledged_writes.py'),
         'go_version':text('go','version'),'rust_version':text('rustc','--version') if 'rust' in a.apps else None,'vips_version':text('pkg-config','--modversion','vips'),'go_mod_sha256':digest(ROOT/'go.mod'),'go_sum_sha256':digest(ROOT/'go.sum'),'rust_lock_sha256':digest(rust/'Cargo.lock'),'loadgen_sha256':digest(lg),'rate_loadgen_sha256':digest(rate_lg) if rate_lg else None,
         'rate_loadgen_sources_sha256':{str(f.relative_to(ROOT)):digest(f) for f in sorted((ROOT/'bench/httprate').glob('*.go'))} if rate_lg else None,'load_before':Path('/proc/loadavg').read_text(),
         'go_sources_sha256':{str(f.relative_to(ROOT)):digest(f) for folder in ('cmd','internal','assets','third_party') for f in sorted((ROOT/folder).rglob('*')) if f.is_file()},
@@ -95,7 +97,7 @@ def main():
                 form_boosts=check.execute('SELECT b.id,b.booster_id,b.content FROM boosts b JOIN users u ON u.id=b.booster_id WHERE b.message_id=? ORDER BY b.created_at',(form_messages['boosts_index']['id'],)).fetchall()
     if a.resume:
         prior=json.loads((out/'metadata.json').read_text())
-        for key in ('binaries','seed_sha256','go_sources_sha256','go_mod_sha256','go_sum_sha256','rust_lock_sha256','loadgen_sha256','harness_sha256','form_contract_sha256','rate_loadgen_sha256','rate_loadgen_sources_sha256','gc_environment'):
+        for key in ('binaries','seed_sha256','go_sources_sha256','go_mod_sha256','go_sum_sha256','rust_lock_sha256','loadgen_sha256','harness_sha256','form_contract_sha256','acknowledged_writes_sha256','rate_loadgen_sha256','rate_loadgen_sources_sha256','gc_environment'):
             if prior.get(key)!=metadata[key]:raise RuntimeError(f'cannot resume changed {key}')
         for key in prior['settings'].keys() | metadata['settings'].keys():
             if key!='resume' and metadata['settings'].get(key)!=prior['settings'].get(key):raise RuntimeError(f'cannot resume changed setting {key}')
@@ -222,8 +224,20 @@ def main():
             writes=warmup['ok']
             trials=[('http-rate',a.concurrency[0],{'rate':rate}) for rate in a.http_rates] if a.http_rates else [('http',c,{}) for c in a.concurrency]
             for command,c,rate in trials:
+             if command=='http-rate' and not path:
+              with sqlite3.connect(db) as check:
+               before_id=check.execute('SELECT max(id) FROM messages').fetchone()[0] or 0
+               creator=check.execute('SELECT id FROM users WHERE email_address=?',(labels['emails.david'],)).fetchone()[0]
              cpu=cpu_seconds(proc.pid)
-             sample=load(command,conc=c,duration=a.seconds,**rate,**opts);sample['route']=name;sample['cpu_us_per_request']=(cpu_seconds(proc.pid)-cpu)*1e6/max(1,sample['ok']);result['http'].append(sample);writes+=sample['ok']
+             sample=load(command,conc=c,duration=a.seconds,**rate,**opts);sample['route']=name;sample['cpu_us_per_request']=(cpu_seconds(proc.pid)-cpu)*1e6/max(1,sample['ok'])
+             if command=='http-rate' and not path:
+              receipt_file=out/f'{app}-{rep}-{name}-{len(result["http"])}-receipts.json'
+              receipt_file.write_text(json.dumps(sample)+'\n')
+              with sqlite3.connect(db) as check:
+               sample['acknowledged_write_audit']=verify_acknowledged_writes(check,before_id,write_room,creator,sample)
+              sample.pop('acknowledged')
+              sample['receipts']={'path':receipt_file.name,'sha256':digest(receipt_file)}
+             result['http'].append(sample);writes+=sample['ok']
              offered=f' offered={sample["offered_rps"]}' if rate else ''
              print(f'{app} {rep} {name} c={c}{offered}: {sample["rps"]} req/s, p99={sample["latency"].get("p99_ms")}ms',flush=True)
            finally:

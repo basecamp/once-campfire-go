@@ -1,0 +1,46 @@
+{
+  "artifacts": [
+    {
+      "path": "baseline-regression.txt.gz",
+      "sha256": "024282567ac010d547540cd41ebf52dfc642605818b4c180fac475ad8827f614",
+      "bytes": 164,
+      "uncompressed_bytes": 178
+    },
+    {
+      "path": "focused-tests.log.gz",
+      "sha256": "2c321acfd70b176a1b5ad5326c281a400422a1fe492ed147f4898fd2c0d54fce",
+      "bytes": 96,
+      "uncompressed_bytes": 126
+    },
+    {
+      "path": "check.log.gz",
+      "sha256": "85d6c725bd2f1a2d0bb9d074009a9cc3308f42f6f0c16262a16fc807fc6d059c",
+      "bytes": 413,
+      "uncompressed_bytes": 2097
+    },
+    {
+      "path": "http-report.json.gz",
+      "sha256": "7f81e6d9dd6e0ae254bca2ec4f535db51b820030d45e04432f712f825f3de9ed",
+      "bytes": 702,
+      "uncompressed_bytes": 4073
+    },
+    {
+      "path": "tls-probe_test.go.gz",
+      "sha256": "613f6c69648490a94d97c0bb0079a2ab70306a8ea3182ae5c86d49a6047b2320",
+      "bytes": 2103,
+      "uncompressed_bytes": 4604
+    },
+    {
+      "path": "pr-check.log.gz",
+      "sha256": "1350afddba757cfd21906d7e28cf7d4cb466ad2851aaa3a8f1ea2cfd6d68390b",
+      "bytes": 413,
+      "uncompressed_bytes": 2097
+    },
+    {
+      "path": "pr-http-report.json.gz",
+      "sha256": "35b6b6269b4425b0decf8f3559b5291c90d88133a00b1978cdb07a0d61ef806e",
+      "bytes": 702,
+      "uncompressed_bytes": 4073
+    }
+  ]
+}

@@ -18,6 +18,32 @@ import (
 	"time"
 )
 
+func TestForwardingPolicyCoversConsumedHeaders(t *testing.T) {
+	for _, trust := range []bool{false, true} {
+		r := httptest.NewRequest("GET", "http://chat.test/webmanifest", nil)
+		r.RemoteAddr = "127.0.0.1:1234"
+		r.Header.Set("X-Forwarded-Ssl", "on")
+		r.Header.Set("X-Forwarded-Scheme", "https")
+		r.Header.Set("X-Forwarded-Proto", "https")
+		r.Header.Set("X-Forwarded-Host", "proxy.test")
+		r.Header.Set("Client-IP", "127.0.0.1, 198.51.100.20")
+		next := http.HandlerFunc(func(w http.ResponseWriter, forwarded *http.Request) {
+			ssl, scheme := forwarded.Header.Get("X-Forwarded-Ssl"), forwarded.Header.Get("X-Forwarded-Scheme")
+			if trust {
+				if ssl != "on" || scheme != "https" || forwarded.Header.Get("X-Forwarded-Host") != "proxy.test" || forwarded.Header.Get("Client-IP") != "127.0.0.1, 198.51.100.20" {
+					t.Fatal("trusted forwarding changed", forwarded.Header)
+				}
+			} else if ssl != "" || scheme != "" || forwarded.Header.Get("X-Forwarded-Proto") != "http" || forwarded.Header.Get("X-Forwarded-Host") != "chat.test" || forwarded.Header.Get("Client-IP") != "" {
+				t.Fatal("untrusted forwarding metadata survived", forwarded.Header)
+			}
+		})
+		forward(next, Config{ForwardHeaders: trust}).ServeHTTP(httptest.NewRecorder(), r)
+		if r.Header.Get("X-Forwarded-Ssl") != "on" {
+			t.Fatal("forwarding modified the caller's request")
+		}
+	}
+}
+
 func TestCompressionNegotiation(t *testing.T) {
 	for _, c := range []struct{ header, want string }{{"", "identity"}, {"gzip", "gzip"}, {"gzip;q=0", "identity"}, {"gzip;q=.5,identity;q=.8", "identity"}, {"*;q=1", "gzip"}, {"gzip;q=0,identity;q=0", ""}, {"br", "identity"}} {
 		if got := encoding(c.header); got != c.want {
@@ -50,6 +76,34 @@ func TestCompressionNegotiation(t *testing.T) {
 		t.Fatal(response.Code)
 	}
 }
+func TestCompressionNegotiationHonorsLateRejection(t *testing.T) {
+	handler := Deflate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		io.WriteString(w, "hello")
+	}))
+	// The wildcard occupies the first slot and unknown codings fill the old
+	// sixteen-item limit. Explicit exclusions still govern the entire field.
+	prefix := "*," + strings.Repeat("unknown,", 15)
+	for _, c := range []struct {
+		accept string
+		status int
+	}{
+		{prefix + "gzip;q=0", 200},
+		{prefix + "gzip;q=0,identity;q=0", 406},
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Header.Set("Accept-Encoding", c.accept)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != c.status || w.Header().Get("Content-Encoding") != "" {
+			t.Fatalf("late exclusion: status %d, coding %q", w.Code, w.Header().Get("Content-Encoding"))
+		}
+		if c.status == 200 && w.Body.String() != "hello" {
+			t.Fatal("identity bytes changed")
+		}
+	}
+}
+
 func TestCacheVariantsLimitsAndCookies(t *testing.T) {
 	var calls atomic.Int32
 	c := NewCache(2048, 1024)

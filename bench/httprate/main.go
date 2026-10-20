@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ type config struct {
 	Duration, Timeout, Drain           time.Duration
 	Concurrency, Queue                 int
 	Gzip                               bool
+	Pacing                             string
 }
 
 // Microsecond buckets retain 10 significant binary digits. Quantiles report
@@ -101,6 +103,8 @@ type job struct {
 }
 
 type counters struct {
+	acknowledged                                                     [][2]uint64
+	invalidResponses                                                 uint64
 	attempted, ok, networkErrors, statusErrors, emptyBodies, expired uint64
 	bytes                                                            uint64
 	statuses                                                         map[int]uint64
@@ -108,38 +112,45 @@ type counters struct {
 }
 
 type result struct {
-	Mode             string         `json:"mode"`
-	Path             string         `json:"path"`
-	Rate             float64        `json:"offered_rps"`
-	Concurrency      int            `json:"conc"`
-	QueueCapacity    int            `json:"queue_capacity"`
-	QueuePeak        int            `json:"queue_peak"`
-	Gzip             bool           `json:"gzip"`
-	Seconds          float64        `json:"secs"`
-	Elapsed          float64        `json:"elapsed_secs"`
-	Drain            float64        `json:"drain_secs"`
-	Planned          uint64         `json:"planned"`
-	Scheduled        uint64         `json:"scheduled"`
-	Attempted        uint64         `json:"attempted"`
-	OK               uint64         `json:"ok"`
-	Errors           uint64         `json:"errors"`
-	NetworkErrors    uint64         `json:"network_errors"`
-	StatusErrors     uint64         `json:"status_errors"`
-	EmptyBodies      uint64         `json:"empty_bodies"`
-	Dropped          uint64         `json:"dropped"`
-	Expired          uint64         `json:"expired"`
-	Unscheduled      uint64         `json:"unscheduled"`
-	RPS              float64        `json:"rps"`
-	AverageBytes     uint64         `json:"avg_bytes"`
-	Statuses         map[int]uint64 `json:"statuses"`
-	Latency          map[string]any `json:"latency"`
-	Service          map[string]any `json:"service_latency"`
-	Queue            map[string]any `json:"queue_latency"`
-	Generator        map[string]any `json:"generator_lateness"`
-	QuantileAccuracy string         `json:"quantile_accuracy"`
+	Acknowledged        [][2]uint64    `json:"acknowledged,omitempty"`
+	ClientMessagePrefix string         `json:"client_message_prefix,omitempty"`
+	InvalidResponses    uint64         `json:"invalid_responses"`
+	Mode                string         `json:"mode"`
+	Pacing              string         `json:"pacing"`
+	Path                string         `json:"path"`
+	Rate                float64        `json:"offered_rps"`
+	Concurrency         int            `json:"conc"`
+	QueueCapacity       int            `json:"queue_capacity"`
+	QueuePeak           int            `json:"queue_peak"`
+	Gzip                bool           `json:"gzip"`
+	Seconds             float64        `json:"secs"`
+	Elapsed             float64        `json:"elapsed_secs"`
+	Drain               float64        `json:"drain_secs"`
+	Planned             uint64         `json:"planned"`
+	Scheduled           uint64         `json:"scheduled"`
+	Attempted           uint64         `json:"attempted"`
+	OK                  uint64         `json:"ok"`
+	Errors              uint64         `json:"errors"`
+	NetworkErrors       uint64         `json:"network_errors"`
+	StatusErrors        uint64         `json:"status_errors"`
+	EmptyBodies         uint64         `json:"empty_bodies"`
+	Dropped             uint64         `json:"dropped"`
+	Expired             uint64         `json:"expired"`
+	Unscheduled         uint64         `json:"unscheduled"`
+	RPS                 float64        `json:"rps"`
+	AverageBytes        uint64         `json:"avg_bytes"`
+	Statuses            map[int]uint64 `json:"statuses"`
+	Latency             map[string]any `json:"latency"`
+	Service             map[string]any `json:"service_latency"`
+	Queue               map[string]any `json:"queue_latency"`
+	Generator           map[string]any `json:"generator_lateness"`
+	QuantileAccuracy    string         `json:"quantile_accuracy"`
 }
 
 func validate(c config) error {
+	if c.Pacing != "" && c.Pacing != "timer" && c.Pacing != "active" {
+		return fmt.Errorf("pacing must be timer or active")
+	}
 	u, err := url.Parse(c.Base)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("base must be an HTTP(S) URL without a query or fragment")
@@ -205,7 +216,15 @@ func worker(ctx context.Context, c config, client *http.Client, jobs <-chan job,
 			continue
 		}
 		s.statuses[response.StatusCode]++
-		n, readErr := io.Copy(io.Discard, response.Body)
+		var body []byte
+		var n int64
+		var readErr error
+		if c.PostRoom != "" {
+			body, readErr = io.ReadAll(response.Body)
+			n = int64(len(body))
+		} else {
+			n, readErr = io.Copy(io.Discard, response.Body)
+		}
 		closeErr := response.Body.Close()
 		s.bytes += uint64(n)
 		if readErr != nil || closeErr != nil {
@@ -221,6 +240,14 @@ func worker(ctx context.Context, c config, client *http.Client, jobs <-chan job,
 			continue
 		}
 		finished := time.Now()
+		if c.PostRoom != "" {
+			id, err := validatePost(response, body, j.index, prefix)
+			if err != nil {
+				s.invalidResponses++
+				continue
+			}
+			s.acknowledged = append(s.acknowledged, [2]uint64{j.index, id})
+		}
 		s.ok++
 		s.latency.record(finished.Sub(j.scheduled))
 		s.service.record(finished.Sub(started))
@@ -230,6 +257,9 @@ func worker(ctx context.Context, c config, client *http.Client, jobs <-chan job,
 func run(parent context.Context, c config) (result, error) {
 	if err := validate(c); err != nil {
 		return result{}, err
+	}
+	if c.Pacing == "" {
+		c.Pacing = "timer"
 	}
 	transport := &http.Transport{
 		Proxy:              http.ProxyFromEnvironment,
@@ -260,7 +290,12 @@ func run(parent context.Context, c config) (result, error) {
 	defer timer.Stop()
 	for i := uint64(0); i < planned; i++ {
 		deadline := start.Add(time.Duration(float64(i) / c.Rate * float64(time.Second)))
-		if wait := time.Until(deadline); wait > 0 {
+		if c.Pacing == "active" {
+			// Runtime/OS timers may coalesce sub-millisecond arrivals. Active
+			// pacing trades roughly one generator CPU for finer deadlines.
+			for time.Now().Before(deadline) && ctx.Err() == nil {
+			}
+		} else if wait := time.Until(deadline); wait > 0 {
 			timer.Reset(wait)
 			select {
 			case <-timer.C:
@@ -276,6 +311,12 @@ func run(parent context.Context, c config) (result, error) {
 		select {
 		case jobs <- job{index: i, scheduled: deadline, enqueued: now}:
 			peak = max(peak, len(jobs))
+			if c.Pacing == "active" {
+				// Enqueueing makes the worker runnable on this producer's P.
+				// Let it run before spinning toward the next arrival; otherwise
+				// precise enqueue times can still produce bursty HTTP writes.
+				runtime.Gosched()
+			}
 		default:
 			dropped++
 		}
@@ -287,6 +328,8 @@ func run(parent context.Context, c config) (result, error) {
 	all.statuses = make(map[int]uint64)
 	for i := range stats {
 		s := &stats[i]
+		all.acknowledged = append(all.acknowledged, s.acknowledged...)
+		all.invalidResponses += s.invalidResponses
 		all.attempted += s.attempted
 		all.ok += s.ok
 		all.networkErrors += s.networkErrors
@@ -301,16 +344,19 @@ func run(parent context.Context, c config) (result, error) {
 			all.statuses[status] += n
 		}
 	}
-	errors := all.networkErrors + all.statusErrors + all.emptyBodies + all.expired + dropped
+	errors := all.networkErrors + all.statusErrors + all.invalidResponses + all.emptyBodies + all.expired + dropped
 	if all.ok+errors != scheduled {
 		return result{}, fmt.Errorf("arrival accounting mismatch: %d scheduled, %d successful, %d errors", scheduled, all.ok, errors)
 	}
 	path := c.Path
 	if c.PostRoom != "" {
 		path = "POST /rooms/" + c.PostRoom + "/messages"
+	} else {
+		prefix = ""
 	}
 	return result{
-		Mode: "fixed-offered-rate", Path: path, Rate: c.Rate, Concurrency: c.Concurrency,
+		Acknowledged: all.acknowledged, ClientMessagePrefix: prefix, InvalidResponses: all.invalidResponses,
+		Mode: "fixed-offered-rate", Pacing: c.Pacing, Path: path, Rate: c.Rate, Concurrency: c.Concurrency,
 		QueueCapacity: c.Queue, QueuePeak: peak, Gzip: c.Gzip, Seconds: c.Duration.Seconds(),
 		Elapsed: elapsed, Drain: c.Drain.Seconds(), Planned: planned, Scheduled: scheduled,
 		Attempted: all.attempted, OK: all.ok, Errors: errors, NetworkErrors: all.networkErrors,
@@ -333,6 +379,7 @@ func main() {
 	flag.StringVar(&c.PostRoom, "post-room", "", "POST messages to this room instead of GET")
 	flag.StringVar(&c.CSRF, "csrf", "", "CSRF token for POST")
 	flag.Float64Var(&c.Rate, "rate", 1000, "offered arrivals per second, independent of completions")
+	flag.StringVar(&c.Pacing, "pacing", "timer", "timer (may coalesce arrivals) or active (spin/yield; reserves roughly one generator CPU)")
 	flag.Float64Var(&duration, "duration", 10, "arrival window in seconds")
 	flag.Float64Var(&timeout, "timeout", 10, "per-request timeout in seconds")
 	flag.Float64Var(&drain, "drain", 10, "maximum completion grace after the arrival window, in seconds")

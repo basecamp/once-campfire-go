@@ -121,6 +121,43 @@ func TestRustOracle(t *testing.T) {
 		if plain != result.Plain || (plainErr != nil) != (result.Errors["plain"] != nil) {
 			t.Fatalf("%s: focused plain text differs: %q, %v", c.Name, plain, plainErr)
 		}
+		doc := Prepare(c.Body)
+		content, contentErr := doc.Content(Context{Host: c.Host, Resolve: resolve})
+		if contentErr != nil || content.BodyHTML != result.BodyHTML || content.Plain != result.Plain {
+			t.Fatalf("%s: prepared API content differs: %v", c.Name, contentErr)
+		}
+		// Resolve only collected tokens before transformation. The pinned corpus
+		// protects consumer-specific raw editor, canonical text and verified IDs.
+		for _, consumer := range []struct {
+			tokens []string
+			kind   string
+		}{
+			{doc.EditorAttachables(), "editor"}, {doc.PlainAttachables(), "plain"}, {doc.MentionAttachables(), "mentioned"},
+		} {
+			owned := map[string]*Mention{}
+			ownedErr := map[string]error{}
+			for _, token := range consumer.tokens {
+				owned[token], ownedErr[token] = resolve(token, consumer.kind == "mentioned")
+			}
+			resolved := Context{Host: c.Host, Resolve: func(token string, _ bool) (*Mention, error) { return owned[token], ownedErr[token] }}
+			switch consumer.kind {
+			case "editor":
+				value, _ := doc.Editable(resolved)
+				if value != result.Editable {
+					t.Fatalf("%s: prepared editor targets lost", c.Name)
+				}
+			case "plain":
+				value, _ := doc.PlainText(resolved)
+				if value != result.Plain {
+					t.Fatalf("%s: prepared text targets lost", c.Name)
+				}
+			case "mentioned":
+				value, _ := doc.MentionIDs(resolved)
+				if !reflect.DeepEqual(value, result.Mentioned) {
+					t.Fatalf("%s: prepared recipient targets lost", c.Name)
+				}
+			}
+		}
 		checks := []struct {
 			name string
 			want outcome

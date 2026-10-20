@@ -46,7 +46,7 @@ func forward(next http.Handler, c Config) http.Handler {
 		r = r.Clone(r.Context())
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
 		if !c.ForwardHeaders {
-			for _, name := range []string{"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Port", "X-Forwarded-Proto", "Forwarded"} {
+			for _, name := range []string{"Client-IP", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Port", "X-Forwarded-Proto", "X-Forwarded-Ssl", "X-Forwarded-Scheme", "Forwarded"} {
 				r.Header.Del(name)
 			}
 		}

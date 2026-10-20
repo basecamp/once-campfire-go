@@ -1,0 +1,64 @@
+{
+  "artifacts": [
+    {
+      "path": "bounded-placeholders.json.gz",
+      "sha256": "c4f768902a560d05c9ab85cd8c129fa2823ac47bae66025832e9bfbcc97e6bcc",
+      "bytes": 3223,
+      "uncompressed_bytes": 23576
+    },
+    {
+      "path": "bounded-placeholders-database-probe_test.go.gz",
+      "sha256": "9d675906079ef9dcfda0511e8fc1d599db11efc81947a3daa72d193115e0b673",
+      "bytes": 840,
+      "uncompressed_bytes": 1909
+    },
+    {
+      "path": "bounded-placeholders-sidebar_control.py.gz",
+      "sha256": "aa67780a31c3a251826fd8b8a1d851fdb3d94b26bce6ddb8103229e84b5c67ff",
+      "bytes": 3334,
+      "uncompressed_bytes": 9395
+    },
+    {
+      "path": "bounded-placeholders-sql_work.py.gz",
+      "sha256": "dec2e8897d78195291f4214c11800d47a3f85e7bbe2866ab4f51a0e6c71652bb",
+      "bytes": 1157,
+      "uncompressed_bytes": 2491
+    },
+    {
+      "path": "api-creator-reuse.json.gz",
+      "sha256": "c026e56d3314044da483e08b9fcb0b8d6af8d2aa14ac4e1e97223e8bd980e158",
+      "bytes": 7812,
+      "uncompressed_bytes": 68165
+    },
+    {
+      "path": "api-creator-reuse-application-probe_test.go.gz",
+      "sha256": "46ef15e5cb0b2cdd4773cb87bf5d49ac1c1fdaec59a92b6f9156bfe4b6cecc8f",
+      "bytes": 1914,
+      "uncompressed_bytes": 5022
+    },
+    {
+      "path": "api-creator-reuse-http_control.py.gz",
+      "sha256": "d1e6acc4aefc8478ff89bc3efb3021cfa15ce7c1542acc84e897713509f1a45f",
+      "bytes": 3852,
+      "uncompressed_bytes": 12351
+    },
+    {
+      "path": "mention-on-demand.json.gz",
+      "sha256": "8f0b4646922e283550ce8ec05045f87d6c3fa400f07454e9642637ee9bde5b64",
+      "bytes": 10018,
+      "uncompressed_bytes": 98607
+    },
+    {
+      "path": "mention-on-demand-application-probe_test.go.gz",
+      "sha256": "d299d196950580d984e13ae3fb5ba83b93069593f0e08a43470076f07791d645",
+      "bytes": 2073,
+      "uncompressed_bytes": 5573
+    },
+    {
+      "path": "mention-on-demand-http_control.py.gz",
+      "sha256": "f5253768cb7f2ac08cab35278f034a08fe65e5257afbcb8494a458690104643e",
+      "bytes": 3978,
+      "uncompressed_bytes": 12918
+    }
+  ]
+}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -14,6 +16,49 @@ import (
 // Backup writes an online SQLite snapshot beside its destination, then atomically
 // replaces the previous backup only after SQLite has completed successfully.
 func (d *DB) Backup(ctx context.Context, destination string) error {
+	return backup(ctx, d.Read, destination)
+}
+
+// Restore replaces an offline database from its snapshot and removes obsolete
+// WAL sidecars. A missing snapshot is a no-op, as required by the ONCE hook.
+// The application must be stopped before restoring.
+func Restore(ctx context.Context, snapshot, destination string) (result error) {
+	if _, err := os.Stat(snapshot); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	path, err := filepath.Abs(snapshot)
+	if err != nil {
+		return err
+	}
+	uri := (&url.URL{Scheme: "file", Path: path}).String()
+	source, err := sql.Open("sqlite3", uri+"?mode=ro&_query_only=on&_busy_timeout=5000")
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, source.Close()) }()
+	// Empty or unrelated SQLite files are not Campfire snapshots. In particular,
+	// never replace an installation with an empty file from a failed old backup.
+	var migrations int
+	if err = source.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&migrations); err != nil {
+		return fmt.Errorf("invalid Campfire snapshot: %w", err)
+	}
+	if migrations == 0 {
+		return errors.New("snapshot has no Campfire migrations")
+	}
+	if err = backup(ctx, source, destination); err != nil {
+		return err
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err = os.Remove(destination + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+func backup(ctx context.Context, reader *sql.DB, destination string) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 		return err
 	}
@@ -24,12 +69,17 @@ func (d *DB) Backup(ctx context.Context, destination string) error {
 	name := file.Name()
 	file.Close()
 	defer os.Remove(name)
-	target, err := sql.Open("sqlite3", name)
+	path, err := filepath.Abs(name)
+	if err != nil {
+		return err
+	}
+	uri := (&url.URL{Scheme: "file", Path: path}).String()
+	target, err := sql.Open("sqlite3", uri)
 	if err != nil {
 		return err
 	}
 	defer target.Close()
-	source, err := d.Read.Conn(ctx)
+	source, err := reader.Conn(ctx)
 	if err != nil {
 		return err
 	}

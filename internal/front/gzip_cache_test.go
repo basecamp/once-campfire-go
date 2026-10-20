@@ -107,9 +107,11 @@ func TestCompletedGzipPreservesPerRequestState(t *testing.T) {
 		w.Header().Set("Cache-Control", "private, max-age=0")
 		cookie := "session=" + string(rune('a'+i))
 		w.Header().Set("Set-Cookie", cookie)
-		w.WriteHeader(200)
-		n, err := w.WriteBody(gzipParts(data...))
-		if err != nil || n != len(body) || !bytes.Equal(gunzip(t, response.Body.Bytes()), body) {
+		completed, err := PrepareResponse(w, request, CompletedResponse{Status: 200, Parts: gzipParts(data...)})
+		if err == nil {
+			err = EmitResponse(w, request, completed)
+		}
+		if err != nil || !bytes.Equal(gunzip(t, response.Body.Bytes()), body) {
 			t.Fatal("completed body did not roundtrip", err)
 		}
 		if response.Header().Get("Set-Cookie") != cookie || response.Header().Get("ETag") != `W/"same-resource-version"` {
@@ -124,13 +126,13 @@ func TestCompletedGzipPreservesPerRequestState(t *testing.T) {
 		response := httptest.NewRecorder()
 		w := &gzipResponse{ResponseWriter: response, request: request, selected: "gzip", cache: cache}
 		w.Header().Set("Cache-Control", test.control)
-		w.WriteHeader(200)
 		body := []byte(strings.Repeat("do not retain", 200))
-		w.WriteBody(gzipParts(body))
-		w.writer.Close()
-		w.writer.Reset(nil)
-		gzipPool.Put(w.writer)
-		if cache.order.Len() != 4 || !bytes.Equal(gunzip(t, response.Body.Bytes()), body) {
+		request.Header.Set("Accept-Encoding", "gzip")
+		completed, err := PrepareResponse(w, request, CompletedResponse{Status: 200, Parts: gzipParts(body)})
+		if err == nil {
+			err = EmitResponse(w, request, completed)
+		}
+		if err != nil || cache.order.Len() != 4 || !bytes.Equal(gunzip(t, response.Body.Bytes()), body) {
 			t.Fatal("one-off body was retained or corrupted", test)
 		}
 	}
@@ -141,10 +143,13 @@ func TestCompletedAndStreamingGzipLifecycles(t *testing.T) {
 	handler := Deflate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		if r.URL.Path == "/completed" {
-			w.WriteHeader(200)
-			w.(interface {
-				WriteBody([]responsebody.Part) (int, error)
-			}).WriteBody(gzipParts([]byte(body)))
+			completed, err := PrepareResponse(w, r, CompletedResponse{Status: 200, Parts: gzipParts([]byte(body))})
+			if err == nil {
+				err = EmitResponse(w, r, completed)
+			}
+			if err != nil {
+				t.Error(err)
+			}
 		} else if r.URL.Path == "/stream" {
 			io.WriteString(w, body[:10])
 			w.(http.Flusher).Flush()

@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -24,16 +25,25 @@ func TestBatchedAuthorizationReadsCurrentSessionsAndMemberships(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Reuse the publication-owned keys, including stale permissions. Every check
+	// must replace authority rather than retaining a previous successful result.
+	got := map[string]int64{a: u.ID, b: u.ID, "invalid": u.ID}
 	check := func(room int64, want int) {
 		t.Helper()
-		got, err := d.AuthorizedSessions(ctx, []string{a, b, "invalid"}, room)
-		if err != nil || len(got) != want {
-			t.Fatalf("authorization: %v %v; want %d", got, err, want)
+		if err := d.AuthorizeSessions(ctx, got, room); err != nil {
+			t.Fatal(err)
 		}
+		count := 0
 		for _, id := range got {
-			if id != u.ID {
-				t.Fatal("wrong identity")
+			if id != 0 {
+				if id != u.ID {
+					t.Fatal("wrong identity")
+				}
+				count++
 			}
+		}
+		if count != want || got["invalid"] != 0 {
+			t.Fatalf("authorization: %v; want %d", got, want)
 		}
 	}
 	check(rooms[0].ID, 2)
@@ -50,4 +60,16 @@ func TestBatchedAuthorizationReadsCurrentSessionsAndMemberships(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(0, 0)
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	got[a], got[b] = u.ID, u.ID
+	if err := d.AuthorizeSessions(cancelled, got, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled authorization: %v", err)
+	}
+	for _, id := range got {
+		if id != 0 {
+			t.Fatal("failed authorization retained permissions", got)
+		}
+	}
 }

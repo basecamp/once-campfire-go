@@ -24,23 +24,20 @@ var manifestTemplate = template.Must(template.New("manifest.json").Funcs(templat
 	"image": func(origin, path string) string { return origin + assets.Path(path) },
 }).ParseFS(pwaFiles, "pwa/manifest.json"))
 
-func (s *Server) registerPWARoutes() {
-	for _, path := range []string{"/webmanifest", "/webmanifest.json"} {
-		s.mux.HandleFunc("GET "+path, s.browserCheck(s.manifest))
+var serviceWorkerBody = func() []byte {
+	body, err := pwaFiles.ReadFile("pwa/service_worker.js")
+	if err != nil {
+		panic(err)
 	}
-	worker, _ := pwaFiles.ReadFile("pwa/service_worker.js")
-	for _, path := range []string{"/service-worker", "/service-worker.js"} {
-		s.mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
-			if s.blockBrowser(w, r) {
-				return
-			}
-			if respondFormat(w, r, "js") == "" {
-				return
-			}
-			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-			w.Write(worker)
-		})
+	return body
+}()
+
+func (s *Server) serviceWorker(w http.ResponseWriter, r *http.Request) {
+	if respondFormat(w, r, "js") == "" {
+		return
 	}
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Write(serviceWorkerBody)
 }
 func (s *Server) manifest(w http.ResponseWriter, r *http.Request) {
 	if respondFormat(w, r, "json") == "" {

@@ -11,6 +11,10 @@ import (
 	"uuid"
 )
 
+func messageInput(client, body string) MessageInput {
+	return MessageInput{ClientID: client, Body: &body}
+}
+
 func testDB(t *testing.T) *DB {
 	t.Helper()
 	d, err := Open(filepath.Join(t.TempDir(), "test.sqlite3"), 4)
@@ -45,7 +49,7 @@ func TestSchemaAndMessageTransaction(t *testing.T) {
 	) {
 		t.Fatalf("repeated setup: %v", err)
 	}
-	m, err := d.CreateMessage(ctx, u.ID, rooms[0].ID, "", "<p>running dogs</p>", "running dogs")
+	m, err := d.CreateMessage(ctx, u.ID, rooms[0].ID, messageInput("", "<p>running dogs</p>"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +57,7 @@ func TestSchemaAndMessageTransaction(t *testing.T) {
 	if err != nil || m.ClientID != id.String() || id[6]>>4 != 4 || id[8]&0xc0 != 0x80 {
 		t.Fatalf("generated client ID must remain a canonical UUID v4: %q (%v)", m.ClientID, err)
 	}
-	messages, err := d.Messages(ctx, rooms[0].ID, 0)
+	messages, err := messageRecords(d, ctx, rooms[0].ID, 0, "before")
 	if err != nil || len(messages) != 1 || messages[0].ID != m.ID ||
 		messages[0].Body != "<p>running dogs</p>" {
 		t.Fatalf("messages: %v %v", messages, err)
@@ -62,7 +66,7 @@ func TestSchemaAndMessageTransaction(t *testing.T) {
 	if err != nil || len(hits) != 1 {
 		t.Fatalf("porter search: %v %v", hits, err)
 	}
-	if _, err = d.CreateMessage(ctx, u.ID, 12345, "", "hidden", "hidden"); !errors.Is(
+	if _, err = d.CreateMessage(ctx, u.ID, 12345, messageInput("", "hidden")); !errors.Is(
 		err,
 		ErrForbidden,
 	) {
@@ -75,7 +79,7 @@ func TestSchemaAndMessageTransaction(t *testing.T) {
 	if _, err = d.Write.Exec("DROP TABLE message_search_index"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.CreateMessage(ctx, u.ID, rooms[0].ID, "", "rollback", "rollback"); err == nil {
+	if _, err = d.CreateMessage(ctx, u.ID, rooms[0].ID, messageInput("", "rollback")); err == nil {
 		t.Fatal("expected failed index write")
 	}
 	var count int

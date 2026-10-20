@@ -60,7 +60,7 @@ func TestCompressedRoomTracksEditsAndRechecksAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	room := rooms[0].ID
-	message, err := app.DB.CreateMessage(ctx, user.ID, room, "compressed-message", "before edit", "before edit")
+	message, err := app.DB.CreateMessage(ctx, user.ID, room, messageInput("compressed-message", "before edit"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestCompressedRoomTracksEditsAndRechecksAuthorization(t *testing.T) {
 	if status != 200 || headers.Get("Content-Encoding") != "gzip" || !bytes.Equal(first, plain) || !bytes.Equal(first, cached) {
 		t.Fatal("compressed room differs from identity or repeated response")
 	}
-	if _, err := app.DB.UpdateMessage(ctx, user.ID, message.ID, "after edit", "after edit"); err != nil {
+	if _, err := app.DB.UpdateMessage(ctx, user.ID, message.ID, messageInput("", "after edit")); err != nil {
 		t.Fatal(err)
 	}
 	_, changedHeaders, changed := fetch("gzip")

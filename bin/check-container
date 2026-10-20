@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Verify the production image, ONCE backup hook and offline restore on disposable storage."""
+"""Verify the production image and ONCE backup/restore with default and overridden paths."""
 from contextlib import closing
 import argparse,http.cookiejar,json,os,sqlite3,subprocess,tempfile,time,urllib.parse,urllib.request
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 def docker(*args):return subprocess.check_output(['docker',*args],text=True).strip()
-def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',default='once-campfire-go:verification');a=p.parse_args()
+def check(image,label,settings,storage,database):
  with tempfile.TemporaryDirectory(prefix='container-',dir=ROOT/'.cache/tmp') as folder:
   root=Path(folder);name=f'campfire-go-container-{os.getpid()}';container=None
+  environment=[arg for key,value in settings.items() for arg in ('--env',f'{key}={value}')]
+  mount=['--mount',f'type=bind,src={root},dst=/rails/storage']
   def run():
-   return docker('run','--detach','--rm','--name',name,'--publish','127.0.0.1::80','--env','SECRET_KEY_BASE=container-test-only','--env','DISABLE_SSL=1','--mount',f'type=bind,src={root},dst=/rails/storage',a.image)
+   return docker('run','--detach','--rm','--name',name,'--publish','127.0.0.1::80','--env','SECRET_KEY_BASE=container-test-only','--env','DISABLE_SSL=1',*environment,*mount,image)
   def connect():
    target=json.loads(docker('inspect',name))[0]['NetworkSettings']['Ports']['80/tcp'][0]['HostPort'];base=f'http://127.0.0.1:{target}'
    for _ in range(200):
@@ -25,20 +26,32 @@ def main():
    with client.open(base+'/first_run',data=data) as r:assert r.status==200 and b'Container owner' in r.read()
    assert docker('exec',name,'id','-u')=='1000'
    docker('exec',name,'/hooks/pre-backup')
-   snapshot=root/'backups/production.sqlite3'
+   snapshot=root/storage/'backups'/Path(database).name
    with closing(sqlite3.connect(snapshot)) as db:
     assert db.execute('PRAGMA integrity_check').fetchone()==('ok',)
     assert db.execute('SELECT name FROM users').fetchone()==('Container owner',)
    docker('stop',name);container=None
-   # Make a deliberate post-backup change, then verify the offline hook restores the snapshot.
-   with closing(sqlite3.connect(root/'db/production.sqlite3')) as db:db.execute("UPDATE users SET name='After backup'");db.commit()
-   docker('run','--rm','--mount',f'type=bind,src={root},dst=/rails/storage',a.image,'/hooks/post-restore')
-   with closing(sqlite3.connect(root/'db/production.sqlite3')) as db:assert db.execute('SELECT name FROM users').fetchone()==('Container owner',)
+   # Preserve the existing setup/backup/restore assertions for every configured layout.
+   with closing(sqlite3.connect(root/database)) as db:db.execute("UPDATE users SET name='After backup'");db.commit()
+   docker('run','--rm',*environment,*mount,image,'/hooks/post-restore')
+   with closing(sqlite3.connect(root/database)) as db:
+    assert db.execute('PRAGMA integrity_check').fetchone()==('ok',)
+    assert db.execute('SELECT name FROM users').fetchone()==('Container owner',),f'{label}: hook did not restore configured database'
    container=run();connect()
-   print('PASS: non-root production container, public listener, setup, live SQLite backup, offline ONCE restore, and restarted application.')
-   print(json.dumps({'image':a.image,'id':docker('image','inspect',a.image,'--format','{{.Id}}'),'bytes':int(docker('image','inspect',a.image,'--format','{{.Size}}'))}))
+   print(f'PASS: {label}: non-root setup, live backup, offline restore and restart.',flush=True)
   finally:
    if container:
     try:docker('stop',name)
     except subprocess.CalledProcessError:subprocess.run(['docker','rm','-f',name])
+def main():
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',default='once-campfire-go:verification');a=p.parse_args()
+ cases=[
+  ('default',{},Path('.'),Path('db/production.sqlite3')),
+  ('storage/environment override',{'CAMPFIRE_STORAGE_PATH':'/rails/storage/alternate root','RAILS_ENV':'staging'},Path('alternate root'),Path('alternate root/db/staging.sqlite3')),
+  ('database override',{'CAMPFIRE_DATABASE_PATH':'/rails/storage/external db/custom.sqlite3'},Path('.'),Path('external db/custom.sqlite3')),
+  ('combined overrides',{'CAMPFIRE_STORAGE_PATH':'/rails/storage/alternate root','CAMPFIRE_DATABASE_PATH':'/rails/storage/external db/custom.sqlite3','RAILS_ENV':'staging'},Path('alternate root'),Path('external db/custom.sqlite3')),
+  ('URI metacharacters',{'CAMPFIRE_STORAGE_PATH':'/rails/storage/alternate?root','CAMPFIRE_DATABASE_PATH':'/rails/storage/external?db/custom#file.sqlite3'},Path('alternate?root'),Path('external?db/custom#file.sqlite3')),
+ ]
+ for case in cases:check(a.image,*case)
+ print(json.dumps({'image':a.image,'id':docker('image','inspect',a.image,'--format','{{.Id}}'),'bytes':int(docker('image','inspect',a.image,'--format','{{.Size}}'))}))
 if __name__=='__main__':main()

@@ -27,7 +27,7 @@ func TestAuthenticationAndMessageFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := New(db, secrets, false)
+	app, err := newTestRuntime(db, secrets, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,6 +132,7 @@ func TestOriginPolicy(t *testing.T) {
 		if c.origin != "" {
 			r.Header.Set("Origin", c.origin)
 		}
+		r = s.normalizeRequest(r)
 		if got := s.browserWriteAllowed(r); got != c.want {
 			t.Errorf("%+v: %v", c, got)
 		}
@@ -152,6 +153,7 @@ func TestFetchMetadataCanonicalPolicyAndProxyHTTPS(t *testing.T) {
 					if site != "absent" {
 						r.Header.Set("Sec-Fetch-Site", site)
 					}
+					r = s.normalizeRequest(r)
 					want := site == "same-origin" || site == "same-site" || site == "absent" && !secure && scheme == "http" && !proxy
 					if got := s.browserWriteAllowed(r); got != want {
 						t.Errorf("secure=%v scheme=%s site=%q proxy=%v: got %v want %v", secure, scheme, site, proxy, got, want)
@@ -211,7 +213,7 @@ func TestTokenBearingOldTabsStillWriteWithFetchMetadata(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("old tab write: %d %s", w.Code, w.Body.String())
 	}
-	messages, err := app.DB.Messages(context.Background(), rooms[0].ID, 0)
+	messages, err := messageRecords(app.DB, context.Background(), rooms[0].ID, 0)
 	if err != nil || len(messages) == 0 {
 		t.Fatal(err)
 	}

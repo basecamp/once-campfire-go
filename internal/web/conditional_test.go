@@ -15,7 +15,7 @@ func TestMessageConditionalGet(t *testing.T) {
 	app, _, cookie, user := testApp(t)
 	ctx := context.Background()
 	rooms, _ := app.DB.Rooms(ctx, user.ID)
-	if _, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, "fresh", "fresh", "fresh"); err != nil {
+	if _, err := app.DB.CreateMessage(ctx, user.ID, rooms[0].ID, messageInput("fresh", "fresh")); err != nil {
 		t.Fatal(err)
 	}
 	path := fmt.Sprintf("/rooms/%d/messages", rooms[0].ID)

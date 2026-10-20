@@ -1,0 +1,52 @@
+{
+  "artifacts": [
+    {
+      "path": "measurements.json.gz",
+      "sha256": "9bbe15a78c1733b7798fcb56e8413d3f3b27440d22c950fb89d11833e04c63ae",
+      "bytes": 15360,
+      "uncompressed_bytes": 149651
+    },
+    {
+      "path": "application-probe_test.go.gz",
+      "sha256": "1ab81f3a7a405223289815c7948dcc30692c94af7da37d3c36530405d3dd4baa",
+      "bytes": 1695,
+      "uncompressed_bytes": 4568
+    },
+    {
+      "path": "http_control.py.gz",
+      "sha256": "c102d7cc8ccd28b41f9de588cd3a0efbe6820c79ef1c27f5ad0b1edbb700c388",
+      "bytes": 3768,
+      "uncompressed_bytes": 10538
+    },
+    {
+      "path": "check.log.gz",
+      "sha256": "4e41de43eacf0f61025a8b3d03d6b71058d08cab4c3fcaa2574c1018eaaca352",
+      "bytes": 429,
+      "uncompressed_bytes": 2092
+    },
+    {
+      "path": "focused-tests.log.gz",
+      "sha256": "a855ec85a57d84361a26536985f920fdcd3c366345abae59363c050a3fd3e1f9",
+      "bytes": 113,
+      "uncompressed_bytes": 200
+    },
+    {
+      "path": "http-report.json.gz",
+      "sha256": "3053177a4d5e2dbfb67025f201875e3b9082471d6e22e6fa71058d35a148b649",
+      "bytes": 1313,
+      "uncompressed_bytes": 26695
+    },
+    {
+      "path": "pr-check.log.gz",
+      "sha256": "4a16adf4d3923285bd0089418114578668871bccf4ec9142cab31025c02197c2",
+      "bytes": 431,
+      "uncompressed_bytes": 2094
+    },
+    {
+      "path": "pr-http-report.json.gz",
+      "sha256": "ae1847588427a8c55dcec734b638379d00f61a267913d498e99eb8f6e322bf0f",
+      "bytes": 1314,
+      "uncompressed_bytes": 26695
+    }
+  ]
+}

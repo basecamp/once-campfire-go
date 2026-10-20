@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -44,7 +45,7 @@ func authorityAddress(value string) string {
 	}
 	return value
 }
-func requestRemoteIP(r *http.Request) (string, error) {
+func normalizeRemoteIP(r *http.Request) (string, error) {
 	parse := func(values []string, authority bool) []netip.Addr {
 		var ips []netip.Addr
 		for _, value := range values {
@@ -85,10 +86,10 @@ func requestRemoteIP(r *http.Request) (string, error) {
 	}
 	return "", nil
 }
-func remoteIP(r *http.Request) string { ip, _ := requestRemoteIP(r); return ip }
+func remoteIP(r *http.Request) string { return requestMetadata(r.Context()).ip }
 
-func (s *Server) requestHTTPS(r *http.Request) bool {
-	if s.Secure || r.Header.Get("X-Forwarded-Ssl") == "on" {
+func requestHTTPS(r *http.Request, secure bool) bool {
+	if secure || r.Header.Get("X-Forwarded-Ssl") == "on" {
 		return true
 	}
 	values := forwardedValues(r.Header.Get("Forwarded"), "proto")
@@ -113,9 +114,9 @@ func (s *Server) requestHTTPS(r *http.Request) bool {
 	}
 	return r.TLS != nil || r.URL.Scheme == "https"
 }
-func (s *Server) origin(r *http.Request) string {
+func normalizeOrigin(r *http.Request, https bool) string {
 	scheme, standardPort := "http", "80"
-	if s.requestHTTPS(r) {
+	if https {
 		scheme, standardPort = "https", "443"
 	}
 	host := r.Host
@@ -133,4 +134,18 @@ func (s *Server) origin(r *http.Request) string {
 		}
 	}
 	return scheme + "://" + host
+}
+
+func (s *Server) normalizeRequest(r *http.Request) *http.Request {
+	ip, err := normalizeRemoteIP(r)
+	https := requestHTTPS(r, s.Secure)
+	info := &requestInfo{
+		host: r.Host, origin: normalizeOrigin(r, https),
+		target: r.RequestURI, ip: ip, ipError: err, https: https,
+	}
+	return r.WithContext(context.WithValue(r.Context(), requestInfoKey{}, info))
+}
+
+func (s *Server) origin(r *http.Request) string {
+	return requestMetadata(r.Context()).origin
 }

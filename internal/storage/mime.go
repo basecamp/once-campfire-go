@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"path"
 	"strings"
+
+	"github.com/basecamp/once-campfire-go/internal/database"
 )
 
 type magicMatch struct {
@@ -109,7 +111,7 @@ func magicPrefixLength() int {
 
 var MagicPrefixLength = magicPrefixLength()
 
-func (b Blob) DefaultFormat() string {
+func DefaultFormat(b database.Blob) string {
 	if b.Type() != "image/png" && b.Type() != "image/jpeg" && b.Type() != "image/gif" && b.Type() != "image/webp" {
 		return "png"
 	}

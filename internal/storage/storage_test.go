@@ -68,9 +68,9 @@ func TestUploadIntegrityAndSigning(t *testing.T) {
 	content := "an uploaded file"
 	sum := md5.Sum([]byte(content))
 	ct := "text/plain"
-	b, err := s.Create(
+	b, err := s.DB.CreateBlob(
 		ctx,
-		Blob{
+		database.Blob{
 			Filename:    "notes.txt",
 			ContentType: &ct,
 			ByteSize:    int64(len(content)),
@@ -98,7 +98,7 @@ func TestUploadIntegrityAndSigning(t *testing.T) {
 	if err != nil || string(data) != content {
 		t.Fatalf("stored file: %q %v", data, err)
 	}
-	found, err := s.FindSigned(ctx, s.SignedID(b))
+	found, err := s.FindSigned(ctx, SignedID(s.Verifier, b))
 	if err != nil || found.ID != b.ID {
 		t.Fatal(found, err)
 	}
@@ -154,10 +154,16 @@ func TestTrackedVariantIsReusable(t *testing.T) {
 		t.Fatal(err)
 	}
 	variation := Resize(128, 128, "webp")
-	results := make(chan Blob, 2)
+	results := make(chan database.Blob, 2)
 	failures := make(chan error, 2)
-	for range 2 {
-		go func() { result, err := store.Variant(ctx, b, variation); results <- result; failures <- err }()
+	// Separate stores and SQLite connections cannot share derivative flights.
+	otherDB, err := database.Open(filepath.Join(root, "test.sqlite3"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer otherDB.Close()
+	for _, competing := range []*Store{store, New(otherDB, secrets, root)} {
+		go func() { result, err := competing.Variant(ctx, b, variation); results <- result; failures <- err }()
 	}
 	first, second := <-results, <-results
 	for range 2 {
@@ -181,6 +187,15 @@ func TestTrackedVariantIsReusable(t *testing.T) {
 		count != 2 {
 		t.Fatalf("leaked variant blobs: %d %v", count, err)
 	}
+	if files := storedFiles(t, store.Root); len(files) != 2 {
+		t.Fatalf("leaked variant files: %v", files)
+	}
+	for _, table := range []string{"active_storage_variant_records", "active_storage_attachments"} {
+		if err = db.Read.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil ||
+			count != 1 {
+			t.Fatalf("duplicate variant graph in %s: %d %v", table, count, err)
+		}
+	}
 }
 
 func TestRepresentationURLIncludesDefaultFormat(t *testing.T) {
@@ -195,8 +210,8 @@ func TestRepresentationURLIncludesDefaultFormat(t *testing.T) {
 	}
 	store := New(db, secrets, t.TempDir())
 	contentType := "image/jpeg"
-	blob := Blob{ID: 7, Filename: "photo.jpg", ContentType: &contentType}
-	path, err := store.RepresentationURL(blob, Resize(1200, 800, ""))
+	blob := database.Blob{ID: 7, Filename: "photo.jpg", ContentType: &contentType}
+	path, err := RepresentationURL(store.Verifier, blob, Resize(1200, 800, ""))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -37,6 +37,9 @@ func parseMultipart(r *http.Request, boundary string) (cleanup func(), err error
 	reader := multipart.NewReader(r.Body, boundary)
 	form := &multipart.Form{Value: url.Values{}, File: map[string][]*multipart.FileHeader{}}
 	var textBytes int64
+	// Values retain per-key order but not order across keys. Array-of-hash
+	// grouping needs the original text-field sequence after _method is known.
+	var fields [][2]string
 	files := 0
 	for parts := 0; ; parts++ {
 		part, e := reader.NextRawPart()
@@ -94,7 +97,9 @@ func parseMultipart(r *http.Request, boundary string) (cleanup func(), err error
 			if textBytes > MaxBody {
 				return cleanup, &http.MaxBytesError{Limit: MaxBody}
 			}
-			form.Value[name] = append(form.Value[name], string(data))
+			value := string(data)
+			form.Value[name] = append(form.Value[name], value)
+			fields = append(fields, [2]string{name, value})
 		}
 	}
 	r.MultipartForm = form
@@ -112,6 +117,17 @@ func parseMultipart(r *http.Request, boundary string) (cleanup func(), err error
 		r.Form[key] = values
 	}
 	*r = *r.WithContext(context.WithValue(r.Context(), uploadedPathsKey{}, paths))
+	if needsStructuredParams(r) {
+		params := map[string]any{}
+		for _, field := range fields {
+			if err := storeFormValue(params, field[0], field[1]); err != nil {
+				return cleanup, err
+			}
+		}
+		if err := storeStructuredParams(r, params); err != nil {
+			return cleanup, err
+		}
+	}
 	return cleanup, nil
 }
 

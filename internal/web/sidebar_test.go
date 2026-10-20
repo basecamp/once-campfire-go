@@ -2,11 +2,44 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/basecamp/once-campfire-go/internal/database"
+	"github.com/basecamp/once-campfire-go/internal/presentation"
 )
+
+func TestDirectRoomDisplayUsesAllNamesAndFirstFourAvatars(t *testing.T) {
+	app, _, _, viewer := testApp(t)
+	room := database.Room{ID: 40, Type: "Rooms::Direct"}
+	members := []database.RoomParticipant{viewer.Participant()}
+	for i := 1; i <= 6; i++ {
+		members = append(
+			members,
+			database.RoomParticipant{ID: viewer.ID + int64(i), Name: fmt.Sprintf("Person %d", i)},
+		)
+	}
+	view := presentation.DisplayRoom(room, members, viewer.Participant())
+	if len(view.Members) != 6 || view.Label() != "P1, P2, P3, P4, P5, and P6" ||
+		view.Name != "Person 1, Person 2, Person 3, Person 4, Person 5, and Person 6" {
+		t.Fatalf("direct display lost a retained participant: %+v", view)
+	}
+	body, err := app.Presentation.Markup("sidebar-direct", view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(body, `width="20"`) != 4 || !strings.Contains(body, view.Label()) {
+		t.Fatal("group must render four avatars but initials for every participant")
+	}
+	self := presentation.DisplayRoom(room, members[:1], viewer.Participant())
+	if len(self.Members) != 1 || self.Members[0] != viewer.Participant() ||
+		self.Name != viewer.Name {
+		t.Fatalf("self-ping lost its viewing participant: %+v", self)
+	}
+}
 
 func TestSidebarDocumentAndFrameKeepLayoutFresh(t *testing.T) {
 	app, server, cookie, user := testApp(t)
@@ -55,12 +88,12 @@ func TestSidebarDocumentAndFrameKeepLayoutFresh(t *testing.T) {
 	}
 	// These changes do not alter the cached sidebar frame or its key: the account
 	// permits room creation for both roles. Surrounding observations stay fresh.
-	entries := len(app.fragments.entries)
+	originalFrame := get(true)
 	if _, err := app.DB.Write.ExecContext(context.Background(), "UPDATE users SET role=0 WHERE id=?", user.ID); err != nil {
 		t.Fatal(err)
 	}
 	styles := "body{--sidebar-fresh:1}"
-	if err := app.DB.UpdateAccount(context.Background(), nil, &styles, nil, false); err != nil {
+	if _, err := app.DB.Write.ExecContext(context.Background(), "UPDATE accounts SET custom_styles=?,updated_at=?", styles, database.Stamp(app.DB.Now())); err != nil {
 		t.Fatal(err)
 	}
 	document := get(false)
@@ -71,8 +104,8 @@ func TestSidebarDocumentAndFrameKeepLayoutFresh(t *testing.T) {
 	if strings.Contains(frame, styles) {
 		t.Fatal("cached application layout leaked into the Turbo-Frame response")
 	}
-	if len(app.fragments.entries) != entries {
-		t.Fatal("layout-only changes unnecessarily invalidated the sidebar frame")
+	if frame != originalFrame {
+		t.Fatal("layout-only changes altered the sidebar frame")
 	}
 	if _, err := app.DB.Write.ExecContext(context.Background(), "UPDATE users SET name=? WHERE id=?", "Fresh Profile Name", user.ID); err != nil {
 		t.Fatal(err)

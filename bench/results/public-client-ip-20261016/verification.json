@@ -1,0 +1,33 @@
+{
+  "scope": "Public forwarding-disabled Client-IP policy",
+  "baseline_local": "db8e011",
+  "baseline_pr": "41a8c2b",
+  "regression": "Old public listener permits changed Client-IP to reset login throttle; request12=401 instead of429",
+  "check": "bin/check passed",
+  "focused_race": "Public HTTP regression; real TLS/HTTP2/application probe; existing consumed-header/TLS/proxy/origin contracts passed",
+  "http_passed": 2,
+  "http_total": 2,
+  "binaries": {
+    "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+    "go": "bf14c8ba4d878d62d3bd33c8aafa755f810bfeaef64705ab939262feffc891cd"
+  },
+  "source_sha256": {
+    "internal/front/server.go": "54ea1131069f80f5fd6ea419aed14226a553bc85aff4ae53e6129b760ef2e709",
+    "internal/front/front_test.go": "9600931a4d8332120e071e214932ecda1f5c73d7a9b2d230d5e76d358a582d5b",
+    "internal/web/public_request_test.go": "f9fc344c1b7b45c80a81faacf675d3d9adaacc3ff78095a90431c72ec6f5feda"
+  },
+  "precondition": "Private/trusted-range peer with attacker-controlled Client-IP surviving intermediary; forwarding disabled",
+  "limits": "Not all deployments or arbitrary proxy configurations; no native performance, external-provider or fresh full-browser/media claim",
+  "pr_verification": {
+    "runtime_commit": "073d2f7",
+    "checked_head": "32320193e2607e1c7c63120ca14b9e27cf1c46ed",
+    "check": "bin/check passed on actualPRbranch, including realpubliclistenerregression",
+    "http_passed": 2,
+    "http_total": 2,
+    "binaries": {
+      "rust": "b797463aaa3d3173a9fa50e461cf2af543706861dc5c8147de0f28b0f2128960",
+      "go": "201c2a58fa6aadc8f52222c19ab2799135bf06e664c84c5dd3df031aece3a64c"
+    },
+    "source_equivalence": "cmd/internal/assets/third_party/go.mod/go.sum match local0b120a1; temporaryTLSapplicationprobe reused from identical localruntime source"
+  }
+}

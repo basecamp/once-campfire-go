@@ -2,8 +2,8 @@ package database
 
 import "context"
 
-func (d *DB) AutocompleteUsers(ctx context.Context, room int64, query string) ([]User, error) {
-	sql := "SELECT " + userColumns + " FROM users u "
+func (d *DB) AutocompleteUsers(ctx context.Context, room int64, query string) ([]UserDisplay, error) {
+	sql := "SELECT u.id,u.name,coalesce(u.bio,''),u.updated_at FROM users u "
 	args := []any{}
 	if room != 0 {
 		sql += "JOIN memberships m ON m.user_id=u.id AND m.room_id=? "
@@ -19,5 +19,5 @@ func (d *DB) AutocompleteUsers(ctx context.Context, room int64, query string) ([
 	if err != nil {
 		return nil, err
 	}
-	return usersRows(rows)
+	return displayRows(rows)
 }
